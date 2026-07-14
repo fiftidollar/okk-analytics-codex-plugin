@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from datetime import date
 from typing import Any, Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl, BaseModel, Field
 
@@ -105,6 +107,8 @@ async def _read(client: BackendClient, path: str, **params: Any) -> AnalyticsEnv
 
 
 def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
+    issuer_origin = settings.issuer_url
+    issuer_host = urlsplit(issuer_origin).netloc
     mcp = FastMCP(
         name=settings.mcp_service_name,
         instructions=(
@@ -123,6 +127,11 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         streamable_http_path="/mcp",
         stateless_http=True,
         json_response=True,
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=[issuer_host],
+            allowed_origins=[issuer_origin],
+        ),
     )
 
     @mcp.tool(

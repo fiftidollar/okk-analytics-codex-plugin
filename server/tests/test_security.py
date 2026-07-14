@@ -110,8 +110,20 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
     assert compare_schema["properties"]["employee_ids"]["maxItems"] == 20
 
 
+def test_mcp_transport_allows_only_the_configured_public_origin():
+    settings = Settings(
+        mcp_issuer_url="https://okk-mcp.akfixdev.ru",
+        mcp_resource_url="https://okk-mcp.akfixdev.ru/mcp",
+    )
+    mcp = create_mcp_server(settings, AsyncMock())
+    security = mcp.settings.transport_security
+    assert security.enable_dns_rebinding_protection is True
+    assert security.allowed_hosts == ["okk-mcp.akfixdev.ru"]
+    assert security.allowed_origins == ["https://okk-mcp.akfixdev.ru"]
+
+
 def test_metadata_and_mcp_auth_challenge_are_discoverable():
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://localhost:8020") as client:
         authorization = client.get("/.well-known/oauth-authorization-server")
         protected = client.get("/.well-known/oauth-protected-resource/mcp")
         challenge = client.post(
