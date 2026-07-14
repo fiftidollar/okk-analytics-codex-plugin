@@ -1,4 +1,7 @@
-# Deployment and release gate
+# Production deployment and release gate
+
+This runbook targets live production OKK. Do not point the published community
+plugin at the test-stand API.
 
 ## Required infrastructure
 
@@ -6,7 +9,8 @@
   `https://okk-mcp.akfixdev.ru`.
 - Separate PostgreSQL database/user for OAuth state.
 - Redis for login throttling.
-- HTTPS OKK `/api/v1` base URL.
+- Production OKK API:
+  `https://okk-backend.akfixdev.ru/api/v1`.
 - Independent high-entropy OAuth and session-encryption secrets.
 
 Never reuse the OKK JWT signing secret; this gateway authenticates through the
@@ -14,14 +18,16 @@ public OKK login API and does not mint OKK tokens.
 
 ## Rollout order
 
-1. Configure secrets and URLs.
+1. Create the deployment environment from `.env.production.example`, replace
+   every placeholder and keep `APP_ENV=production`.
 2. Run `alembic -c alembic.ini upgrade head` from `server/`.
 3. Deploy the container behind TLS and verify forwarded headers.
 4. Verify health and both OAuth metadata documents.
 5. Verify unauthenticated `/mcp` returns `401` with a
    `resource_metadata` challenge.
 6. Complete Authorization Code + PKCE in a real Codex client.
-7. Run the read matrix with dedicated accounts:
+7. Run the read matrix against production with dedicated accounts that are safe
+   for read-only verification:
    - admin;
    - viewer with one department;
    - viewer with several departments;
@@ -35,6 +41,12 @@ public OKK login API and does not mint OKK tokens.
 10. Validate refresh rotation, reuse revocation, logout/revoke and concurrent
     refresh behavior.
 11. Install the marketplace plugin and repeat the main user flows in Codex.
+
+For the bundled Compose stack, copy the template to `.env.production` and use:
+
+```powershell
+docker compose --env-file .env.production up --build -d
+```
 
 ## Local verification
 
@@ -51,8 +63,8 @@ $env:OKK_MCP_SMOKE_ACCESS_TOKEN = "..."
 python server/scripts/smoke_release.py --output artifacts/mcp-smoke.json
 ```
 
-Do not publish the marketplace URL as live until TLS, migration, OAuth login and
-the complete account/ACL matrix pass against the intended stand.
+Do not announce the marketplace connector as live until TLS, migration, native
+production OAuth login and the complete production account/ACL matrix pass.
 
 Set `FORWARDED_ALLOW_IPS` only to the actual ingress proxy addresses. Using `*`
 is acceptable only when the application port is unreachable except through an

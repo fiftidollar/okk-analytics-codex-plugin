@@ -14,6 +14,10 @@ Codex MCP client
 The gateway is both the OAuth authorization server and MCP resource server. It
 does not share code, tables or signing secrets with the OKK backend.
 
+The published deployment is production-only: the upstream base URL is
+`https://okk-backend.akfixdev.ru/api/v1`, while the public MCP resource is
+`https://okk-mcp.akfixdev.ru/mcp`.
+
 ## Login and session sequence
 
 1. Codex dynamically registers a public OAuth client.

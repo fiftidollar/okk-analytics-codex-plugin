@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from okk_mcp.config import Settings
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -37,6 +39,19 @@ def test_standalone_server_has_no_private_backend_import_or_copy():
     assert "import app." not in python_source
     assert "COPY backend" not in dockerfile
     assert "mcp==1.27.2" in requirements
+
+
+def test_published_connector_is_wired_for_production_not_test_stand():
+    production_env = (ROOT / ".env.production.example").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "APP_ENV=production" in production_env
+    assert "OKK_API_BASE_URL=https://okk-backend.akfixdev.ru/api/v1" in production_env
+    assert "MCP_RESOURCE_URL=https://okk-mcp.akfixdev.ru/mcp" in production_env
+    assert "test-stand connector" in readme
+    assert "ready for a test environment" not in readme
+    settings = Settings(_env_file=ROOT / ".env.production.example")
+    assert settings.app_env == "production"
+    assert settings.api_base_url == "https://okk-backend.akfixdev.ru/api/v1"
 
 
 def test_skill_forbids_credentials_writes_and_excluded_surfaces():

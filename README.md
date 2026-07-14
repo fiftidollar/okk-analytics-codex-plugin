@@ -66,13 +66,16 @@ docs/                    Architecture, tools, security and deployment runbooks
    gateway URL, then add this repository as a Codex marketplace and install
    `okk-analytics@alpes-community`.
 
-Production requires HTTPS for both the MCP gateway and OKK API. See
+The production target is the live OKK API at
+`https://okk-backend.akfixdev.ru/api/v1`; use `.env.production.example` as the
+deployment template. Production requires HTTPS for both the MCP gateway and
+the OKK API. See
 [deployment](docs/deployment.md), [security](docs/security.md) and the complete
 [tool catalog](docs/tool-catalog.md).
 
-## Current rollout status
+## Production rollout status
 
-The repository and deployment artifacts are ready for a test environment. The
-configured public MCP URL, `https://okk-mcp.akfixdev.ru/mcp`, is a target URL;
-it is not considered live until DNS/TLS, migration and the authenticated smoke
-matrix in `docs/deployment.md` pass.
+This is a production-targeted plugin, not a test-stand connector. Its public MCP
+URL is `https://okk-mcp.akfixdev.ru/mcp`, and its upstream is the production OKK
+API above. The URL is not considered live until the production service, DNS/TLS,
+migration and authenticated ACL smoke matrix in `docs/deployment.md` pass.
