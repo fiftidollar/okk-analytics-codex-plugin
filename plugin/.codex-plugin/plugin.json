@@ -1,0 +1,25 @@
+{
+  "name": "okk-analytics",
+  "version": "1.0.0",
+  "description": "Read-only OKK analytics: KPI, employees, mentoring, scenarios and criteria with native account OAuth.",
+  "author": {
+    "name": "Alpes"
+  },
+  "homepage": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
+  "repository": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "OKK Analytics",
+    "shortDescription": "Вся статистика ОКК — безопасно и только на чтение.",
+    "longDescription": "Подключает Codex к вашему аккаунту ОКК через OAuth: общая, отделовая и персональная статистика, клиентские и CRM-метрики, план/факт, AI-сильные стороны и зоны роста, наставнические задачи, сценарии, критерии и их эффективность. Результаты всегда ограничены текущими правами пользователя.",
+    "developerName": "Alpes",
+    "category": "Data & Analytics",
+    "capabilities": [
+      "Read-only analytics",
+      "Native OKK OAuth",
+      "Access-aware employee insights"
+    ],
+    "defaultPrompt": "Покажи сводную статистику ОКК за текущий месяц, затем назови главные зоны роста и задачи наставничества в пределах моего доступа."
+  },
+  "mcpServers": "./.mcp.json"
+}

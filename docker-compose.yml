@@ -1,0 +1,47 @@
+services:
+  mcp:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    env_file: ${ENV_FILE:-.env}
+    command: >-
+      sh -c "alembic -c alembic.ini upgrade head &&
+      uvicorn okk_mcp.main:app --host 0.0.0.0 --port 8020
+      --proxy-headers --forwarded-allow-ips='${FORWARDED_ALLOW_IPS:-127.0.0.1}'"
+    ports:
+      - "8020:8020"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: okk_mcp
+      POSTGRES_USER: okk_mcp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - okk_mcp_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U okk_mcp -d okk_mcp"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - okk_mcp_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  okk_mcp_postgres:
+  okk_mcp_redis:
