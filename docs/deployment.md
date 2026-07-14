@@ -42,6 +42,25 @@ public OKK login API and does not mint OKK tokens.
     refresh behavior.
 11. Install the marketplace plugin and repeat the main user flows in Codex.
 
+## Dokploy production compose
+
+The repository includes `docker-compose.dokploy.yml` for the production OKK
+environment. It creates an isolated MCP gateway with dedicated PostgreSQL and
+Redis services. Only the MCP container joins `dokploy-network`; the databases
+stay on an internal Compose network and publish no host ports.
+
+Create the Dokploy Compose from this repository on branch `main`, path
+`docker-compose.dokploy.yml`, then set four independent high-entropy values:
+
+- `POSTGRES_PASSWORD`
+- `REDIS_PASSWORD`
+- `MCP_OAUTH_SECRET`
+- `MCP_SESSION_ENCRYPTION_SECRET`
+
+Traefik terminates TLS for `okk-mcp.akfixdev.ru` and forwards only to port
+`8020`. The container trusts forwarded headers because that port is exposed
+only on the ingress network; do not add a host `ports` mapping.
+
 For the bundled Compose stack, copy the template to `.env.production` and use:
 
 ```powershell
