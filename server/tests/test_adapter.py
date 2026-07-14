@@ -286,6 +286,42 @@ async def test_criterion_performance_aggregates_safe_items_only():
     assert "comment" not in serialized
 
 
+@pytest.mark.anyio
+async def test_unfiltered_performance_never_reports_negative_omitted_filters():
+    department_id = str(uuid4())
+    scenario_id = str(uuid4())
+    criterion_id = str(uuid4())
+    responses = {
+        "/departments": [{"id": department_id, "name": "Продажи", "code": "sales"}],
+        "/scenarios": {
+            "items": [
+                {
+                    "id": scenario_id,
+                    "department_id": department_id,
+                    "name": "Сценарий",
+                    "code": "scenario",
+                    "categories": [
+                        {
+                            "id": str(uuid4()),
+                            "name": "Категория",
+                            "items": [{"id": criterion_id, "name": "Критерий", "max_score": 10}],
+                        }
+                    ],
+                }
+            ],
+            "pages": 1,
+        },
+        "/calls": {"items": [], "total": 0, "pages": 1},
+    }
+    analytics = adapter(FakePlatform(department_ids=(department_id,), responses=responses))
+
+    scenarios = await analytics.get_scenario_performance(period="today")
+    criteria = await analytics.get_criterion_performance(period="today")
+
+    assert scenarios["omitted_filters_count"] == 0
+    assert criteria["omitted_filters_count"] == 0
+
+
 def test_session_cipher_is_authenticated_and_models_store_hashes_not_raw_mcp_tokens():
     cipher = SessionCipher("x" * 32)
     sealed = cipher.seal("upstream-token")

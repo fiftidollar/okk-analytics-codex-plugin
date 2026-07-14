@@ -546,7 +546,7 @@ class AnalyticsAdapter:
         visible = {str(row["id"]) for row in await self.departments()}
         requested = [str(value) for value in department_ids or []]
         effective = [value for value in requested if value in visible] if requested else sorted(visible)
-        omitted = len(requested) - len(effective)
+        omitted = len(requested) - len(effective) if requested else 0
         if not effective:
             return await self.envelope([], status="no_data", period=bounds, omitted=omitted)
         common = _period_query(period, start_date, end_date)
@@ -647,7 +647,7 @@ class AnalyticsAdapter:
         index = {row["id"]: row for row in visible}
         requested = [str(value) for value in employee_ids]
         effective = [value for value in requested if value in index]
-        omitted = len(requested) - len(effective)
+        omitted = len(requested) - len(effective) if requested else 0
 
         async def load(employee_id: str) -> dict[str, Any]:
             page = await self._bounded(lambda: self._page_data(employee_id, *bounds))
@@ -1051,7 +1051,7 @@ class AnalyticsAdapter:
         index = {str(row.get("id")): row for row in catalog}
         requested = [str(value) for value in scenario_ids or []]
         effective = [value for value in requested if value in index] if requested else list(index)
-        omitted = len(requested) - len(effective)
+        omitted = len(requested) - len(effective) if requested else 0
         calls, total, complete = await self.calls(
             start=bounds[0],
             end=bounds[1],
@@ -1120,7 +1120,7 @@ class AnalyticsAdapter:
             if requested
             else list(visible_criteria)
         )
-        omitted = len(requested) - len(effective)
+        omitted = len(requested) - len(effective) if requested else 0
         calls, total, complete = await self.calls(
             start=bounds[0],
             end=bounds[1],
