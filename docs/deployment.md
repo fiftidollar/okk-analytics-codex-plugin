@@ -3,6 +3,19 @@
 This runbook targets live production OKK. Do not point the published community
 plugin at the test-stand API.
 
+## Live production inventory
+
+- Public repository: `https://github.com/fiftidollar/okk-analytics-codex-plugin`.
+- Dokploy project/environment: OKK production, Compose `okk-analytics-mcp`
+  (`4vZgCU2D0Jj7LBv2_DA2k`).
+- Source: branch `main`, `docker-compose.dokploy.yml`.
+- Public issuer/resource: `https://okk-mcp.akfixdev.ru` and
+  `https://okk-mcp.akfixdev.ru/mcp`.
+- Dedicated PostgreSQL and authenticated Redis are private Compose services;
+  neither publishes a host port.
+- Current verified deployment: commit `ef75db5d962f6a03c2a40967943ca08ae6fd70e8`,
+  status `done` on `2026-07-14`.
+
 ## Required infrastructure
 
 - HTTPS hostname for the gateway, currently planned as
@@ -82,8 +95,10 @@ $env:OKK_MCP_SMOKE_ACCESS_TOKEN = "..."
 python server/scripts/smoke_release.py --output artifacts/mcp-smoke.json
 ```
 
-Do not announce the marketplace connector as live until TLS, migration, native
-production OAuth login and the complete production account/ACL matrix pass.
+The initial live gate passed TLS, migration, native production OAuth login, a
+one-department viewer ACL, and all 19 tools. Before each release, repeat the
+complete account/ACL matrix; accounts outside the available smoke inventory are
+an explicit remaining coverage item, not a reason to weaken live ACL checks.
 
 Set `FORWARDED_ALLOW_IPS` only to the actual ingress proxy addresses. Using `*`
 is acceptable only when the application port is unreachable except through an

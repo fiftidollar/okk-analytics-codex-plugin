@@ -66,6 +66,28 @@ docs/                    Architecture, tools, security and deployment runbooks
    gateway URL, then add this repository as a Codex marketplace and install
    `okk-analytics@alpes-community`.
 
+## Install in Codex
+
+The cross-version installer adds or upgrades the public marketplace and then
+installs the plugin. On marketplace-only Codex CLI builds such as `0.130.0`, it
+uses the same persisted plugin-enable entry that Codex Desktop reads:
+
+```powershell
+git clone https://github.com/fiftidollar/okk-analytics-codex-plugin.git
+& .\okk-analytics-codex-plugin\scripts\install.ps1
+```
+
+On Codex builds that expose the native plugin command, the equivalent commands
+are:
+
+```powershell
+codex plugin marketplace add fiftidollar/okk-analytics-codex-plugin
+codex plugin add okk-analytics@alpes-community
+```
+
+Start a new Codex task after installation so the new skill and MCP server are
+loaded.
+
 The production target is the live OKK API at
 `https://okk-backend.akfixdev.ru/api/v1`; use `.env.production.example` as the
 deployment template. Production requires HTTPS for both the MCP gateway and
@@ -75,7 +97,8 @@ the OKK API. See
 
 ## Production rollout status
 
-This is a production-targeted plugin, not a test-stand connector. Its public MCP
-URL is `https://okk-mcp.akfixdev.ru/mcp`, and its upstream is the production OKK
-API above. The URL is not considered live until the production service, DNS/TLS,
-migration and authenticated ACL smoke matrix in `docs/deployment.md` pass.
+This is a live production plugin, not a test-stand connector. Its public MCP URL
+is `https://okk-mcp.akfixdev.ru/mcp`, and its upstream is the production OKK API
+above. Production OAuth, a one-department viewer ACL and all 19 read-only tools
+were verified on `2026-07-14`; the broader role/ACL matrix remains a recurring
+release gate described in `docs/deployment.md`.
