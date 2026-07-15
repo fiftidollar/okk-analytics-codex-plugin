@@ -27,7 +27,9 @@ The published deployment is production-only: the upstream base URL is
    parallel Codex login tabs cannot invalidate one another and Chrome cookie
    behavior cannot block the form POST. Older cookie-era forms are refreshed
    into the stateless format while the signed request is still within its
-   ten-minute window.
+   ten-minute window. The login page's `form-action` CSP contains only the
+   gateway origin and the validated registered callback origin; this is needed
+   because Chromium applies the directive to the OAuth redirect target too.
 3. The password is held only for the request and forwarded to the normal OKK
    `/auth/login`. It is never logged or persisted.
 4. The OKK access and refresh tokens are authenticated-encrypted in the

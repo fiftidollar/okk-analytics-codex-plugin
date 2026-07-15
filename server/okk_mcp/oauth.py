@@ -27,6 +27,7 @@ from okk_mcp.platform_client import OKKAuthenticationError, OKKUnavailable
 from okk_mcp.runtime import platform_client
 from okk_mcp.security import (
     random_token,
+    redirect_origin,
     token_hash,
     valid_pkce_challenge,
     validate_redirect_uri,
@@ -168,13 +169,16 @@ def _serializer(settings: Settings) -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(settings.mcp_oauth_secret, salt="okk-mcp-authorize-v1")
 
 
-def _security_headers(response: Response) -> None:
+def _security_headers(response: Response, *, redirect_uri: str | None = None) -> None:
+    form_action_sources = ["'self'"]
+    if redirect_uri is not None:
+        form_action_sources.append(redirect_origin(redirect_uri))
     response.headers.update(
         {
             "Cache-Control": "no-store",
             "Pragma": "no-cache",
             "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
-            "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+            f"form-action {' '.join(form_action_sources)}; frame-ancestors 'none'; base-uri 'none'",
             "X-Frame-Options": "DENY",
             "Referrer-Policy": "no-referrer",
             "X-Content-Type-Options": "nosniff",
@@ -203,6 +207,7 @@ def _render_login(
     client_name: str,
     signed_request: str,
     csrf_token: str,
+    redirect_uri: str,
     error: str | None = None,
 ) -> HTMLResponse:
     error_html = f'<div class="error">{html.escape(error)}</div>' if error else ""
@@ -220,7 +225,7 @@ button{{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;back
 <div class="scope">Только чтение: статистика, карточки сотрудников, наставничество, сценарии и критерии — строго в пределах прав аккаунта.</div>
 <button type="submit">Войти и разрешить доступ</button></form><p><small>MCP-шлюз сразу передаёт пароль в штатный API ОКК, не сохраняет его и никогда не передаёт Codex.</small></p></section></main></body></html>"""
     response = HTMLResponse(body)
-    _security_headers(response)
+    _security_headers(response, redirect_uri=redirect_uri)
     return response
 
 
@@ -246,6 +251,7 @@ async def _refresh_authorization_form(
         client_name=client.client_name,
         signed_request=refreshed_request,
         csrf_token=refreshed_csrf,
+        redirect_uri=auth_request["redirect_uri"],
         error=error,
     )
 
@@ -290,6 +296,7 @@ async def authorize(
         client_name=client.client_name,
         signed_request=signed,
         csrf_token=csrf_token,
+        redirect_uri=redirect_uri,
     )
 
 
@@ -345,6 +352,7 @@ async def authorize_login(
             client_name=client.client_name,
             signed_request=authorization_request,
             csrf_token=csrf_token,
+            redirect_uri=auth_request["redirect_uri"],
             error="Неверный логин или пароль",
         )
     except OKKUnavailable as exc:

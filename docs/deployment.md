@@ -40,8 +40,9 @@ public OKK login API and does not mint OKK tokens.
    `resource_metadata` challenge.
 6. Complete Authorization Code + PKCE in a real Codex client.
    Open two authorization pages before submitting either one and verify both
-   forms remain independently usable; one flow must not overwrite the other's
-   CSRF cookie.
+   forms remain independently usable. Verify Chrome reaches the loopback Codex
+   callback without a `form-action` CSP violation; each form carries its own
+   signed CSRF nonce and does not depend on cookies.
 7. Run the read matrix against production with dedicated accounts that are safe
    for read-only verification:
    - admin;

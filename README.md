@@ -26,6 +26,8 @@ the Codex plugin package.
   rotation/reuse detection and revocation.
 - Cookie-independent authorization form with a signed short-lived CSRF nonce,
   plus recovery for older in-flight forms while their OAuth request is valid.
+  Its CSP allows the exact registered callback origin so Chrome can return the
+  authorization code to Codex without allowing arbitrary form destinations.
 - Live `/auth/me` verification on every MCP request.
 - Admin/viewer/empty-ACL semantics and neutral inaccessible-ID responses.
 

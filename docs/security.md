@@ -43,6 +43,9 @@ criteria-only GET endpoint should replace this compatibility path.
 - Authorization Code only, PKCE S256 required.
 - Exact registered redirect URI matching.
 - HTTPS redirects, except RFC 8252 loopback HTTP clients.
+- Authorization-page `form-action` is restricted to the gateway and the exact
+  origin of that validated redirect URI. No wildcard callback destination is
+  added; the explicit origin is required for Chromium's redirect enforcement.
 - Exact MCP resource indicator.
 - Public clients only (`token_endpoint_auth_method=none`).
 - Flow-scoped CSRF binding, signed ten-minute authorization request and

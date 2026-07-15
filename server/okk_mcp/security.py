@@ -31,10 +31,22 @@ def validate_scopes(scope: str | None) -> str:
 def validate_redirect_uri(uri: str) -> str:
     """Allow HTTPS and RFC 8252 loopback HTTP redirect URIs only."""
 
-    if len(uri) > 1000 or "#" in uri:
+    if (
+        len(uri) > 1000
+        or "#" in uri
+        or "\\" in uri
+        or any(character.isspace() or ord(character) < 0x20 or ord(character) == 0x7F for character in uri)
+    ):
         raise ValueError("invalid_redirect_uri")
     parsed = urlparse(uri)
     if not parsed.scheme or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("invalid_redirect_uri")
+    _serialize_redirect_host(parsed.hostname)
+    try:
+        port = parsed.port
+    except ValueError:
+        raise ValueError("invalid_redirect_uri") from None
+    if port == 0:
         raise ValueError("invalid_redirect_uri")
     if parsed.scheme == "https":
         return uri
@@ -48,6 +60,46 @@ def validate_redirect_uri(uri: str) -> str:
     if not is_loopback:
         raise ValueError("invalid_redirect_uri")
     return uri
+
+
+def redirect_origin(uri: str) -> str:
+    """Return an injection-safe CSP origin for an already valid redirect URI."""
+
+    validated = validate_redirect_uri(uri)
+    parsed = urlparse(validated)
+    host = _serialize_redirect_host(parsed.hostname or "")
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    return f"{parsed.scheme}://{host}{port}"
+
+
+def _serialize_redirect_host(host: str) -> str:
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            ascii_host = host.encode("idna").decode("ascii").lower()
+        except UnicodeError:
+            raise ValueError("invalid_redirect_uri") from None
+        labels = ascii_host.rstrip(".").split(".")
+        if (
+            not ascii_host
+            or len(ascii_host) > 253
+            or any(
+                not label
+                or len(label) > 63
+                or label.startswith("-")
+                or label.endswith("-")
+                or any(
+                    character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in label
+                )
+                for label in labels
+            )
+        ):
+            raise ValueError("invalid_redirect_uri") from None
+        return ascii_host
+    if address.version == 6:
+        return f"[{address.compressed}]"
+    return address.compressed
 
 
 def verify_pkce(verifier: str, challenge: str) -> bool:
