@@ -39,6 +39,9 @@ public OKK login API and does not mint OKK tokens.
 5. Verify unauthenticated `/mcp` returns `401` with a
    `resource_metadata` challenge.
 6. Complete Authorization Code + PKCE in a real Codex client.
+   Open two authorization pages before submitting either one and verify both
+   forms remain independently usable; one flow must not overwrite the other's
+   CSRF cookie.
 7. Run the read matrix against production with dedicated accounts that are safe
    for read-only verification:
    - admin;

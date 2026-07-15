@@ -8,15 +8,18 @@ import hashlib
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from http.cookies import SimpleCookie
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from okk_mcp import oauth
 from okk_mcp.config import Settings
 from okk_mcp.main import app
+from okk_mcp.platform_client import OKKAuthenticationError
 from okk_mcp.security import (
     token_hash,
     validate_redirect_uri,
@@ -145,6 +148,103 @@ def test_metadata_and_mcp_auth_challenge_are_discoverable():
     assert protected.json()["resource"].endswith("/mcp")
     assert challenge.status_code == 401
     assert "resource_metadata=" in challenge.headers["www-authenticate"]
+
+
+def test_parallel_authorization_pages_keep_independent_csrf_cookies(monkeypatch):
+    settings = Settings()
+    csrf_a, csrf_b = "csrf-a", "csrf-b"
+    signed_a = oauth._serializer(settings).dumps(
+        {
+            "client_id": "client",
+            "redirect_uri": "http://127.0.0.1:3210/callback",
+            "state": "a",
+            "scope": "okk.statistics.read",
+            "resource": settings.resource_url,
+            "code_challenge": "challenge",
+        }
+    )
+    # A browser reload may produce the same signed request within one timestamp
+    # tick. The per-form CSRF token must still keep the cookie names independent.
+    signed_b = signed_a
+    response_a = oauth._render_login(
+        settings=settings,
+        client_name="Codex",
+        signed_request=signed_a,
+        csrf_token=csrf_a,
+    )
+    response_b = oauth._render_login(
+        settings=settings,
+        client_name="Codex",
+        signed_request=signed_b,
+        csrf_token=csrf_b,
+    )
+    cookie_a, cookie_b = SimpleCookie(), SimpleCookie()
+    cookie_a.load(response_a.headers["set-cookie"])
+    cookie_b.load(response_b.headers["set-cookie"])
+    name_a, name_b = next(iter(cookie_a)), next(iter(cookie_b))
+    assert name_a != name_b
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/authorize",
+            "headers": [(b"cookie", f"{name_a}={csrf_a}; {name_b}={csrf_b}".encode())],
+            "client": ("127.0.0.1", 12345),
+        }
+    )
+    monkeypatch.setattr(
+        oauth,
+        "_load_client",
+        AsyncMock(return_value=SimpleNamespace(client_name="Codex")),
+    )
+    monkeypatch.setattr(oauth, "_check_login_rate_limit", AsyncMock())
+    monkeypatch.setattr(
+        oauth.platform_client,
+        "authenticate",
+        AsyncMock(side_effect=OKKAuthenticationError("invalid credentials")),
+    )
+    response = asyncio.run(
+        oauth.authorize_login(
+            request=request,
+            authorization_request=signed_a,
+            csrf_token=csrf_a,
+            email="user@example.com",
+            password="invalid-password",
+            db=SimpleNamespace(),
+            settings=settings,
+        )
+    )
+    assert response.status_code == 200
+    assert "Неверный логин или пароль" in response.body.decode()
+
+
+def test_invalid_authorization_session_returns_recovery_page():
+    settings = Settings()
+    signed = oauth._serializer(settings).dumps({"client_id": "client"})
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/authorize",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+        }
+    )
+    response = asyncio.run(
+        oauth.authorize_login(
+            request=request,
+            authorization_request=signed,
+            csrf_token="missing-cookie",
+            email="user@example.com",
+            password="invalid-password",
+            db=SimpleNamespace(),
+            settings=settings,
+        )
+    )
+    assert response.status_code == 400
+    assert "Вернитесь в Codex" in response.body.decode()
+    assert response.headers["cache-control"] == "no-store"
 
 
 def test_production_configuration_requires_https_and_real_secrets():

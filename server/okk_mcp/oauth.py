@@ -168,6 +168,41 @@ def _serializer(settings: Settings) -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(settings.mcp_oauth_secret, salt="okk-mcp-authorize-v1")
 
 
+def _csrf_cookie_name(signed_request: str, csrf_token: str) -> str:
+    """Use a flow-specific cookie so parallel OAuth tabs cannot overwrite each other."""
+    flow_hash = hashlib.sha256(f"{signed_request}\0{csrf_token}".encode()).hexdigest()[:24]
+    return f"okk_mcp_csrf_{flow_hash}"
+
+
+def _security_headers(response: Response) -> None:
+    response.headers.update(
+        {
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache",
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
+            "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+            "X-Frame-Options": "DENY",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+        }
+    )
+
+
+def _render_authorization_error(message: str, *, status_code: int = 400) -> HTMLResponse:
+    body = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Подключение ОКК</title>
+<style>:root{{--bg:#f4f6f8;--card:#fff;--text:#17202a;--muted:#637083;--brand:#1769e0}}
+*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);font:16px/1.45 system-ui;color:var(--text)}}
+main{{min-height:100vh;display:grid;place-items:center;padding:24px}}.card{{width:min(440px,100%);background:var(--card);padding:32px;border-radius:18px;box-shadow:0 16px 48px #17202a18}}
+h1{{margin:0 0 8px}}p{{color:var(--muted)}}.hint{{background:#f7f9fb;padding:12px 14px;border-radius:10px;margin-top:18px}}</style></head>
+<body><main><section class="card"><h1>Не удалось продолжить вход</h1>
+<p>{html.escape(message)}</p><div class="hint">Вернитесь в Codex, снова запустите подключение OKK Analytics и используйте новую открывшуюся страницу входа.</div>
+</section></main></body></html>"""
+    response = HTMLResponse(body, status_code=status_code)
+    _security_headers(response)
+    return response
+
+
 def _render_login(
     *,
     settings: Settings,
@@ -191,18 +226,9 @@ button{{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;back
 <div class="scope">Только чтение: статистика, карточки сотрудников, наставничество, сценарии и критерии — строго в пределах прав аккаунта.</div>
 <button type="submit">Войти и разрешить доступ</button></form><p><small>MCP-шлюз сразу передаёт пароль в штатный API ОКК, не сохраняет его и никогда не передаёт Codex.</small></p></section></main></body></html>"""
     response = HTMLResponse(body)
-    response.headers.update(
-        {
-            "Cache-Control": "no-store",
-            "Pragma": "no-cache",
-            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-            "X-Frame-Options": "DENY",
-            "Referrer-Policy": "no-referrer",
-            "X-Content-Type-Options": "nosniff",
-        }
-    )
+    _security_headers(response)
     response.set_cookie(
-        "okk_mcp_csrf",
+        _csrf_cookie_name(signed_request, csrf_token),
         csrf_token,
         max_age=600,
         httponly=True,
@@ -285,13 +311,14 @@ async def authorize_login(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    cookie_csrf = request.cookies.get("okk_mcp_csrf")
+    cookie_name = _csrf_cookie_name(authorization_request, csrf_token)
+    cookie_csrf = request.cookies.get(cookie_name)
     if not cookie_csrf or not secrets.compare_digest(cookie_csrf, csrf_token):
-        raise HTTPException(status_code=400, detail="Invalid authorization session")
+        return _render_authorization_error("Сеанс авторизации устарел или браузер не сохранил cookie.")
     try:
         auth_request = _serializer(settings).loads(authorization_request, max_age=600)
     except (BadSignature, SignatureExpired):
-        raise HTTPException(status_code=400, detail="Authorization request expired") from None
+        return _render_authorization_error("Срок действия запроса на авторизацию истёк.")
     client = await _load_client(db, auth_request["client_id"], auth_request["redirect_uri"])
     await _check_login_rate_limit(request, email, settings)
     try:
@@ -326,7 +353,7 @@ async def authorize_login(
     if auth_request.get("state") is not None:
         query["state"] = auth_request["state"]
     response = RedirectResponse(_append_redirect_query(auth_request["redirect_uri"], query), status_code=303)
-    response.delete_cookie("okk_mcp_csrf", path="/authorize")
+    response.delete_cookie(cookie_name, path="/authorize")
     response.headers["Cache-Control"] = "no-store"
     return response
 

@@ -22,7 +22,9 @@ The published deployment is production-only: the upstream base URL is
 
 1. Codex dynamically registers a public OAuth client.
 2. `/authorize` validates exact redirect URI, resource indicator and PKCE S256,
-   then displays the gateway's login form.
+   then displays the gateway's login form. Each authorization flow receives an
+   independent short-lived CSRF cookie, so retries or parallel Codex login tabs
+   cannot invalidate one another.
 3. The password is held only for the request and forwarded to the normal OKK
    `/auth/login`. It is never logged or persisted.
 4. The OKK access and refresh tokens are authenticated-encrypted in the

@@ -45,5 +45,6 @@ criteria-only GET endpoint should replace this compatibility path.
 - HTTPS redirects, except RFC 8252 loopback HTTP clients.
 - Exact MCP resource indicator.
 - Public clients only (`token_endpoint_auth_method=none`).
-- CSRF binding, signed ten-minute authorization request and fail-closed Redis
-  login throttling.
+- Flow-scoped CSRF binding, signed ten-minute authorization request and
+  fail-closed Redis login throttling. Parallel OAuth pages use different cookie
+  names derived from their signed authorization request and per-form token.

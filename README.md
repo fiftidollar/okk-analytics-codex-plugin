@@ -68,25 +68,24 @@ docs/                    Architecture, tools, security and deployment runbooks
 
 ## Install in Codex
 
-The cross-version installer adds or upgrades the public marketplace and then
-installs the plugin. On marketplace-only Codex CLI builds such as `0.130.0`, it
-uses the same persisted plugin-enable entry that Codex Desktop reads:
-
-```powershell
-git clone https://github.com/fiftidollar/okk-analytics-codex-plugin.git
-& .\okk-analytics-codex-plugin\scripts\install.ps1
-```
-
-On Codex builds that expose the native plugin command, the equivalent commands
-are:
+Add the public marketplace once:
 
 ```powershell
 codex plugin marketplace add fiftidollar/okk-analytics-codex-plugin
-codex plugin add okk-analytics@alpes-community
 ```
 
-Start a new Codex task after installation so the new skill and MCP server are
-loaded.
+Restart Codex, open **Plugins**, choose **Alpes Community**, and install
+**OKK Analytics**. In Codex CLI, open the same plugin browser with:
+
+```text
+codex
+/plugins
+```
+
+Start a new task after installation so the skill and MCP server are loaded.
+`scripts/install.ps1` remains an optional compatibility helper for managed or
+older environments; cloning this repository is not part of the normal user
+installation flow.
 
 The production target is the live OKK API at
 `https://okk-backend.akfixdev.ru/api/v1`; use `.env.production.example` as the
