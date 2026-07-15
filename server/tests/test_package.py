@@ -15,9 +15,11 @@ def test_plugin_and_marketplace_point_to_the_standalone_package():
     marketplace = json.loads((ROOT / ".agents/plugins/marketplace.json").read_text(encoding="utf-8"))
     mcp = json.loads((ROOT / "plugin/.mcp.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "okk-analytics"
-    assert manifest["version"] == "1.0.1"
+    assert manifest["version"] == "1.0.2"
     assert manifest["mcpServers"] == "./.mcp.json"
     assert manifest["repository"].endswith("/okk-analytics-codex-plugin")
+    assert len(manifest["interface"]["defaultPrompt"]) == 3
+    assert all(len(prompt) <= 128 for prompt in manifest["interface"]["defaultPrompt"])
     assert marketplace["plugins"][0]["source"]["path"] == "./plugin"
     assert marketplace["plugins"][0]["policy"] == {
         "installation": "AVAILABLE",

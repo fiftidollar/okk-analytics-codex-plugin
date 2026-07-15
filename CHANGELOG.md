@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.2 - 2026-07-15
+
+- Replaced the over-limit starter prompt with three short official-style
+  prompts that Codex loads instead of ignoring.
+
 ## 1.0.1 - 2026-07-15
 
 - Matched the official Codex remote-MCP package shape by declaring the exact

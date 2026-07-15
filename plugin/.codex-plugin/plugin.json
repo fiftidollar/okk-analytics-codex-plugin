@@ -1,6 +1,6 @@
 {
   "name": "okk-analytics",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Read-only OKK analytics: KPI, employees, mentoring, scenarios and criteria with native account OAuth.",
   "author": {
     "name": "Alpes"
@@ -19,7 +19,11 @@
       "Native OKK OAuth",
       "Access-aware employee insights"
     ],
-    "defaultPrompt": "Покажи сводную статистику ОКК за текущий месяц, затем назови главные зоны роста и задачи наставничества в пределах моего доступа."
+    "defaultPrompt": [
+      "Покажи сводную статистику ОКК за текущий месяц.",
+      "Покажи зоны роста и задачи наставничества в моём доступе.",
+      "Сравни сценарии и критерии по эффективности."
+    ]
   },
   "mcpServers": "./.mcp.json"
 }
