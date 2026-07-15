@@ -24,8 +24,8 @@ the Codex plugin package.
   prompts or scripts, plus scenario/criterion performance aggregation.
 - OAuth Authorization Code + PKCE S256, dynamic client registration, refresh
   rotation/reuse detection and revocation.
-- Recoverable authorization form when Chrome/Codex loses the short-lived form
-  cookie while the signed OAuth request is still valid.
+- Cookie-independent authorization form with a signed short-lived CSRF nonce,
+  plus recovery for older in-flight forms while their OAuth request is valid.
 - Live `/auth/me` verification on every MCP request.
 - Admin/viewer/empty-ACL semantics and neutral inaccessible-ID responses.
 

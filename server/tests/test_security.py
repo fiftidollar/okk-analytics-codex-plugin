@@ -8,7 +8,6 @@ import hashlib
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
-from http.cookies import SimpleCookie
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -150,7 +149,7 @@ def test_metadata_and_mcp_auth_challenge_are_discoverable():
     assert "resource_metadata=" in challenge.headers["www-authenticate"]
 
 
-def test_parallel_authorization_pages_keep_independent_csrf_cookies(monkeypatch):
+def test_parallel_authorization_pages_keep_independent_signed_csrf_tokens(monkeypatch):
     settings = Settings()
     csrf_a, csrf_b = "csrf-a", "csrf-b"
     signed_a = oauth._serializer(settings).dumps(
@@ -161,35 +160,28 @@ def test_parallel_authorization_pages_keep_independent_csrf_cookies(monkeypatch)
             "scope": "okk.statistics.read",
             "resource": settings.resource_url,
             "code_challenge": "challenge",
+            "csrf_token": csrf_a,
         }
     )
-    # A browser reload may produce the same signed request within one timestamp
-    # tick. The per-form CSRF token must still keep the cookie names independent.
-    signed_b = signed_a
-    response_a = oauth._render_login(
-        settings=settings,
-        client_name="Codex",
-        signed_request=signed_a,
-        csrf_token=csrf_a,
+    signed_b = oauth._serializer(settings).dumps(
+        {
+            "client_id": "client",
+            "redirect_uri": "http://127.0.0.1:3210/callback",
+            "state": "b",
+            "scope": "okk.statistics.read",
+            "resource": settings.resource_url,
+            "code_challenge": "challenge",
+            "csrf_token": csrf_b,
+        }
     )
-    response_b = oauth._render_login(
-        settings=settings,
-        client_name="Codex",
-        signed_request=signed_b,
-        csrf_token=csrf_b,
-    )
-    cookie_a, cookie_b = SimpleCookie(), SimpleCookie()
-    cookie_a.load(response_a.headers["set-cookie"])
-    cookie_b.load(response_b.headers["set-cookie"])
-    name_a, name_b = next(iter(cookie_a)), next(iter(cookie_b))
-    assert name_a != name_b
+    assert signed_a != signed_b
 
     request = Request(
         {
             "type": "http",
             "method": "POST",
             "path": "/authorize",
-            "headers": [(b"cookie", f"{name_a}={csrf_a}; {name_b}={csrf_b}".encode())],
+            "headers": [],
             "client": ("127.0.0.1", 12345),
         }
     )
@@ -219,7 +211,7 @@ def test_parallel_authorization_pages_keep_independent_csrf_cookies(monkeypatch)
     assert "Неверный логин или пароль" in response.body.decode()
 
 
-def test_missing_authorization_cookie_refreshes_the_login_form(monkeypatch):
+def test_tampered_authorization_csrf_refreshes_the_login_form(monkeypatch):
     settings = Settings()
     signed = oauth._serializer(settings).dumps(
         {
@@ -229,6 +221,7 @@ def test_missing_authorization_cookie_refreshes_the_login_form(monkeypatch):
             "scope": "okk.statistics.read",
             "resource": settings.resource_url,
             "code_challenge": "challenge",
+            "csrf_token": "signed-csrf",
         }
     )
     request = Request(
@@ -249,7 +242,7 @@ def test_missing_authorization_cookie_refreshes_the_login_form(monkeypatch):
         oauth.authorize_login(
             request=request,
             authorization_request=signed,
-            csrf_token="missing-cookie",
+            csrf_token="tampered-csrf",
             email="user@example.com",
             password="invalid-password",
             db=SimpleNamespace(),
@@ -260,7 +253,7 @@ def test_missing_authorization_cookie_refreshes_the_login_form(monkeypatch):
     assert response.status_code == 200
     assert "Сеанс входа был обновлён" in body
     assert 'name="authorization_request"' in body
-    assert "set-cookie" in response.headers
+    assert "set-cookie" not in response.headers
     assert response.headers["cache-control"] == "no-store"
 
 

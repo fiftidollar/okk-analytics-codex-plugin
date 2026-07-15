@@ -46,8 +46,8 @@ criteria-only GET endpoint should replace this compatibility path.
 - Exact MCP resource indicator.
 - Public clients only (`token_endpoint_auth_method=none`).
 - Flow-scoped CSRF binding, signed ten-minute authorization request and
-  fail-closed Redis login throttling. Parallel OAuth pages use different cookie
-  names derived from their signed authorization request and per-form token.
-  Missing or stale form cookies are recovered only by re-rendering the same
-  signed authorization request with a fresh CSRF token; invalid or expired
-  signed requests still fail closed.
+  fail-closed Redis login throttling. Parallel OAuth pages use a per-form nonce
+  carried inside the signed authorization request, so the submit path does not
+  depend on browser cookies. Missing/tampered nonces are recovered only by
+  re-rendering the same still-valid signed authorization request with a fresh
+  nonce; invalid or expired signed requests still fail closed.

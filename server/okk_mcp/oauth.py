@@ -168,12 +168,6 @@ def _serializer(settings: Settings) -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(settings.mcp_oauth_secret, salt="okk-mcp-authorize-v1")
 
 
-def _csrf_cookie_name(signed_request: str, csrf_token: str) -> str:
-    """Use a flow-specific cookie so parallel OAuth tabs cannot overwrite each other."""
-    flow_hash = hashlib.sha256(f"{signed_request}\0{csrf_token}".encode()).hexdigest()[:24]
-    return f"okk_mcp_csrf_{flow_hash}"
-
-
 def _security_headers(response: Response) -> None:
     response.headers.update(
         {
@@ -227,15 +221,6 @@ button{{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;back
 <button type="submit">Войти и разрешить доступ</button></form><p><small>MCP-шлюз сразу передаёт пароль в штатный API ОКК, не сохраняет его и никогда не передаёт Codex.</small></p></section></main></body></html>"""
     response = HTMLResponse(body)
     _security_headers(response)
-    response.set_cookie(
-        _csrf_cookie_name(signed_request, csrf_token),
-        csrf_token,
-        max_age=600,
-        httponly=True,
-        secure=settings.issuer_url.startswith("https://"),
-        samesite="lax",
-        path="/authorize",
-    )
     return response
 
 
@@ -253,11 +238,14 @@ async def _refresh_authorization_form(
         return _render_authorization_error("Срок действия запроса на авторизацию истёк.")
     except (KeyError, TypeError, HTTPException):
         return _render_authorization_error("Запрос на авторизацию больше недействителен.")
+    refreshed_csrf = secrets.token_urlsafe(32)
+    auth_request["csrf_token"] = refreshed_csrf
+    refreshed_request = _serializer(settings).dumps(auth_request)
     return _render_login(
         settings=settings,
         client_name=client.client_name,
-        signed_request=authorization_request,
-        csrf_token=secrets.token_urlsafe(32),
+        signed_request=refreshed_request,
+        csrf_token=refreshed_csrf,
         error=error,
     )
 
@@ -285,6 +273,7 @@ async def authorize(
     requested_resource = (resource or settings.resource_url).rstrip("/")
     if requested_resource != settings.resource_url:
         raise HTTPException(status_code=400, detail="Invalid resource")
+    csrf_token = secrets.token_urlsafe(32)
     signed = _serializer(settings).dumps(
         {
             "client_id": client_id,
@@ -293,9 +282,9 @@ async def authorize(
             "scope": requested_scope,
             "resource": requested_resource,
             "code_challenge": code_challenge,
+            "csrf_token": csrf_token,
         }
     )
-    csrf_token = secrets.token_urlsafe(32)
     return _render_login(
         settings=settings,
         client_name=client.client_name,
@@ -334,19 +323,18 @@ async def authorize_login(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    cookie_name = _csrf_cookie_name(authorization_request, csrf_token)
-    cookie_csrf = request.cookies.get(cookie_name)
-    if not cookie_csrf or not secrets.compare_digest(cookie_csrf, csrf_token):
+    try:
+        auth_request = _serializer(settings).loads(authorization_request, max_age=600)
+    except (BadSignature, SignatureExpired):
+        return _render_authorization_error("Срок действия запроса на авторизацию истёк.")
+    signed_csrf = auth_request.get("csrf_token")
+    if not isinstance(signed_csrf, str) or not secrets.compare_digest(signed_csrf, csrf_token):
         return await _refresh_authorization_form(
             authorization_request=authorization_request,
             db=db,
             settings=settings,
             error="Сеанс входа был обновлён. Введите логин и пароль ещё раз.",
         )
-    try:
-        auth_request = _serializer(settings).loads(authorization_request, max_age=600)
-    except (BadSignature, SignatureExpired):
-        return _render_authorization_error("Срок действия запроса на авторизацию истёк.")
     client = await _load_client(db, auth_request["client_id"], auth_request["redirect_uri"])
     await _check_login_rate_limit(request, email, settings)
     try:
@@ -381,7 +369,6 @@ async def authorize_login(
     if auth_request.get("state") is not None:
         query["state"] = auth_request["state"]
     response = RedirectResponse(_append_redirect_query(auth_request["redirect_uri"], query), status_code=303)
-    response.delete_cookie(cookie_name, path="/authorize")
     response.headers["Cache-Control"] = "no-store"
     return response
 
