@@ -24,7 +24,10 @@ The published deployment is production-only: the upstream base URL is
 2. `/authorize` validates exact redirect URI, resource indicator and PKCE S256,
    then displays the gateway's login form. Each authorization flow receives an
    independent short-lived CSRF cookie, so retries or parallel Codex login tabs
-   cannot invalidate one another.
+   cannot invalidate one another. If the browser drops that cookie but the
+   signed OAuth request is still within its ten-minute window, the gateway
+   reissues the login form with a fresh CSRF cookie instead of requiring a new
+   Codex connection attempt.
 3. The password is held only for the request and forwarded to the normal OKK
    `/auth/login`. It is never logged or persisted.
 4. The OKK access and refresh tokens are authenticated-encrypted in the

@@ -219,9 +219,18 @@ def test_parallel_authorization_pages_keep_independent_csrf_cookies(monkeypatch)
     assert "Неверный логин или пароль" in response.body.decode()
 
 
-def test_invalid_authorization_session_returns_recovery_page():
+def test_missing_authorization_cookie_refreshes_the_login_form(monkeypatch):
     settings = Settings()
-    signed = oauth._serializer(settings).dumps({"client_id": "client"})
+    signed = oauth._serializer(settings).dumps(
+        {
+            "client_id": "client",
+            "redirect_uri": "http://127.0.0.1:3210/callback",
+            "state": "state",
+            "scope": "okk.statistics.read",
+            "resource": settings.resource_url,
+            "code_challenge": "challenge",
+        }
+    )
     request = Request(
         {
             "type": "http",
@@ -230,6 +239,11 @@ def test_invalid_authorization_session_returns_recovery_page():
             "headers": [],
             "client": ("127.0.0.1", 12345),
         }
+    )
+    monkeypatch.setattr(
+        oauth,
+        "_load_client",
+        AsyncMock(return_value=SimpleNamespace(client_name="Codex")),
     )
     response = asyncio.run(
         oauth.authorize_login(
@@ -242,9 +256,38 @@ def test_invalid_authorization_session_returns_recovery_page():
             settings=settings,
         )
     )
+    body = response.body.decode()
+    assert response.status_code == 200
+    assert "Сеанс входа был обновлён" in body
+    assert 'name="authorization_request"' in body
+    assert "set-cookie" in response.headers
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_invalid_authorization_request_returns_recovery_page():
+    settings = Settings()
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/authorize",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+        }
+    )
+    response = asyncio.run(
+        oauth.authorize_login(
+            request=request,
+            authorization_request="not-signed",
+            csrf_token="missing-cookie",
+            email="user@example.com",
+            password="invalid-password",
+            db=SimpleNamespace(),
+            settings=settings,
+        )
+    )
     assert response.status_code == 400
     assert "Вернитесь в Codex" in response.body.decode()
-    assert response.headers["cache-control"] == "no-store"
 
 
 def test_production_configuration_requires_https_and_real_secrets():

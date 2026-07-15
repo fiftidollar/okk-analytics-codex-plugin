@@ -48,3 +48,6 @@ criteria-only GET endpoint should replace this compatibility path.
 - Flow-scoped CSRF binding, signed ten-minute authorization request and
   fail-closed Redis login throttling. Parallel OAuth pages use different cookie
   names derived from their signed authorization request and per-form token.
+  Missing or stale form cookies are recovered only by re-rendering the same
+  signed authorization request with a fresh CSRF token; invalid or expired
+  signed requests still fail closed.

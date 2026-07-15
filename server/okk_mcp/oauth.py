@@ -239,6 +239,29 @@ button{{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;back
     return response
 
 
+async def _refresh_authorization_form(
+    *,
+    authorization_request: str,
+    db: AsyncSession,
+    settings: Settings,
+    error: str,
+) -> HTMLResponse:
+    try:
+        auth_request = _serializer(settings).loads(authorization_request, max_age=600)
+        client = await _load_client(db, auth_request["client_id"], auth_request["redirect_uri"])
+    except (BadSignature, SignatureExpired):
+        return _render_authorization_error("Срок действия запроса на авторизацию истёк.")
+    except (KeyError, TypeError, HTTPException):
+        return _render_authorization_error("Запрос на авторизацию больше недействителен.")
+    return _render_login(
+        settings=settings,
+        client_name=client.client_name,
+        signed_request=authorization_request,
+        csrf_token=secrets.token_urlsafe(32),
+        error=error,
+    )
+
+
 @router.get("/authorize")
 async def authorize(
     client_id: str,
@@ -314,7 +337,12 @@ async def authorize_login(
     cookie_name = _csrf_cookie_name(authorization_request, csrf_token)
     cookie_csrf = request.cookies.get(cookie_name)
     if not cookie_csrf or not secrets.compare_digest(cookie_csrf, csrf_token):
-        return _render_authorization_error("Сеанс авторизации устарел или браузер не сохранил cookie.")
+        return await _refresh_authorization_form(
+            authorization_request=authorization_request,
+            db=db,
+            settings=settings,
+            error="Сеанс входа был обновлён. Введите логин и пароль ещё раз.",
+        )
     try:
         auth_request = _serializer(settings).loads(authorization_request, max_age=600)
     except (BadSignature, SignatureExpired):
