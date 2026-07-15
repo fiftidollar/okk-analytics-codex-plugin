@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 import secrets
 import time
 import uuid
@@ -13,7 +14,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import redis.asyncio as redis
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from redis.exceptions import RedisError
@@ -27,7 +28,6 @@ from okk_mcp.platform_client import OKKAuthenticationError, OKKUnavailable
 from okk_mcp.runtime import platform_client
 from okk_mcp.security import (
     random_token,
-    redirect_origin,
     token_hash,
     valid_pkce_challenge,
     validate_redirect_uri,
@@ -169,16 +169,28 @@ def _serializer(settings: Settings) -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(settings.mcp_oauth_secret, salt="okk-mcp-authorize-v1")
 
 
-def _security_headers(response: Response, *, redirect_uri: str | None = None) -> None:
-    form_action_sources = ["'self'"]
-    if redirect_uri is not None:
-        form_action_sources.append(redirect_origin(redirect_uri))
+def _security_headers(
+    response: Response,
+    *,
+    allow_form: bool = False,
+    script_nonce: str | None = None,
+) -> None:
+    form_action = "'self'" if allow_form else "'none'"
+    directives = ["default-src 'none'", "style-src 'unsafe-inline'"]
+    if script_nonce is not None:
+        directives.append(f"script-src 'nonce-{script_nonce}'")
+    directives.extend(
+        [
+            f"form-action {form_action}",
+            "frame-ancestors 'none'",
+            "base-uri 'none'",
+        ]
+    )
     response.headers.update(
         {
             "Cache-Control": "no-store",
             "Pragma": "no-cache",
-            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
-            f"form-action {' '.join(form_action_sources)}; frame-ancestors 'none'; base-uri 'none'",
+            "Content-Security-Policy": "; ".join(directives),
             "X-Frame-Options": "DENY",
             "Referrer-Policy": "no-referrer",
             "X-Content-Type-Options": "nosniff",
@@ -207,7 +219,6 @@ def _render_login(
     client_name: str,
     signed_request: str,
     csrf_token: str,
-    redirect_uri: str,
     error: str | None = None,
 ) -> HTMLResponse:
     error_html = f'<div class="error">{html.escape(error)}</div>' if error else ""
@@ -225,7 +236,30 @@ button{{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;back
 <div class="scope">Только чтение: статистика, карточки сотрудников, наставничество, сценарии и критерии — строго в пределах прав аккаунта.</div>
 <button type="submit">Войти и разрешить доступ</button></form><p><small>MCP-шлюз сразу передаёт пароль в штатный API ОКК, не сохраняет его и никогда не передаёт Codex.</small></p></section></main></body></html>"""
     response = HTMLResponse(body)
-    _security_headers(response, redirect_uri=redirect_uri)
+    _security_headers(response, allow_form=True)
+    return response
+
+
+def _render_authorization_callback(callback_url: str) -> HTMLResponse:
+    nonce = secrets.token_urlsafe(24)
+    callback_json = (
+        json.dumps(callback_url, ensure_ascii=True)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+    callback_href = html.escape(callback_url, quote=True)
+    body = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Подключение OKK</title>
+<style>:root{{--bg:#f4f6f8;--card:#fff;--text:#17202a;--muted:#637083;--brand:#1769e0}}
+*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);font:16px/1.45 system-ui;color:var(--text)}}
+main{{min-height:100vh;display:grid;place-items:center;padding:24px}}.card{{width:min(440px,100%);background:var(--card);padding:32px;border-radius:18px;box-shadow:0 16px 48px #17202a18}}
+h1{{margin:0 0 8px}}p{{color:var(--muted)}}a{{display:block;margin-top:22px;padding:13px;border-radius:10px;background:var(--brand);color:#fff;font-weight:700;text-align:center;text-decoration:none}}</style></head>
+<body><main><section class="card"><h1>Авторизация прошла</h1><p>Возвращаем вас в Codex. Если переход не начался, нажмите кнопку ниже.</p>
+<a href="{callback_href}">Вернуться в Codex</a></section></main>
+<script nonce="{nonce}">setTimeout(() => window.location.replace({callback_json}), 1200);</script></body></html>"""
+    response = HTMLResponse(body)
+    _security_headers(response, script_nonce=nonce)
     return response
 
 
@@ -251,7 +285,6 @@ async def _refresh_authorization_form(
         client_name=client.client_name,
         signed_request=refreshed_request,
         csrf_token=refreshed_csrf,
-        redirect_uri=auth_request["redirect_uri"],
         error=error,
     )
 
@@ -296,7 +329,6 @@ async def authorize(
         client_name=client.client_name,
         signed_request=signed,
         csrf_token=csrf_token,
-        redirect_uri=redirect_uri,
     )
 
 
@@ -352,7 +384,6 @@ async def authorize_login(
             client_name=client.client_name,
             signed_request=authorization_request,
             csrf_token=csrf_token,
-            redirect_uri=auth_request["redirect_uri"],
             error="Неверный логин или пароль",
         )
     except OKKUnavailable as exc:
@@ -376,9 +407,8 @@ async def authorize_login(
     query = {"code": raw_code}
     if auth_request.get("state") is not None:
         query["state"] = auth_request["state"]
-    response = RedirectResponse(_append_redirect_query(auth_request["redirect_uri"], query), status_code=303)
-    response.headers["Cache-Control"] = "no-store"
-    return response
+    callback_url = _append_redirect_query(auth_request["redirect_uri"], query)
+    return _render_authorization_callback(callback_url)
 
 
 def _add_token_pair(

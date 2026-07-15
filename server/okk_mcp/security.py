@@ -62,16 +62,6 @@ def validate_redirect_uri(uri: str) -> str:
     return uri
 
 
-def redirect_origin(uri: str) -> str:
-    """Return an injection-safe CSP origin for an already valid redirect URI."""
-
-    validated = validate_redirect_uri(uri)
-    parsed = urlparse(validated)
-    host = _serialize_redirect_host(parsed.hostname or "")
-    port = f":{parsed.port}" if parsed.port is not None else ""
-    return f"{parsed.scheme}://{host}{port}"
-
-
 def _serialize_redirect_host(host: str) -> str:
     try:
         address = ipaddress.ip_address(host)
@@ -98,6 +88,8 @@ def _serialize_redirect_host(host: str) -> str:
             raise ValueError("invalid_redirect_uri") from None
         return ascii_host
     if address.version == 6:
+        if address.scope_id is not None:
+            raise ValueError("invalid_redirect_uri")
         return f"[{address.compressed}]"
     return address.compressed
 
