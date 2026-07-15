@@ -27,11 +27,12 @@ The published deployment is production-only: the upstream base URL is
    parallel Codex login tabs cannot invalidate one another and Chrome cookie
    behavior cannot block the form POST. Older cookie-era forms are refreshed
    into the stateless format while the signed request is still within its
-   ten-minute window. The login form remains restricted to same-origin POST.
-   After a successful login, the POST ends on a no-store confirmation page;
-   its nonce-authorized navigation returns the code to the exact registered
-   callback. This avoids Chromium applying `form-action` to a cross-origin
-   redirect while retaining IPv4, IPv6 loopback and HTTPS callback support.
+   ten-minute window. The login form posts only to the gateway. Because Chromium
+   also applies `form-action` to a form response's redirect chain, the page CSP
+   additionally permits only the origin of the validated registered callback.
+   After successful login, the authorization endpoint responds with a direct
+   `302` to that exact URI with `code` and the original `state`. Codex owns the
+   loopback listener, token exchange and resulting authenticated MCP state.
 3. The password is held only for the request and forwarded to the normal OKK
    `/auth/login`. It is never logged or persisted.
 4. The OKK access and refresh tokens are authenticated-encrypted in the
@@ -45,6 +46,17 @@ The published deployment is production-only: the upstream base URL is
 
 This is deliberately not HR/SSO authorization. Users provisioned by HR still
 need a usable local OKK password for `/auth/login`.
+
+## Codex plugin contract
+
+The community package follows the same remote-MCP declaration used by official
+account plugins: `.mcp.json` contains the HTTPS MCP URL and an `oauth_resource`
+that exactly matches the server's protected-resource metadata. Marketplace
+policy is `ON_INSTALL`, so Codex starts OAuth while installing the plugin.
+
+Official directory plugins may also contain an OpenAI-issued `.app.json`
+connector ID. This community repository intentionally does not invent one;
+that file can be added only after the connector is registered with OpenAI.
 
 ## Scaling
 

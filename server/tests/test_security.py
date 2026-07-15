@@ -20,6 +20,7 @@ from okk_mcp.config import Settings
 from okk_mcp.main import app
 from okk_mcp.platform_client import OKKAuthenticationError
 from okk_mcp.security import (
+    redirect_origin,
     token_hash,
     validate_redirect_uri,
     validate_scopes,
@@ -68,6 +69,19 @@ def test_redirect_uri_allows_https_and_loopback(uri):
 def test_redirect_uri_rejects_unsafe_values(uri):
     with pytest.raises(ValueError):
         validate_redirect_uri(uri)
+
+
+@pytest.mark.parametrize(
+    ("uri", "origin"),
+    [
+        ("https://Example.COM/callback", "https://example.com"),
+        ("http://127.0.0.1:3210/callback", "http://127.0.0.1:3210"),
+        ("http://[::1]:3210/callback", "http://[::1]:3210"),
+        ("http://localhost:3210/callback", "http://localhost:3210"),
+    ],
+)
+def test_redirect_origin_is_csp_safe_and_keeps_the_exact_port(uri, origin):
+    assert redirect_origin(uri) == origin
 
 
 def test_scopes_are_allowlisted_and_canonicalized():
@@ -217,7 +231,7 @@ def test_parallel_authorization_pages_keep_independent_signed_csrf_tokens(monkey
     assert "Неверный логин или пароль" in response.body.decode()
 
 
-def test_successful_login_ends_post_before_callback_navigation(monkeypatch):
+def test_successful_login_redirects_to_exact_codex_callback(monkeypatch):
     settings = Settings()
     csrf = "csrf"
     signed = oauth._serializer(settings).dumps(
@@ -262,46 +276,39 @@ def test_successful_login_ends_post_before_callback_navigation(monkeypatch):
         )
     )
 
-    body = response.body.decode()
-    assert response.status_code == 200
-    assert "location" not in response.headers
-    assert "Авторизация прошла" in body
-    assert "http://127.0.0.1:3210/callback?code=" in body
-    assert "&amp;state=state" in body
-    assert "one-time-test-password" not in body
-    assert "user@example.com" not in body
+    assert response.status_code == 302
+    assert response.headers["location"].startswith("http://127.0.0.1:3210/callback?code=")
+    assert response.headers["location"].endswith("&state=state")
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
+    assert "one-time-test-password" not in response.headers["location"]
+    assert "user@example.com" not in response.headers["location"]
 
 
-def test_login_form_csp_keeps_submission_same_origin():
+@pytest.mark.parametrize(
+    ("redirect_uri", "allowed_origin"),
+    [
+        ("http://127.0.0.1:3210/callback/codex", "http://127.0.0.1:3210"),
+        ("http://[::1]:3210/callback/codex", "http://[::1]:3210"),
+        ("https://chatgpt.com/connector/callback?client=codex", "https://chatgpt.com"),
+    ],
+)
+def test_login_form_csp_allows_only_self_and_registered_callback_origin(
+    redirect_uri,
+    allowed_origin,
+):
     response = oauth._render_login(
         settings=Settings(),
         client_name="Codex",
         signed_request="signed-request",
         csrf_token="csrf-token",
+        redirect_uri=redirect_uri,
     )
 
     policy = response.headers["content-security-policy"]
-    assert "form-action 'self'" in policy
+    assert f"form-action 'self' {allowed_origin}" in policy
     assert "default-src 'none'" in policy
     assert "frame-ancestors 'none'" in policy
-
-
-def test_callback_page_uses_a_nonce_and_does_not_allow_form_submission():
-    callback = "http://[::1]:3210/callback?next=</script><script>alert(1)</script>&code=abc"
-    response = oauth._render_authorization_callback(callback)
-
-    policy = response.headers["content-security-policy"]
-    body = response.body.decode()
-    assert response.headers["cache-control"] == "no-store"
-    assert response.headers["referrer-policy"] == "no-referrer"
-    assert "script-src 'nonce-" in policy
-    nonce = policy.split("script-src 'nonce-", maxsplit=1)[1].split("'", maxsplit=1)[0]
-    assert f'nonce="{nonce}"' in body
-    assert "form-action 'none'" in policy
-    assert "Авторизация прошла" in body
-    assert "setTimeout(() => window.location.replace" in body
-    assert "</script><script>alert(1)</script>" not in body
-    assert "http://[::1]:3210/callback?next=&lt;/script&gt;" in body
 
 
 def test_tampered_authorization_csrf_refreshes_the_login_form(monkeypatch):

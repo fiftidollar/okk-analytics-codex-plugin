@@ -1,6 +1,6 @@
 {
   "name": "okk-analytics",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Read-only OKK analytics: KPI, employees, mentoring, scenarios and criteria with native account OAuth.",
   "author": {
     "name": "Alpes"

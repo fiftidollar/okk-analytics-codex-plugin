@@ -13,8 +13,9 @@ plugin at the test-stand API.
   `https://okk-mcp.akfixdev.ru/mcp`.
 - Dedicated PostgreSQL and authenticated Redis are private Compose services;
   neither publishes a host port.
-- Current verified deployment: commit `ef75db5d962f6a03c2a40967943ca08ae6fd70e8`,
-  status `done` on `2026-07-14`.
+- Deployment authority is the latest `done` record for this Compose in Dokploy.
+  Record the exact verified release commit in the platform operations inventory;
+  do not infer live state from repository `main` alone.
 
 ## Required infrastructure
 
@@ -40,10 +41,12 @@ public OKK login API and does not mint OKK tokens.
    `resource_metadata` challenge.
 6. Complete Authorization Code + PKCE in a real Codex client.
    Open two authorization pages before submitting either one and verify both
-   forms remain independently usable. Verify Chrome reaches the loopback Codex
-   callback through the visible success page without a `form-action` CSP
-   violation; each form carries its own signed CSRF nonce and does not depend
-   on cookies.
+   forms remain independently usable. Verify the gateway returns `302` to the
+   exact loopback callback, Chrome does not report a `form-action` violation,
+   and Codex reports a successful login with authenticated MCP state. Codex may
+   also show a local browser completion page, but that page is not the release
+   authority. Each form carries its own signed CSRF nonce and does not depend on
+   cookies.
 7. Run the read matrix against production with dedicated accounts that are safe
    for read-only verification:
    - admin;
@@ -59,6 +62,8 @@ public OKK login API and does not mint OKK tokens.
 10. Validate refresh rotation, reuse revocation, logout/revoke and concurrent
     refresh behavior.
 11. Install the marketplace plugin and repeat the main user flows in Codex.
+    Confirm installation itself starts OAuth (`ON_INSTALL`) and that the loaded
+    MCP configuration contains the exact production `oauth_resource`.
 
 ## Dokploy production compose
 

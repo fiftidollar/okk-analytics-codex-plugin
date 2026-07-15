@@ -43,10 +43,13 @@ criteria-only GET endpoint should replace this compatibility path.
 - Authorization Code only, PKCE S256 required.
 - Exact registered redirect URI matching.
 - HTTPS redirects, except RFC 8252 loopback HTTP clients.
-- The credential form permits only same-origin submission. A separate no-store
-  confirmation page performs the callback navigation under a per-response CSP
-  script nonce and retains an escaped fallback link to the exact signed and
-  registered redirect URI. No wildcard form destination is allowed.
+- The credential form submits only to the gateway. Its `form-action` CSP also
+  includes the injection-safe origin of the exact validated callback because
+  Chromium enforces the directive across the final redirect. No wildcard or
+  user-controlled CSP source is allowed.
+- A successful authorization POST returns a no-store `302` directly to the
+  registered URI. Codex validates `state`, exchanges the code and records the
+  authenticated MCP state.
 - Exact MCP resource indicator.
 - Public clients only (`token_endpoint_auth_method=none`).
 - Flow-scoped CSRF binding, signed ten-minute authorization request and

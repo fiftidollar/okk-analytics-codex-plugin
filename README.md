@@ -26,8 +26,10 @@ the Codex plugin package.
   rotation/reuse detection and revocation.
 - Cookie-independent authorization form with a signed short-lived CSRF nonce,
   plus recovery for older in-flight forms while their OAuth request is valid.
-  A visible success page then returns the authorization code to the exact
-  registered callback without widening the login form's same-origin CSP.
+  The gateway then redirects directly to the exact callback registered by
+  Codex; Codex owns the local listener, token exchange and completion page.
+- Official remote-MCP packaging shape: an explicit `oauth_resource` matching
+  the protected-resource metadata and marketplace authentication on install.
 - Live `/auth/me` verification on every MCP request.
 - Admin/viewer/empty-ACL semantics and neutral inaccessible-ID responses.
 
@@ -79,7 +81,9 @@ codex plugin marketplace add fiftidollar/okk-analytics-codex-plugin
 ```
 
 Restart Codex, open **Plugins**, choose **Alpes Community**, and install
-**OKK Analytics**. In Codex CLI, open the same plugin browser with:
+**OKK Analytics**. Installation immediately starts the normal Codex OAuth
+window; enter the credentials on the OKK page and wait until Codex reports that
+authentication is complete. In Codex CLI, open the same plugin browser with:
 
 ```text
 codex
@@ -90,6 +94,19 @@ Start a new task after installation so the skill and MCP server are loaded.
 `scripts/install.ps1` remains an optional compatibility helper for managed or
 older environments; cloning this repository is not part of the normal user
 installation flow.
+
+To pick up a newer published version, refresh the marketplace and reinstall the
+plugin from the same entry:
+
+```powershell
+codex plugin marketplace upgrade alpes-community
+codex plugin add okk-analytics@alpes-community
+```
+
+To force a fresh account login later, use **Authenticate** in Codex or run
+`codex mcp logout okk-analytics` followed by `codex mcp login okk-analytics`.
+The `127.0.0.1:<port>/callback/<id>` URL is the standard temporary Codex
+callback; the MCP gateway does not invent or host that address.
 
 The production target is the live OKK API at
 `https://okk-backend.akfixdev.ru/api/v1`; use `.env.production.example` as the
