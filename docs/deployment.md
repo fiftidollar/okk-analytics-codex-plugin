@@ -47,6 +47,9 @@ public OKK login API and does not mint OKK tokens.
    also show a local browser completion page, but that page is not the release
    authority. Each form carries its own signed CSRF nonce and does not depend on
    cookies.
+   Start a new task with `Проверить подключение OKK и показать мой доступ` and
+   require `get_access_context.data.authenticated=true`, the explicit chat
+   message `OKK подключён`, and only the test account's visible departments.
 7. Run the read matrix against production with dedicated accounts that are safe
    for read-only verification:
    - admin;

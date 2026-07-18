@@ -19,6 +19,12 @@
   only the entity ID.
 - Added redacted structured tool-call traces and Windows timezone data to the
   declared runtime dependencies.
+- Added an authenticated connection confirmation (`authenticated=true` plus a
+  user-facing message), mandatory first-use scope verification in the skill,
+  and a one-click starter prompt for non-technical users.
+- The login page now explains the Codex callback handoff, while a direct,
+  refreshed or stale `/authorize` URL renders a friendly recovery page instead
+  of FastAPI validation JSON.
 - Moved the published package to the canonical
   `plugins/okk-analytics/` marketplace layout and corrected update guidance.
 

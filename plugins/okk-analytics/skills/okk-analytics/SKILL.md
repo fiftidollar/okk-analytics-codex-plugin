@@ -20,6 +20,14 @@ areas, weekly focus, mentoring tasks, scenarios, criteria or their performance.
   plugin.
 - Respect `access_context`, `effective_scope`, `omitted_filters_count` and
   `status` in every response.
+- On the first OKK request in every new task, call `get_access_context` before
+  any business-statistics tool. A successful response with
+  `authenticated=true` is the proof that OAuth completed. Explicitly tell the
+  user `OKK подключён`, then summarize the role and visible departments. Do
+  not claim a successful connection from a browser redirect alone.
+- If authentication was just completed during a task, retry
+  `get_access_context`. Only its successful authenticated response may turn
+  the pending login into a chat confirmation.
 - Treat a department explicitly named by the user as a mandatory filter. Pass
   its exact visible name or code as `department_ref`; never drop that filter,
   broaden the request to all departments, or relabel another department's
@@ -38,8 +46,8 @@ areas, weekly focus, mentoring tasks, scenarios, criteria or their performance.
 
 ## Tool routing
 
-Start broad questions with `get_access_context` and
-`get_statistics_catalog` when the scope or available metrics is unclear.
+Always start a task's first OKK request with `get_access_context`. Use
+`get_statistics_catalog` next when the available metrics are unclear.
 
 For a request such as "employees of B2B and their scores", call
 `get_department_statistics(department_ref="B2B")` first. It returns the full

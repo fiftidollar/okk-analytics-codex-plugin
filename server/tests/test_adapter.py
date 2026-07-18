@@ -48,6 +48,36 @@ def adapter(platform: FakePlatform) -> AnalyticsAdapter:
 
 
 @pytest.mark.anyio
+async def test_access_context_is_the_definitive_authenticated_connection_confirmation():
+    department_id = str(uuid4())
+    platform = FakePlatform(
+        role="viewer",
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Отдел региональных продаж", "code": "ord"}]
+        },
+    )
+
+    result = await adapter(platform).get_access_context()
+
+    assert result["status"] == "ok"
+    assert result["data"] == {
+        "authenticated": True,
+        "connection_status": "connected",
+        "confirmation_message": "OKK подключён. Авторизация подтверждена.",
+        "role": "viewer",
+        "all_departments": False,
+        "departments": [{"id": department_id, "name": "Отдел региональных продаж", "code": "ord"}],
+    }
+    assert result["access_context"] == {
+        "role": "viewer",
+        "all_departments": False,
+        "departments": [{"id": department_id, "name": "Отдел региональных продаж", "code": "ord"}],
+    }
+    assert platform.calls == [("/departments", [])]
+
+
+@pytest.mark.anyio
 async def test_empty_viewer_acl_is_a_valid_empty_scope_without_data_queries():
     platform = FakePlatform(role="viewer", department_ids=())
     result = await adapter(platform).list_employees()

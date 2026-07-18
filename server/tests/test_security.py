@@ -156,6 +156,9 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
         tool for tool in tools if tool.name == "compare_departments"
     ).inputSchema
     assert "department_refs" in compare_departments_schema["properties"]
+    access_tool = next(tool for tool in tools if tool.name == "get_access_context")
+    assert "подтверждает подключение ОКК" in access_tool.description
+    assert "OKK подключён" in access_tool.description
 
 
 def test_mcp_transport_allows_only_the_configured_public_origin():
@@ -335,6 +338,21 @@ def test_login_form_csp_allows_only_self_and_registered_callback_origin(
     assert f"form-action 'self' {allowed_origin}" in policy
     assert "default-src 'none'" in policy
     assert "frame-ancestors 'none'" in policy
+    body = response.body.decode()
+    assert "Что произойдёт дальше" in body
+    assert "Проверить подключение OKK" in body
+    assert "OKK подключён" in body
+
+
+def test_direct_or_stale_authorize_url_renders_friendly_recovery_instead_of_422():
+    response = asyncio.run(oauth.authorize(db=SimpleNamespace(), settings=Settings()))
+
+    assert response.status_code == 400
+    assert response.headers["content-type"].startswith("text/html")
+    body = response.body.decode()
+    assert "Подключение не запущено или ссылка устарела" in body
+    assert "Authenticate" in body
+    assert "application/json" not in response.headers["content-type"]
 
 
 def test_tampered_authorization_csrf_refreshes_the_login_form(monkeypatch):

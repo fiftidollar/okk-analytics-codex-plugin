@@ -88,7 +88,25 @@ codex plugin marketplace add fiftidollar/okk-analytics-codex-plugin
 Restart Codex, open **Plugins**, choose **Alpes Community**, and install
 **OKK Analytics**. Installation immediately starts the normal Codex OAuth
 window; enter the credentials on the OKK page and wait until Codex reports that
-authentication is complete. In Codex CLI, open the same plugin browser with:
+authentication is complete. The browser callback is owned by Codex, so the
+gateway does not show a premature hosted «success» page.
+
+Start a new task and choose the starter prompt **«Проверить подключение OKK и
+показать мой доступ»**. The plugin calls the authenticated access check and
+Codex should answer in this shape:
+
+```text
+OKK подключён.
+Роль: viewer
+Доступные отделы: ОРД
+```
+
+This chat response is the reliable confirmation: it proves token exchange and
+live `/auth/me` verification both succeeded. If the browser shows a localhost
+or `127.0.0.1` error, return to Codex and run the same check. If it returns the
+role and departments, the login succeeded; if Codex shows **Authenticate**, run
+authentication again from that fresh action. In Codex CLI, open the same plugin
+browser with:
 
 ```text
 codex

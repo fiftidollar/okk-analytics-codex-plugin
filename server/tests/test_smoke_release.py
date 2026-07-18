@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from scripts.smoke_release import DEPARTMENT_SCOPED_TOOLS, EXPECTED_TOOLS, validate_tool_inventory
+from scripts.smoke_release import (
+    DEPARTMENT_SCOPED_TOOLS,
+    EXPECTED_TOOLS,
+    validate_connection_confirmation,
+    validate_tool_inventory,
+)
 
 
 def _tool(name: str) -> dict:
@@ -32,3 +37,39 @@ def test_release_smoke_requires_exact_safe_inventory():
     ].pop("department_ref")
     with pytest.raises(RuntimeError):
         validate_tool_inventory({"result": {"tools": missing_named_filter}})
+
+
+def test_release_smoke_requires_a_definitive_connection_confirmation():
+    payload = {
+        "result": {
+            "structuredContent": {
+                "status": "ok",
+                "data": {
+                    "authenticated": True,
+                    "connection_status": "connected",
+                    "confirmation_message": "OKK подключён. Авторизация подтверждена.",
+                    "role": "viewer",
+                    "departments": [],
+                },
+            }
+        }
+    }
+    validate_connection_confirmation(payload)
+
+    for key, value in (
+        ("authenticated", False),
+        ("connection_status", "pending"),
+        ("confirmation_message", "Вероятно подключён"),
+        ("role", ""),
+        ("departments", None),
+    ):
+        invalid = {
+            "result": {
+                "structuredContent": {
+                    "status": "ok",
+                    "data": {**payload["result"]["structuredContent"]["data"], key: value},
+                }
+            }
+        }
+        with pytest.raises(RuntimeError):
+            validate_connection_confirmation(invalid)

@@ -5,7 +5,7 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 
 | Tool | Data |
 |---|---|
-| `get_access_context` | Current role and visible departments |
+| `get_access_context` | Authenticated connection proof, current role and visible departments |
 | `get_statistics_catalog` | Metric domains and explicit exclusions |
 | `get_overview_statistics` | Overall KPI, clients, department rollup, ranking and trend |
 | `list_departments` | Visible departments and KPI settings |
@@ -60,6 +60,13 @@ plans, CRM, growth, mentoring, scenarios and criteria all apply this guard.
   echoing their IDs.
 - `request_id`: correlation ID for the gateway's redacted operational trace.
 - `data`: the business payload.
+
+`get_access_context` is the canonical post-login check. Because the tool can be
+called only with a valid MCP OAuth token and revalidates `/auth/me`, its
+`data.authenticated=true` result proves that the connection completed. In a new
+task Codex must call it first and explicitly tell the user `OKK подключён`, then
+show only the role and departments returned by that call. A browser redirect
+alone is not treated as proof.
 
 `no_data` means the scope is accessible but has no matching observations.
 `not_available` means the requested scope/entity cannot be supplied. Neither

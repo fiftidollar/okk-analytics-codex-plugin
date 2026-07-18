@@ -590,7 +590,15 @@ class AnalyticsAdapter:
         return await handler(**params)
 
     async def get_access_context(self, **_: Any) -> dict[str, Any]:
-        return await self.envelope(await self.access_context())
+        context = await self.access_context()
+        return await self.envelope(
+            {
+                "authenticated": True,
+                "connection_status": "connected",
+                "confirmation_message": "OKK подключён. Авторизация подтверждена.",
+                **context,
+            }
+        )
 
     async def get_statistics_catalog(self, **_: Any) -> dict[str, Any]:
         domains = [
@@ -611,7 +619,10 @@ class AnalyticsAdapter:
             {
                 "domains": domains,
                 "tool_routing": [
-                    {"tool": "get_access_context", "use_for": "current role and visible departments"},
+                    {
+                        "tool": "get_access_context",
+                        "use_for": "authenticated connection proof, current role and visible departments",
+                    },
                     {"tool": "get_statistics_catalog", "use_for": "available metrics and contracts"},
                     {"tool": "get_overview_statistics", "use_for": "overall or one-department dashboard"},
                     {"tool": "list_departments", "use_for": "visible department directory and KPI settings"},

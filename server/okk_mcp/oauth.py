@@ -229,13 +229,15 @@ def _render_login(
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);font:16px/1.45 system-ui;color:var(--text)}}
 main{{min-height:100vh;display:grid;place-items:center;padding:24px}}.card{{width:min(440px,100%);background:var(--card);padding:32px;border-radius:18px;box-shadow:0 16px 48px #17202a18}}
 h1{{margin:0 0 8px}}p{{color:var(--muted)}}label{{display:block;font-weight:650;margin:14px 0 6px}}input{{width:100%;padding:12px 14px;border:1px solid #cbd3dc;border-radius:10px;font:inherit}}
-button{{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;background:var(--brand);color:#fff;font:700 16px system-ui}}.scope{{font-size:14px;background:#f7f9fb;padding:12px 14px;border-radius:10px;margin-top:18px}}.error{{color:var(--danger);background:#fef3f2;padding:10px 12px;border-radius:10px}}</style></head>
+button{{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;background:var(--brand);color:#fff;font:700 16px system-ui}}.scope,.next{{font-size:14px;background:#f7f9fb;padding:12px 14px;border-radius:10px;margin-top:18px}}.next{{background:#eef6ff}}.error{{color:var(--danger);background:#fef3f2;padding:10px 12px;border-radius:10px}}</style></head>
 <body><main><section class="card"><h1>Вход в ОКК</h1><p>Подключение приложения <strong>{html.escape(client_name)}</strong></p>{error_html}
 <form method="post" action="/authorize"><input type="hidden" name="authorization_request" value="{html.escape(signed_request, quote=True)}"><input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}">
 <label for="email">Логин (email)</label><input id="email" name="email" type="email" autocomplete="username" maxlength="200" required autofocus>
 <label for="password">Пароль</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required>
 <div class="scope">Только чтение: статистика, карточки сотрудников, наставничество, сценарии и критерии — строго в пределах прав аккаунта.</div>
-<button type="submit">Войти и разрешить доступ</button></form><p><small>MCP-шлюз сразу передаёт пароль в штатный API ОКК, не сохраняет его и никогда не передаёт Codex.</small></p></section></main></body></html>"""
+<button type="submit">Войти и разрешить доступ</button></form>
+<div class="next"><strong>Что произойдёт дальше</strong><br>Браузер передаст вход обратно в Codex. Вернитесь в Codex и выберите «Проверить подключение OKK»: сообщение «OKK подключён» с ролью и отделами означает, что вход действительно завершён.</div>
+<p><small>MCP-шлюз сразу передаёт пароль в штатный API ОКК, не сохраняет его и никогда не передаёт Codex.</small></p></section></main></body></html>"""
     response = HTMLResponse(body)
     _security_headers(response, allow_form=True, redirect_uri=redirect_uri)
     return response
@@ -270,17 +272,21 @@ async def _refresh_authorization_form(
 
 @router.get("/authorize")
 async def authorize(
-    client_id: str,
-    redirect_uri: str,
-    response_type: str,
-    code_challenge: str,
-    code_challenge_method: str,
+    client_id: str | None = None,
+    redirect_uri: str | None = None,
+    response_type: str | None = None,
+    code_challenge: str | None = None,
+    code_challenge_method: str | None = None,
     state: str | None = None,
     scope: str | None = None,
     resource: str | None = None,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    if not all((client_id, redirect_uri, response_type, code_challenge, code_challenge_method)):
+        return _render_authorization_error(
+            "Подключение не запущено или ссылка устарела. Откройте Codex, нажмите Authenticate у OKK Analytics и используйте новую страницу входа."
+        )
     if response_type != "code" or not valid_pkce_challenge(code_challenge, code_challenge_method):
         raise HTTPException(status_code=400, detail="Authorization Code with PKCE S256 is required")
     client = await _load_client(db, client_id, redirect_uri)

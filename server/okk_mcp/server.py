@@ -113,7 +113,11 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     mcp = FastMCP(
         name=settings.mcp_service_name,
         instructions=(
-            "Read-only OKK business analytics. Respect access_context/effective_scope. "
+            "Read-only OKK business analytics. On the first OKK request in a task, call "
+            "get_access_context. If it returns authenticated=true, explicitly tell the user "
+            "'OKK подключён' and summarize only the role and visible departments. A browser "
+            "redirect alone is not proof of a completed connection. Respect "
+            "access_context/effective_scope. "
             "When the user names a department, pass that exact name or code as department_ref; "
             "never silently omit a requested department filter and never relabel another "
             "department's employees. If status is not_available, state that the requested "
@@ -141,8 +145,8 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     )
 
     @mcp.tool(
-        title="Контекст доступа ОКК",
-        description="Показывает роль и только те отделы, которые доступны текущему аккаунту ОКК.",
+        title="Проверка подключения и доступа ОКК",
+        description="Первый безопасный вызов после входа: успешный ответ технически подтверждает подключение ОКК и показывает роль и только доступные текущему аккаунту отделы. После успеха явно сообщите пользователю: «OKK подключён».",
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,

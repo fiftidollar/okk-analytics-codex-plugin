@@ -73,6 +73,21 @@ def validate_tool_inventory(payload: dict[str, Any]) -> None:
             raise RuntimeError("compare_departments cannot resolve named departments")
 
 
+def validate_connection_confirmation(payload: dict[str, Any]) -> None:
+    structured = payload.get("result", {}).get("structuredContent") or {}
+    data = structured.get("data") or {}
+    if structured.get("status") != "ok":
+        raise RuntimeError("Authenticated access-context call did not succeed")
+    if data.get("authenticated") is not True or data.get("connection_status") != "connected":
+        raise RuntimeError("Access context did not confirm an authenticated OKK connection")
+    if data.get("confirmation_message") != "OKK подключён. Авторизация подтверждена.":
+        raise RuntimeError("Access context did not return the canonical connection confirmation")
+    if not isinstance(data.get("role"), str) or not data["role"]:
+        raise RuntimeError("Access context did not return the connected account role")
+    if not isinstance(data.get("departments"), list):
+        raise RuntimeError("Access context did not return the visible department list")
+
+
 async def run(base_url: str, token: str | None) -> dict[str, Any]:
     base = base_url.rstrip("/")
     mcp_url = f"{base}/mcp"
@@ -128,7 +143,9 @@ async def run(base_url: str, token: str | None) -> dict[str, Any]:
                 json=_rpc("tools/call", {"name": "get_access_context", "arguments": {}}, 3),
             )
             access.raise_for_status()
-            report["access_context_call"] = access.json()
+            access_payload = access.json()
+            validate_connection_confirmation(access_payload)
+            report["access_context_call"] = access_payload
             inaccessible = await client.post(
                 mcp_url,
                 headers=authenticated,

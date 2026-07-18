@@ -33,6 +33,11 @@ The published deployment is production-only: the upstream base URL is
    After successful login, the authorization endpoint responds with a direct
    `302` to that exact URI with `code` and the original `state`. Codex owns the
    loopback listener, token exchange and resulting authenticated MCP state.
+   The gateway cannot truthfully replace this client-owned callback with its
+   own success page: the token exchange has not completed until Codex consumes
+   the code. The login page therefore explains the handoff, and the first
+   authenticated `get_access_context` call supplies the definitive chat-level
+   confirmation.
 3. The password is held only for the request and forwarded to the normal OKK
    `/auth/login`. It is never logged or persisted.
 4. The OKK access and refresh tokens are authenticated-encrypted in the
@@ -43,6 +48,12 @@ The published deployment is production-only: the upstream base URL is
    and `department_ids`.
 6. Every analytics call uses only an upstream GET route. Results pass through an
    explicit safe projection before MCP serialization.
+
+On the first OKK request in a new task, the bundled skill calls
+`get_access_context`. A successful call returns `authenticated=true`, the role
+and visible departments, after which Codex explicitly says `OKK подключён`.
+This is intentionally an in-chat verification, not an unsolicited message:
+an MCP server cannot create a user chat turn merely because OAuth completed.
 
 ## ACL-safe selector resolution
 

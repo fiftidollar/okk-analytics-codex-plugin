@@ -62,6 +62,14 @@ criteria-only GET endpoint should replace this compatibility path.
 - A successful authorization POST returns a no-store `302` directly to the
   registered URI. Codex validates `state`, exchanges the code and records the
   authenticated MCP state.
+- The redirect itself is never presented as proof of a completed login. The
+  definitive check is an authenticated `get_access_context` call: token
+  verification reloads `/auth/me`, and only then may the response contain
+  `authenticated=true`, the current role and visible departments. No token,
+  password or upstream session identifier is included in that confirmation.
+- A bare or refreshed `/authorize` URL without a complete PKCE request renders
+  a no-store recovery page and tells the user to restart authentication from
+  Codex; it does not manufacture an authorization session.
 - Exact MCP resource indicator.
 - Public clients only (`token_endpoint_auth_method=none`).
 - Flow-scoped CSRF binding, signed ten-minute authorization request and
