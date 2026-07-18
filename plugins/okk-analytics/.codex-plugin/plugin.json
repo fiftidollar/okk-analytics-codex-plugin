@@ -32,5 +32,5 @@
       "Покажи зоны роста, задачи и проблемные критерии."
     ]
   },
-  "mcpServers": "./.mcp.json"
+  "mcpServers": "./.mcp.codex.json"
 }

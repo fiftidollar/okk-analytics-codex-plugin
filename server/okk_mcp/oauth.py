@@ -88,6 +88,22 @@ def _protected_resource_metadata(settings: Settings) -> dict[str, Any]:
     }
 
 
+def _client_registration_document(client: OAuthClient) -> dict[str, Any]:
+    document = {
+        "client_id": client.client_id,
+        "client_id_issued_at": int(client.created_at.timestamp()),
+        "client_name": client.client_name,
+        "redirect_uris": client.redirect_uris,
+        "grant_types": client.grant_types,
+        "response_types": client.response_types,
+        "token_endpoint_auth_method": client.token_endpoint_auth_method,
+        "scope": client.scope,
+    }
+    if client.client_uri:
+        document["client_uri"] = client.client_uri
+    return document
+
+
 @router.get("/.well-known/oauth-protected-resource")
 @router.get("/.well-known/oauth-protected-resource/mcp")
 async def protected_resource_metadata(settings: Settings = Depends(get_settings)):
@@ -131,17 +147,7 @@ async def register_client(
     db.add(client)
     await db.flush()
     return JSONResponse(
-        {
-            "client_id": client.client_id,
-            "client_id_issued_at": int(client.created_at.timestamp()),
-            "client_name": client.client_name,
-            "redirect_uris": client.redirect_uris,
-            "grant_types": client.grant_types,
-            "response_types": client.response_types,
-            "token_endpoint_auth_method": client.token_endpoint_auth_method,
-            "scope": client.scope,
-            "client_uri": client.client_uri,
-        },
+        _client_registration_document(client),
         status_code=201,
         headers={"Cache-Control": "no-store"},
     )

@@ -2,6 +2,12 @@
 
 ## 1.1.0 - Unreleased
 
+- Added a native Claude Code plugin manifest, marketplace, standard remote HTTP
+  MCP configuration and `/okk-analytics:check-connection` command alongside the
+  existing Codex package. Both clients share one skill and backend.
+- Dynamic client registration now omits an absent optional `client_uri` instead
+  of serializing JSON `null`, preserving compatibility with strict Claude Code
+  OAuth metadata validation.
 - Added one ACL-safe department resolver for UUIDs, exact codes and normalized
   names across every department-scoped tool.
 - Department discovery is explicitly live and data-driven: the plugin carries

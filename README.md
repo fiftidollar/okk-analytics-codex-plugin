@@ -1,9 +1,9 @@
-# OKK Analytics for Codex
+# OKK Analytics for Codex and Claude Code
 
 Community plugin and standalone MCP gateway for read-only OKK analytics. A user
 connects their own OKK account with the normal email/password login page. Codex
-never receives the password, and every result is restricted by the account's
-current role and department ACL.
+and Claude Code never receive the password, and every result is restricted by
+the account's current role and department ACL.
 
 The account must have a working local OKK password. An account provisioned only
 through HR/SSO needs a local OKK password set by the normal account-management
@@ -11,7 +11,7 @@ process first; the plugin never authenticates through the HR platform.
 
 This repository is independent of the OKK platform codebase: it uses the
 existing HTTP API and owns only OAuth grants, encrypted upstream sessions and
-the Codex plugin package.
+the Codex/Claude Code plugin packages.
 
 ## Included
 
@@ -27,9 +27,11 @@ the Codex plugin package.
 - Cookie-independent authorization form with a signed short-lived CSRF nonce,
   plus recovery for older in-flight forms while their OAuth request is valid.
   The gateway then redirects directly to the exact callback registered by
-  Codex; Codex owns the local listener, token exchange and completion page.
-- Official remote-MCP packaging shape: an explicit `oauth_resource` matching
-  the protected-resource metadata and marketplace authentication on install.
+  the client; Codex or Claude Code owns the local listener, token exchange and
+  completion state.
+- Native remote-MCP packaging for both clients: Codex receives its explicit
+  `oauth_resource`, while Claude Code uses standard HTTP MCP discovery and its
+  `/mcp` OAuth flow.
 - Live `/auth/me` verification on every MCP request.
 - Admin/viewer/empty-ACL semantics and neutral inaccessible-ID responses.
 - Exact department selection by visible UUID, code or name. A failed named
@@ -47,8 +49,9 @@ operations and every write action.
 ## Repository layout
 
 ```text
-plugins/okk-analytics/   Codex plugin manifest, MCP declaration and skill
-.agents/plugins/         Local/community marketplace manifest
+plugins/okk-analytics/   Shared skill plus Codex and Claude Code plugin manifests
+.agents/plugins/         Codex community marketplace manifest
+.claude-plugin/          Claude Code community marketplace manifest
 server/okk_mcp/          OAuth server, encrypted sessions and 19 MCP tools
 server/migrations/       Standalone PostgreSQL schema
 server/tests/            Security, ACL, projection and tool-contract tests
@@ -73,9 +76,10 @@ docs/                    Architecture, tools, security and deployment runbooks
    Invoke-RestMethod http://localhost:8020/.well-known/oauth-protected-resource/mcp
    ```
 
-5. For a local marketplace checkout, update
-   `plugins/okk-analytics/.mcp.json` to your HTTPS gateway URL, then add this
-   repository as a Codex marketplace and install the **OKK Analytics** entry.
+5. For a local marketplace checkout, update both
+   `plugins/okk-analytics/.mcp.codex.json` and
+   `plugins/okk-analytics/.mcp.json` to your HTTPS gateway URL, then install the
+   **OKK Analytics** entry in the client being tested.
 
 ## Install in Codex
 
@@ -130,6 +134,44 @@ To force a fresh account login later, use **Authenticate** in Codex or run
 `codex mcp logout okk-analytics` followed by `codex mcp login okk-analytics`.
 The `127.0.0.1:<port>/callback/<id>` URL is the standard temporary Codex
 callback; the MCP gateway does not invent or host that address.
+
+## Install in Claude Code
+
+Use a current Claude Code release, then add the same public repository as a
+marketplace and install the plugin for the current user:
+
+```powershell
+claude plugin marketplace add fiftidollar/okk-analytics-codex-plugin
+claude plugin install okk-analytics@alpes-community --scope user
+```
+
+Start an interactive Claude Code session and reload the installed components:
+
+```text
+claude
+/reload-plugins
+/mcp
+```
+
+In `/mcp`, select the MCP server supplied by **OKK Analytics** (it can be shown
+as `plugin:okk-analytics:okk-analytics`) and choose **Authenticate**. Enter the
+credentials only on the hosted OKK page. After returning to Claude Code, run:
+
+```text
+/okk-analytics:check-connection
+```
+
+The command is successful only when Claude receives
+`get_access_context.data.authenticated=true`; it then prints `OKK подключён`,
+the account role and the live visible departments. If the browser callback
+cannot return automatically, copy its complete URL and paste it into the URL
+prompt shown by Claude Code. To re-authenticate later, use **Clear
+authentication** and **Authenticate** in `/mcp`. To update the plugin, run:
+
+```powershell
+claude plugin marketplace update alpes-community
+claude plugin update okk-analytics@alpes-community
+```
 
 The production target is the live OKK API at
 `https://okk-backend.akfixdev.ru/api/v1`; use `.env.production.example` as the

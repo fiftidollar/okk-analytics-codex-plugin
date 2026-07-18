@@ -200,6 +200,27 @@ def test_metadata_and_mcp_auth_challenge_are_discoverable():
     assert "resource_metadata=" in challenge.headers["www-authenticate"]
 
 
+def test_dynamic_registration_omits_null_optional_client_uri_for_strict_oauth_clients():
+    base = {
+        "client_id": "public-client",
+        "created_at": datetime(2026, 7, 18, tzinfo=UTC),
+        "client_name": "Claude Code",
+        "redirect_uris": ["http://localhost:3210/callback"],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+        "scope": "okk.statistics.read",
+    }
+
+    without_uri = oauth._client_registration_document(SimpleNamespace(**base, client_uri=None))
+    with_uri = oauth._client_registration_document(
+        SimpleNamespace(**base, client_uri="https://example.com/client")
+    )
+
+    assert "client_uri" not in without_uri
+    assert with_uri["client_uri"] == "https://example.com/client"
+
+
 def test_parallel_authorization_pages_keep_independent_signed_csrf_tokens(monkeypatch):
     settings = Settings()
     csrf_a, csrf_b = "csrf-a", "csrf-b"

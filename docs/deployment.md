@@ -69,9 +69,15 @@ public OKK login API and does not mint OKK tokens.
    routing and pipeline.
 10. Validate refresh rotation, reuse revocation, logout/revoke and concurrent
     refresh behavior.
-11. Install the marketplace plugin and repeat the main user flows in Codex.
-    Confirm installation itself starts OAuth (`ON_INSTALL`) and that the loaded
-    MCP configuration contains the exact production `oauth_resource`.
+11. Install the marketplace plugin and repeat the main user flows in both
+    clients:
+    - Codex: confirm installation itself starts OAuth (`ON_INSTALL`) and the
+      loaded MCP configuration contains the exact production `oauth_resource`;
+    - current Claude Code: add `fiftidollar/okk-analytics-codex-plugin`, install
+      `okk-analytics@alpes-community`, authenticate through `/mcp`, run
+      `/okk-analytics:check-connection`, and verify the role and department ACL;
+      inspect the DCR response and require an absent `client_uri` to be omitted,
+      never serialized as JSON `null`.
 12. Inspect structured `okk_analytics_tool_call` logs. Confirm request IDs,
     timings, status and department code are present, while credentials, raw
     selectors, entity IDs, employee names and response payloads are absent.

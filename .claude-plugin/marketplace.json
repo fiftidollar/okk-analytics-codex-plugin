@@ -1,0 +1,22 @@
+{
+  "name": "alpes-community",
+  "owner": {
+    "name": "Alpes"
+  },
+  "metadata": {
+    "description": "Community integrations from Alpes."
+  },
+  "plugins": [
+    {
+      "name": "okk-analytics",
+      "source": "./plugins/okk-analytics",
+      "description": "Read-only OKK statistics, employee insights, mentoring, scenarios and criteria with account-scoped OAuth.",
+      "version": "1.1.0",
+      "author": {
+        "name": "Alpes"
+      },
+      "category": "data-analytics",
+      "tags": ["okk", "analytics", "read-only", "mcp"]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "okk-analytics": {
+      "type": "http",
+      "url": "https://okk-mcp.akfixdev.ru/mcp",
+      "oauth_resource": "https://okk-mcp.akfixdev.ru/mcp"
+    }
+  }
+}

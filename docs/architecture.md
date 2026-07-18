@@ -99,6 +99,25 @@ Official directory plugins may also contain an OpenAI-issued `.app.json`
 connector ID. This community repository intentionally does not invent one;
 that file can be added only after the connector is registered with OpenAI.
 
+## Claude Code plugin contract
+
+The same plugin directory also contains a Claude Code manifest and the shared
+skill. The repository-level `.claude-plugin/marketplace.json` publishes it as
+`okk-analytics@alpes-community`. Claude Code reads the standard root
+`.mcp.json`, connects to the same production Streamable HTTP endpoint, discovers
+the OAuth authorization server from the protected-resource challenge and uses
+dynamic client registration with PKCE. No local MCP process, API key or copied
+credential is required.
+
+Dynamic registration includes optional client metadata only when it has a
+value. In particular, an absent `client_uri` is omitted instead of emitted as
+JSON `null`, because strict OAuth clients validate a present field as a URI
+string.
+
+Codex keeps a separate `.mcp.codex.json` only because its package declares the
+protected OAuth resource explicitly. Both clients use the same tools, live ACL
+checks and safe projections; the packaging files do not fork analytics logic.
+
 ## Scaling
 
 MCP transport is stateless Streamable HTTP. OAuth/session state is shared in

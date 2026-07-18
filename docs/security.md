@@ -72,6 +72,10 @@ criteria-only GET endpoint should replace this compatibility path.
   Codex; it does not manufacture an authorization session.
 - Exact MCP resource indicator.
 - Public clients only (`token_endpoint_auth_method=none`).
+- Dynamic registration never serializes absent optional URI metadata as JSON
+  `null`; fields such as `client_uri` are omitted unless they contain a
+  validated value. This keeps strict Codex/Claude Code OAuth clients on the
+  same public PKCE contract without inventing client metadata.
 - Flow-scoped CSRF binding, signed ten-minute authorization request and
   fail-closed Redis login throttling. Parallel OAuth pages use a per-form nonce
   carried inside the signed authorization request, so the submit path does not

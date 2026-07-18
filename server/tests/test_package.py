@@ -14,10 +14,10 @@ def test_plugin_and_marketplace_point_to_the_standalone_package():
     plugin = ROOT / "plugins/okk-analytics"
     manifest = json.loads((plugin / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
     marketplace = json.loads((ROOT / ".agents/plugins/marketplace.json").read_text(encoding="utf-8"))
-    mcp = json.loads((plugin / ".mcp.json").read_text(encoding="utf-8"))
+    mcp = json.loads((plugin / ".mcp.codex.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "okk-analytics"
     assert manifest["version"] == "1.1.0"
-    assert manifest["mcpServers"] == "./.mcp.json"
+    assert manifest["mcpServers"] == "./.mcp.codex.json"
     assert manifest["repository"].endswith("/okk-analytics-codex-plugin")
     assert manifest["license"] == "MIT"
     assert manifest["interface"]["privacyPolicyURL"].endswith("/PRIVACY.md")
@@ -38,6 +38,34 @@ def test_plugin_and_marketplace_point_to_the_standalone_package():
         "url": "https://okk-mcp.akfixdev.ru/mcp",
         "oauth_resource": "https://okk-mcp.akfixdev.ru/mcp",
     }
+
+
+def test_claude_code_marketplace_reuses_the_shared_skill_and_standard_http_mcp():
+    plugin = ROOT / "plugins/okk-analytics"
+    manifest = json.loads((plugin / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))
+    marketplace = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8"))
+    mcp = json.loads((plugin / ".mcp.json").read_text(encoding="utf-8"))
+    command = (plugin / "commands/check-connection.md").read_text(encoding="utf-8")
+
+    assert marketplace["name"] == "alpes-community"
+    assert marketplace["owner"] == {"name": "Alpes"}
+    assert marketplace["plugins"][0]["name"] == "okk-analytics"
+    assert marketplace["plugins"][0]["source"] == "./plugins/okk-analytics"
+    assert marketplace["plugins"][0]["version"] == manifest["version"] == "1.1.0"
+    assert manifest["name"] == "okk-analytics"
+    assert manifest["skills"] == "./skills/"
+    assert mcp == {
+        "mcpServers": {
+            "okk-analytics": {
+                "type": "http",
+                "url": "https://okk-mcp.akfixdev.ru/mcp",
+            }
+        }
+    }
+    assert "get_access_context" in command
+    assert "data.authenticated=true" in command
+    assert "/mcp" in command
+    assert "Never ask for the OKK password" in " ".join(command.split())
 
 
 def test_standalone_server_has_no_private_backend_import_or_copy():
