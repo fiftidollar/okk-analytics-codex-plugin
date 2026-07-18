@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     analytics_parallel_requests: int = Field(default=12, ge=2, le=40)
     analytics_max_calls: int = Field(default=5000, ge=100, le=25000)
     analytics_max_employees: int = Field(default=2000, ge=100, le=10000)
+    analytics_trace_enabled: bool = True
 
     @model_validator(mode="after")
     def validate_deployment(self) -> Settings:

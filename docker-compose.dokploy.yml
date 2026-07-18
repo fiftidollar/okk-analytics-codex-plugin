@@ -24,6 +24,7 @@ services:
       ANALYTICS_PARALLEL_REQUESTS: "12"
       ANALYTICS_MAX_CALLS: "5000"
       ANALYTICS_MAX_EMPLOYEES: "2000"
+      ANALYTICS_TRACE_ENABLED: "true"
     expose:
       - "8020"
     depends_on:

@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.1.0 - Unreleased
+
+- Added one ACL-safe department resolver for UUIDs, exact codes and normalized
+  names across every department-scoped tool.
+- Failed named selectors now return `not_available` and can never broaden into
+  an all-department query; employee/department cross-filter mismatches fail
+  closed as well.
+- Expanded department cards with complete ranking, department summary and
+  employee trend sources, while filtering overview rollups to the effective
+  department.
+- Fixed historical scenario/search forwarding, employee/call cap reporting,
+  direct employee lookup beyond list caps, historical CRM-date labeling,
+  partial CRM coverage, distinct-employee AI insight counts, criterion output
+  limits, structured AI insight values and timezone-safe mentoring deadlines.
+- Single-employee and single-scenario requests now derive and report their
+  actual visible department in `effective_scope` even when the caller supplied
+  only the entity ID.
+- Added redacted structured tool-call traces and Windows timezone data to the
+  declared runtime dependencies.
+- Moved the published package to the canonical
+  `plugins/okk-analytics/` marketplace layout and corrected update guidance.
+
 ## 1.0.2 - 2026-07-15
 
 - Replaced the over-limit starter prompt with three short official-style

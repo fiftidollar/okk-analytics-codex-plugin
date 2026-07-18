@@ -10,3 +10,4 @@ cryptography==45.0.3
 itsdangerous==2.2.0
 redis==6.2.0
 python-multipart==0.0.20
+tzdata==2025.2

@@ -44,6 +44,30 @@ The published deployment is production-only: the upstream base URL is
 6. Every analytics call uses only an upstream GET route. Results pass through an
    explicit safe projection before MCP serialization.
 
+## ACL-safe selector resolution
+
+Department UUIDs are not expected in normal user language. All scoped tools
+therefore share one resolver that accepts an exact visible UUID, code or name.
+It loads only the caller's live `/departments` result, normalizes case and
+punctuation, requires one unambiguous match, and places the resolved ID/code/name
+in `effective_scope`. Any explicit selector that does not resolve fails closed
+as `not_available`; it cannot become a missing filter.
+
+Employee filters are checked against both the live employee endpoint and the
+resolved department. Comparison, scenario and criterion tools use the same
+scope contract, so mixing entities from different visible departments is not
+accepted merely because each entity is individually accessible.
+
+## Operational traces
+
+Each completed or upstream-failed analytics call emits one structured JSON log
+event. It contains a request ID, pseudonymous actor hash, normalized tool path,
+filter-presence/count flags, period, duration, status, omitted count, resolved
+department code and completeness/count indicators. It never contains raw
+request selectors, entity UUIDs, employee names, AI observations, response
+payloads, passwords or tokens. `ANALYTICS_TRACE_ENABLED=false` disables these
+events; responses themselves are never persisted by the gateway.
+
 This is deliberately not HR/SSO authorization. Users provisioned by HR still
 need a usable local OKK password for `/auth/login`.
 

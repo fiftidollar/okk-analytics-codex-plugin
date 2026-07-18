@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import logging
 import math
+import re
+import time
+import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -23,6 +29,11 @@ from okk_mcp.platform_client import (
 )
 
 MSK = ZoneInfo("Europe/Moscow")
+LOGGER = logging.getLogger("okk_mcp.analytics_trace")
+UUID_IN_PATH = re.compile(
+    r"/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+    flags=re.IGNORECASE,
+)
 
 
 class BackendUnavailable(RuntimeError):
@@ -40,6 +51,29 @@ def _number(value: Any) -> float:
         return float(value or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _insight_text(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, dict):
+        for key in ("text", "name", "criterion", "description", "title"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+    return None
+
+
+def _aware_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=MSK)
+    return parsed.astimezone(MSK)
 
 
 def _period_bounds(period: str, start_date: str | None, end_date: str | None) -> tuple[date, date]:
@@ -97,6 +131,35 @@ def _query(**values: Any) -> list[tuple[str, str]]:
     return result
 
 
+def _selector_key(value: Any) -> str:
+    """Normalize a human department selector without fuzzy guessing."""
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold().strip()
+    return "".join(character for character in normalized if character.isalnum())
+
+
+def _department_selector_keys(row: dict[str, Any]) -> set[str]:
+    name = str(row.get("name") or "").strip()
+    code = str(row.get("code") or "").strip()
+    keys = {_selector_key(name), _selector_key(code)}
+    words = [word for word in re.findall(r"[\w]+", name, flags=re.UNICODE) if word]
+    if len(words) >= 2:
+        keys.add(_selector_key("".join(word[0] for word in words)))
+    if words and (words[0].isupper() or any(character.isdigit() for character in words[0])):
+        keys.add(_selector_key(words[0]))
+    return {key for key in keys if key}
+
+
+def _select_visible(requested: list[str], visible: set[str]) -> tuple[list[str], int]:
+    effective: list[str] = []
+    omitted = 0
+    for value in requested:
+        if value not in visible:
+            omitted += 1
+        elif value not in effective:
+            effective.append(value)
+    return effective, omitted
+
+
 class AnalyticsAdapter:
     def __init__(
         self,
@@ -132,6 +195,9 @@ class AnalyticsAdapter:
                 self._departments = []
             else:
                 rows = await self._get("/departments")
+                if not context.is_admin:
+                    allowed = set(context.department_ids)
+                    rows = [row for row in rows if str(row.get("id")) in allowed]
                 self._departments = [self._safe_department(row) for row in rows]
         return self._departments
 
@@ -145,6 +211,48 @@ class AnalyticsAdapter:
                 for row in await self.departments()
             ],
         }
+
+    async def resolve_department(
+        self,
+        *,
+        department_id: Any = None,
+        department_ref: Any = None,
+    ) -> tuple[dict[str, Any] | None, bool]:
+        """Resolve only against ACL-visible departments; never broaden a failed selector."""
+        selectors = [value for value in (department_id, department_ref) if value not in (None, "")]
+        if not selectors:
+            return None, False
+        departments = await self.departments()
+        resolved: list[dict[str, Any]] = []
+        for selector in selectors:
+            raw = str(selector).strip()
+            matches = [row for row in departments if str(row.get("id")) == raw]
+            if not matches:
+                key = _selector_key(raw)
+                matches = [row for row in departments if key and key in _department_selector_keys(row)]
+            if len(matches) != 1:
+                return None, True
+            resolved.append(matches[0])
+        if len({str(row.get("id")) for row in resolved}) != 1:
+            return None, True
+        return resolved[0], True
+
+    @staticmethod
+    def department_scope(department: dict[str, Any] | None) -> dict[str, Any]:
+        if not department:
+            return {"department_id": None, "department_code": None, "department_name": None}
+        return {
+            "department_id": str(department.get("id")),
+            "department_code": department.get("code"),
+            "department_name": department.get("name"),
+        }
+
+    async def unavailable_department(self) -> dict[str, Any]:
+        return await self.envelope(
+            {"reason": "department_not_in_access_scope"},
+            status="not_available",
+            scope={"department_resolution": "not_available"},
+        )
 
     async def envelope(
         self,
@@ -241,7 +349,6 @@ class AnalyticsAdapter:
                 "stage_labels",
                 "funnel_labels",
                 "card_completeness_status",
-                "error_message",
             )
         }
 
@@ -310,15 +417,16 @@ class AnalyticsAdapter:
         department_id: str | None = None,
         search: str | None = None,
         include_inactive: bool = False,
-    ) -> tuple[list[dict[str, Any]], bool]:
+    ) -> tuple[list[dict[str, Any]], bool, int]:
         visible_departments = {str(row["id"]) for row in await self.departments()}
         if department_id and department_id not in visible_departments:
-            return [], False
+            return [], False, 0
         context = await self.context()
         if not context.is_admin and not context.department_ids:
-            return [], True
+            return [], True, 0
         rows: list[dict[str, Any]] = []
         page = 1
+        total = 0
         while len(rows) < self.settings.analytics_max_employees:
             payload = await self._get(
                 "/employees",
@@ -328,15 +436,67 @@ class AnalyticsAdapter:
                 page=page,
                 page_size=100,
             )
+            total = int(payload.get("total") or 0)
             rows.extend(self._safe_employee(item) for item in payload.get("items") or [])
+            if len(rows) >= self.settings.analytics_max_employees and (
+                page < int(payload.get("pages") or 1) or len(rows) > self.settings.analytics_max_employees
+            ):
+                return rows[: self.settings.analytics_max_employees], False, total or len(rows)
             if page >= int(payload.get("pages") or 1):
-                return rows, True
+                return rows, True, total or len(rows)
             page += 1
-        return rows[: self.settings.analytics_max_employees], False
+        return rows[: self.settings.analytics_max_employees], False, total or len(rows)
 
     async def employee(self, employee_id: str) -> dict[str, Any] | None:
-        rows, _ = await self.employees(include_inactive=True)
-        return next((row for row in rows if row["id"] == employee_id), None)
+        try:
+            row = self._safe_employee(await self._get(f"/employees/{employee_id}"))
+        except OKKNotAvailable:
+            return None
+        visible_departments = {str(item["id"]) for item in await self.departments()}
+        if row.get("department_id") not in visible_departments:
+            return None
+        return row
+
+    async def scoped_employee(
+        self,
+        employee_id: str | None,
+        department: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not employee_id:
+            return None
+        row = await self.employee(employee_id)
+        if not row:
+            return None
+        if department and row.get("department_id") != str(department.get("id")):
+            return None
+        return row
+
+    async def resolve_entity_scope(
+        self,
+        *,
+        department_id: Any = None,
+        department_ref: Any = None,
+        employee_id: Any = None,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, bool]:
+        department, selector_supplied = await self.resolve_department(
+            department_id=department_id, department_ref=department_ref
+        )
+        if selector_supplied and not department:
+            return None, None, True
+        employee = None
+        if employee_id:
+            employee = await self.scoped_employee(str(employee_id), department)
+            if not employee:
+                return department, None, True
+            if department is None:
+                employee_department_id = str(employee.get("department_id") or "")
+                department = next(
+                    (row for row in await self.departments() if str(row.get("id")) == employee_department_id),
+                    None,
+                )
+                if department is None:
+                    return None, None, True
+        return department, employee, False
 
     async def scenarios(
         self, department_id: str | None = None, *, include_inactive: bool = False
@@ -386,6 +546,10 @@ class AnalyticsAdapter:
             )
             total = int(payload.get("total") or 0)
             rows.extend(payload.get("items") or [])
+            if len(rows) >= self.settings.analytics_max_calls and (
+                page < int(payload.get("pages") or 1) or len(rows) > self.settings.analytics_max_calls
+            ):
+                return rows[: self.settings.analytics_max_calls], total, False
             if page >= int(payload.get("pages") or 1):
                 return rows, total, True
             page += 1
@@ -397,6 +561,7 @@ class AnalyticsAdapter:
             "/mcp-read/statistics-catalog": self.get_statistics_catalog,
             "/mcp-read/overview-statistics": self.get_overview_statistics,
             "/mcp-read/departments": self.list_departments,
+            "/mcp-read/department-statistics": self.get_department_statistics,
             "/mcp-read/compare-departments": self.compare_departments,
             "/mcp-read/employees": self.list_employees,
             "/mcp-read/compare-employees": self.compare_employees,
@@ -445,6 +610,64 @@ class AnalyticsAdapter:
         return await self.envelope(
             {
                 "domains": domains,
+                "tool_routing": [
+                    {"tool": "get_access_context", "use_for": "current role and visible departments"},
+                    {"tool": "get_statistics_catalog", "use_for": "available metrics and contracts"},
+                    {"tool": "get_overview_statistics", "use_for": "overall or one-department dashboard"},
+                    {"tool": "list_departments", "use_for": "visible department directory and KPI settings"},
+                    {
+                        "tool": "get_department_statistics",
+                        "use_for": "one department KPI, ranking, trend and plan/fact",
+                    },
+                    {
+                        "tool": "compare_departments",
+                        "use_for": "comparison of two or more visible departments",
+                    },
+                    {"tool": "list_employees", "use_for": "ACL-scoped employee directory"},
+                    {"tool": "get_employee_card", "use_for": "one employee KPI, insights, mentoring and CRM"},
+                    {
+                        "tool": "compare_employees",
+                        "use_for": "employee comparison, optionally guarded by department",
+                    },
+                    {"tool": "get_call_statistics", "use_for": "call volume, quality and daily trend"},
+                    {"tool": "get_plan_fact_statistics", "use_for": "employee and department call plan/fact"},
+                    {"tool": "get_client_statistics", "use_for": "client/contact/repeat/no-answer metrics"},
+                    {"tool": "get_crm_statistics", "use_for": "latest Bitrix snapshots only"},
+                    {"tool": "get_growth_insights", "use_for": "aggregated AI strengths and growth areas"},
+                    {"tool": "get_mentoring_statistics", "use_for": "bounded mentoring-task window"},
+                    {"tool": "list_scenarios", "use_for": "visible scenario catalog"},
+                    {"tool": "get_scenario_criteria", "use_for": "business criteria of one visible scenario"},
+                    {
+                        "tool": "get_scenario_performance",
+                        "use_for": "scenario score and pass-rate comparison",
+                    },
+                    {
+                        "tool": "get_criterion_performance",
+                        "use_for": "criterion-level observations and scores",
+                    },
+                ],
+                "department_filter_contract": {
+                    "department_id": "visible department UUID when already known",
+                    "department_ref": "exact visible code or name from the user's request, case-insensitive",
+                    "resolution": "ACL-visible departments only; UUID, exact code/name, or unique displayed acronym",
+                    "failed_resolution": "status=not_available; never fall back to all departments",
+                    "cross_filter": "an employee must belong to the resolved department",
+                    "verification": "read effective_scope.department_id/code/name before describing results",
+                },
+                "status_contract": {
+                    "ok": "complete result for the exposed source",
+                    "partial": "bounded upstream history or configured population/call cap",
+                    "no_data": "scope is accessible but contains no matching observations",
+                    "not_available": "selector/entity is outside the visible scope or source cannot supply it",
+                    "temporarily_unavailable": "retryable upstream outage",
+                },
+                "completeness_contract": {
+                    "employees": "source_total/source_complete distinguish full population from configured cap",
+                    "calls": "source_calls/source_calls_total and partial identify truncation",
+                    "mentoring": "active 5 and completed 10 tasks per employee; always a bounded window",
+                    "crm": "latest snapshot per employee only; requested historical dates are never mislabeled",
+                    "historical_scenarios": "available only when the connected OKK role exposes them",
+                },
                 "explicit_exclusions": [
                     "audio",
                     "transcripts",
@@ -466,16 +689,19 @@ class AnalyticsAdapter:
         self,
         period: str = "month",
         department_id: Any = None,
+        department_ref: Any = None,
         start_date: str | None = None,
         end_date: str | None = None,
         top_limit: int = 20,
         **_: Any,
     ) -> dict[str, Any]:
         bounds = _period_bounds(period, start_date, end_date)
-        department = str(department_id) if department_id else None
-        visible = {str(row["id"]) for row in await self.departments()}
-        if department and department not in visible:
-            return await self.envelope({}, status="not_available")
+        department_row, selector_supplied = await self.resolve_department(
+            department_id=department_id, department_ref=department_ref
+        )
+        if selector_supplied and not department_row:
+            return await self.unavailable_department()
+        department = str(department_row["id"]) if department_row else None
         context = await self.context()
         if not context.is_admin and not context.department_ids:
             return await self.envelope({}, status="no_data", period=bounds)
@@ -486,6 +712,10 @@ class AnalyticsAdapter:
             self._get("/dashboard/top-employees", department_id=department, limit=top_limit, **common),
             self._get("/dashboard/by-department", **common),
         )
+        if department:
+            departments = [
+                row for row in departments if str(row.get("department_id") or row.get("id")) == department
+            ]
         return await self.envelope(
             {
                 "summary": summary,
@@ -493,7 +723,7 @@ class AnalyticsAdapter:
                 "employee_ranking": ranking,
                 "departments": departments,
             },
-            scope={"department_id": department},
+            scope=self.department_scope(department_row),
             period=bounds,
         )
 
@@ -503,52 +733,101 @@ class AnalyticsAdapter:
 
     async def get_department_statistics(
         self,
-        department_id: str,
+        department_id: Any = None,
+        department_ref: Any = None,
         period: str = "month",
         start_date: str | None = None,
         end_date: str | None = None,
         **_: Any,
     ) -> dict[str, Any]:
-        visible = {str(row["id"]): row for row in await self.departments()}
-        if department_id not in visible:
-            return await self.envelope({}, status="not_available")
+        department_row, selector_supplied = await self.resolve_department(
+            department_id=department_id, department_ref=department_ref
+        )
+        if not selector_supplied or not department_row:
+            return await self.unavailable_department()
+        resolved_id = str(department_row["id"])
         bounds = _period_bounds(period, start_date, end_date)
         common = _period_query(period, start_date, end_date)
-        summary, trend, employees = await asyncio.gather(
-            self._get("/dashboard/summary", department_id=department_id, **common),
-            self._get("/dashboard/calls-trend", department_id=department_id, **common),
-            self._get("/dashboard/top-employees", department_id=department_id, limit=50, **common),
+        (
+            summary,
+            trend,
+            employees,
+            department_summary,
+            department_ranking,
+            department_trends,
+        ) = await asyncio.gather(
+            self._get("/dashboard/summary", department_id=resolved_id, **common),
+            self._get("/dashboard/calls-trend", department_id=resolved_id, **common),
+            self._get("/dashboard/top-employees", department_id=resolved_id, limit=50, **common),
+            self._get(
+                f"/departments/{resolved_id}/summary",
+                period="custom",
+                start_date=bounds[0],
+                end_date=bounds[1],
+            ),
+            self._get(
+                f"/departments/{resolved_id}/ranking",
+                period="custom",
+                start_date=bounds[0],
+                end_date=bounds[1],
+            ),
+            self._get(
+                f"/departments/{resolved_id}/trends",
+                start_date=bounds[0],
+                end_date=bounds[1],
+            ),
         )
         plan = await self.get_plan_fact_statistics(
-            start_date=bounds[0], end_date=bounds[1], department_id=department_id
+            start_date=bounds[0], end_date=bounds[1], department_id=resolved_id
         )
         return await self.envelope(
             {
-                "department": visible[department_id],
+                "department": department_row,
                 "summary": summary,
                 "daily_trend": trend,
                 "employee_ranking": employees,
+                "department_summary": department_summary,
+                "complete_employee_ranking": department_ranking,
+                "department_and_employee_trends": department_trends,
                 "plan_fact": plan["data"],
+                "plan_fact_status": plan["status"],
             },
-            scope={"department_id": department_id},
+            status="partial" if plan["status"] == "partial" else "ok",
+            scope=self.department_scope(department_row),
             period=bounds,
         )
 
     async def compare_departments(
         self,
         department_ids: Any = None,
+        department_refs: Any = None,
         period: str = "month",
         start_date: str | None = None,
         end_date: str | None = None,
         **_: Any,
     ) -> dict[str, Any]:
         bounds = _period_bounds(period, start_date, end_date)
-        visible = {str(row["id"]) for row in await self.departments()}
-        requested = [str(value) for value in department_ids or []]
-        effective = [value for value in requested if value in visible] if requested else sorted(visible)
-        omitted = len(requested) - len(effective) if requested else 0
+        visible_rows = await self.departments()
+        visible = {str(row["id"]): row for row in visible_rows}
+        requested = [(value, None) for value in department_ids or []] + [
+            (None, value) for value in department_refs or []
+        ]
+        effective_rows: list[dict[str, Any]] = []
+        omitted = 0
+        for requested_id, requested_ref in requested:
+            row, _ = await self.resolve_department(department_id=requested_id, department_ref=requested_ref)
+            if not row:
+                omitted += 1
+            elif str(row["id"]) not in {str(item["id"]) for item in effective_rows}:
+                effective_rows.append(row)
+        effective = [str(row["id"]) for row in effective_rows] if requested else sorted(visible)
         if not effective:
-            return await self.envelope([], status="no_data", period=bounds, omitted=omitted)
+            return await self.envelope(
+                {"reason": "departments_not_in_access_scope"} if requested else [],
+                status="not_available" if requested else "no_data",
+                period=bounds,
+                omitted=omitted,
+            )
         common = _period_query(period, start_date, end_date)
         stats, trends = await asyncio.gather(
             self._get("/dashboard/by-department", **common),
@@ -560,33 +839,50 @@ class AnalyticsAdapter:
             ],
             "trends": [row for row in trends if str(row.get("department_id") or row.get("id")) in effective],
         }
-        return await self.envelope(data, scope={"department_ids": effective}, period=bounds, omitted=omitted)
+        return await self.envelope(
+            data,
+            scope={
+                "department_ids": effective,
+                "departments": [self.department_scope(visible[value]) for value in effective],
+            },
+            period=bounds,
+            omitted=omitted,
+        )
 
     async def list_employees(
         self,
         department_id: Any = None,
+        department_ref: Any = None,
         search: str | None = None,
         include_inactive: bool = False,
         page: int = 1,
         page_size: int = 50,
         **_: Any,
     ) -> dict[str, Any]:
-        department = str(department_id) if department_id else None
-        rows, complete = await self.employees(
+        department_row, selector_supplied = await self.resolve_department(
+            department_id=department_id, department_ref=department_ref
+        )
+        if selector_supplied and not department_row:
+            return await self.unavailable_department()
+        department = str(department_row["id"]) if department_row else None
+        rows, complete, source_total = await self.employees(
             department_id=department, search=search, include_inactive=include_inactive
         )
-        if department and not complete and not rows:
-            return await self.envelope({}, status="not_available")
         start = (page - 1) * page_size
         data = {
             "items": rows[start : start + page_size],
             "total": len(rows),
+            "returned_population": len(rows),
+            "source_total": source_total,
+            "source_complete": complete,
             "page": page,
             "page_size": page_size,
             "pages": math.ceil(len(rows) / page_size) if rows else 0,
         }
         return await self.envelope(
-            data, status="ok" if rows else "no_data", scope={"department_id": department}
+            data,
+            status="partial" if rows and not complete else ("ok" if rows else "no_data"),
+            scope=self.department_scope(department_row),
         )
 
     async def _page_data(self, employee_id: str, start: date, end: date) -> dict[str, Any]:
@@ -595,15 +891,33 @@ class AnalyticsAdapter:
     async def get_employee_card(
         self,
         employee_id: str,
+        department_id: Any = None,
+        department_ref: Any = None,
         period: str = "month",
         start_date: str | None = None,
         end_date: str | None = None,
         task_page_size: int = 100,
         **_: Any,
     ) -> dict[str, Any]:
-        employee = await self.employee(employee_id)
+        department_row, selector_supplied = await self.resolve_department(
+            department_id=department_id, department_ref=department_ref
+        )
+        if selector_supplied and not department_row:
+            return await self.unavailable_department()
+        employee = await self.scoped_employee(employee_id, department_row)
         if not employee:
             return await self.envelope({}, status="not_available")
+        if department_row is None:
+            department_row = next(
+                (
+                    row
+                    for row in await self.departments()
+                    if str(row.get("id")) == str(employee.get("department_id"))
+                ),
+                None,
+            )
+            if department_row is None:
+                return await self.envelope({}, status="not_available")
         bounds = _period_bounds(period, start_date, end_date)
         common = _period_query(period, start_date, end_date)
         page_data, summary, plan, crm = await asyncio.gather(
@@ -632,22 +946,39 @@ class AnalyticsAdapter:
             "mentoring_history_window": {"active_limit": 5, "completed_limit": 10, "complete": False},
             "crm": self._safe_crm(crm),
         }
-        return await self.envelope(data, status="partial", scope={"employee_id": employee_id}, period=bounds)
+        return await self.envelope(
+            data,
+            status="partial",
+            scope={**self.department_scope(department_row), "employee_id": employee_id},
+            period=bounds,
+        )
 
     async def compare_employees(
         self,
         employee_ids: list[Any],
+        department_id: Any = None,
+        department_ref: Any = None,
         period: str = "month",
         start_date: str | None = None,
         end_date: str | None = None,
         **_: Any,
     ) -> dict[str, Any]:
         bounds = _period_bounds(period, start_date, end_date)
-        visible, _ = await self.employees(include_inactive=True)
-        index = {row["id"]: row for row in visible}
+        department_row, selector_supplied = await self.resolve_department(
+            department_id=department_id, department_ref=department_ref
+        )
+        if selector_supplied and not department_row:
+            return await self.unavailable_department()
         requested = [str(value) for value in employee_ids]
-        effective = [value for value in requested if value in index]
-        omitted = len(requested) - len(effective) if requested else 0
+        await self.departments()
+
+        async def resolve(employee_id: str) -> dict[str, Any] | None:
+            return await self._bounded(lambda: self.scoped_employee(employee_id, department_row))
+
+        unique_requested = list(dict.fromkeys(requested))
+        resolved = await asyncio.gather(*(resolve(value) for value in unique_requested))
+        index = {row["id"]: row for row in resolved if row}
+        effective, omitted = _select_visible(requested, set(index))
 
         async def load(employee_id: str) -> dict[str, Any]:
             page = await self._bounded(lambda: self._page_data(employee_id, *bounds))
@@ -663,10 +994,18 @@ class AnalyticsAdapter:
             }
 
         data = await asyncio.gather(*(load(value) for value in effective))
+        if requested and not effective:
+            return await self.envelope(
+                {"reason": "employees_not_in_effective_scope"},
+                status="not_available",
+                scope=self.department_scope(department_row),
+                period=bounds,
+                omitted=omitted,
+            )
         return await self.envelope(
             data,
             status="ok" if data else "no_data",
-            scope={"employee_ids": effective},
+            scope={**self.department_scope(department_row), "employee_ids": effective},
             period=bounds,
             omitted=omitted,
         )
@@ -675,18 +1014,28 @@ class AnalyticsAdapter:
         self,
         period: str = "month",
         department_id: Any = None,
+        department_ref: Any = None,
         employee_id: Any = None,
         start_date: str | None = None,
         end_date: str | None = None,
         **_: Any,
     ) -> dict[str, Any]:
         bounds = _period_bounds(period, start_date, end_date)
-        department = str(department_id) if department_id else None
-        employee = str(employee_id) if employee_id else None
-        if department and department not in {str(row["id"]) for row in await self.departments()}:
-            return await self.envelope({}, status="not_available")
-        if employee and not await self.employee(employee):
-            return await self.envelope({}, status="not_available")
+        department_row, employee_row, invalid = await self.resolve_entity_scope(
+            department_id=department_id,
+            department_ref=department_ref,
+            employee_id=employee_id,
+        )
+        if invalid:
+            return (
+                await self.unavailable_department()
+                if not employee_id
+                else await self.envelope(
+                    {"reason": "employee_not_in_effective_department"}, status="not_available"
+                )
+            )
+        department = str(department_row["id"]) if department_row else None
+        employee = str(employee_row["id"]) if employee_row else None
         summary, trend = await asyncio.gather(
             self._get(
                 "/calls/stats/summary",
@@ -706,7 +1055,7 @@ class AnalyticsAdapter:
         )
         return await self.envelope(
             {"summary": summary, "daily_trend": trend},
-            scope={"department_id": department, "employee_id": employee},
+            scope={**self.department_scope(department_row), "employee_id": employee},
             period=bounds,
         )
 
@@ -715,25 +1064,28 @@ class AnalyticsAdapter:
         start_date: Any,
         end_date: Any,
         department_id: Any = None,
+        department_ref: Any = None,
         employee_id: Any = None,
         **_: Any,
     ) -> dict[str, Any]:
         start, end = date.fromisoformat(str(start_date)), date.fromisoformat(str(end_date))
         if end < start:
             raise ValueError("end_date must be on or after start_date")
-        employee = str(employee_id) if employee_id else None
-        department = str(department_id) if department_id else None
-        visible_employees, _ = await self.employees(department_id=department, include_inactive=False)
-        if (
-            department
-            and not visible_employees
-            and department not in {str(row["id"]) for row in await self.departments()}
-        ):
-            return await self.envelope({}, status="not_available")
-        if employee:
-            visible_employees = [row for row in visible_employees if row["id"] == employee]
-            if not visible_employees:
-                return await self.envelope({}, status="not_available")
+        department_row, employee_row, invalid = await self.resolve_entity_scope(
+            department_id=department_id,
+            department_ref=department_ref,
+            employee_id=employee_id,
+        )
+        if invalid:
+            return await self.envelope({"reason": "requested_scope_not_available"}, status="not_available")
+        employee = str(employee_row["id"]) if employee_row else None
+        department = str(department_row["id"]) if department_row else None
+        if employee_row:
+            visible_employees, complete = [employee_row], True
+        else:
+            visible_employees, complete, _ = await self.employees(
+                department_id=department, include_inactive=False
+            )
         department_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in visible_employees:
             if row.get("department_id"):
@@ -759,8 +1111,8 @@ class AnalyticsAdapter:
                 totals[key] += _number(row.get(key))
         return await self.envelope(
             {"totals": dict(totals), "employees": summaries},
-            status="ok" if summaries else "no_data",
-            scope={"department_id": department, "employee_id": employee},
+            status="partial" if summaries and not complete else ("ok" if summaries else "no_data"),
+            scope={**self.department_scope(department_row), "employee_id": employee},
             period=(start, end),
         )
 
@@ -768,17 +1120,23 @@ class AnalyticsAdapter:
         self,
         period: str = "month",
         department_id: Any = None,
+        department_ref: Any = None,
         employee_id: Any = None,
         start_date: str | None = None,
         end_date: str | None = None,
         **_: Any,
     ) -> dict[str, Any]:
         bounds = _period_bounds(period, start_date, end_date)
-        department = str(department_id) if department_id else None
-        employee = str(employee_id) if employee_id else None
+        department_row, employee_row, invalid = await self.resolve_entity_scope(
+            department_id=department_id,
+            department_ref=department_ref,
+            employee_id=employee_id,
+        )
+        if invalid:
+            return await self.envelope({"reason": "requested_scope_not_available"}, status="not_available")
+        department = str(department_row["id"]) if department_row else None
+        employee = str(employee_row["id"]) if employee_row else None
         if employee:
-            if not await self.employee(employee):
-                return await self.envelope({}, status="not_available")
             source = await self._get(
                 f"/employees/{employee}/summary",
                 period="custom",
@@ -786,8 +1144,6 @@ class AnalyticsAdapter:
                 end_date=bounds[1],
             )
         else:
-            if department and department not in {str(row["id"]) for row in await self.departments()}:
-                return await self.envelope({}, status="not_available")
             source = await self._get(
                 "/dashboard/summary",
                 department_id=department,
@@ -815,30 +1171,58 @@ class AnalyticsAdapter:
         ]
         return await self.envelope(
             {key: source[key] for key in keys},
-            scope={"department_id": department, "employee_id": employee},
+            scope={**self.department_scope(department_row), "employee_id": employee},
             period=bounds,
         )
 
     async def get_crm_statistics(
         self,
         department_id: Any = None,
+        department_ref: Any = None,
         employee_id: Any = None,
         snapshot_date: Any = None,
         **_: Any,
     ) -> dict[str, Any]:
-        department = str(department_id) if department_id else None
-        employee = str(employee_id) if employee_id else None
-        employees, _ = await self.employees(department_id=department, include_inactive=False)
-        if employee:
-            employees = [row for row in employees if row["id"] == employee]
-            if not employees:
-                return await self.envelope({}, status="not_available")
+        department_row, employee_row, invalid = await self.resolve_entity_scope(
+            department_id=department_id,
+            department_ref=department_ref,
+            employee_id=employee_id,
+        )
+        if invalid:
+            return await self.envelope({"reason": "requested_scope_not_available"}, status="not_available")
+        department = str(department_row["id"]) if department_row else None
+        employee = str(employee_row["id"]) if employee_row else None
+        if employee_row:
+            employees, complete, source_total = [employee_row], True, 1
+        else:
+            employees, complete, source_total = await self.employees(
+                department_id=department, include_inactive=False
+            )
 
         async def load(row: dict[str, Any]) -> dict[str, Any]:
             value = await self._bounded(lambda: self._get(f"/employees/{row['id']}/bitrix-metrics"))
             return {"employee": row, "metrics": self._safe_crm(value)}
 
         rows = await asyncio.gather(*(load(row) for row in employees))
+        requested_snapshot = str(snapshot_date) if snapshot_date else None
+        available_snapshot_dates = sorted(
+            {str(row["metrics"].get("snapshot_date")) for row in rows if row["metrics"].get("snapshot_date")}
+        )
+        if requested_snapshot:
+            rows = [
+                row for row in rows if str(row["metrics"].get("snapshot_date") or "") == requested_snapshot
+            ]
+            if not rows:
+                return await self.envelope(
+                    {
+                        "reason": "historical_crm_snapshot_not_exposed_by_upstream_api",
+                        "requested_snapshot_date": requested_snapshot,
+                        "available_latest_snapshot_dates": available_snapshot_dates,
+                        "source_mode": "latest_snapshot_per_employee_only",
+                    },
+                    status="not_available",
+                    scope={**self.department_scope(department_row), "employee_id": employee},
+                )
         totals: dict[str, float] = defaultdict(float)
         stages: Counter[str] = Counter()
         funnels: Counter[str] = Counter()
@@ -860,8 +1244,12 @@ class AnalyticsAdapter:
             stages.update({str(k): int(v) for k, v in (metrics.get("stage_counts") or {}).items()})
             funnels.update({str(k): int(v) for k, v in (metrics.get("funnel_counts") or {}).items()})
         data = {
-            "snapshot_date": str(snapshot_date) if snapshot_date else None,
+            "requested_snapshot_date": requested_snapshot,
+            "available_latest_snapshot_dates": available_snapshot_dates,
+            "source_mode": "latest_snapshot_per_employee_only",
             "coverage": {
+                "source_total": source_total,
+                "source_complete": complete,
                 "employees": len(rows),
                 "available": available,
                 "unavailable": len(rows) - available,
@@ -873,14 +1261,17 @@ class AnalyticsAdapter:
         }
         return await self.envelope(
             data,
-            status="ok" if rows else "no_data",
-            scope={"department_id": department, "employee_id": employee},
+            status="partial"
+            if rows and (not complete or bool(requested_snapshot) or available < len(rows))
+            else ("ok" if rows else "no_data"),
+            scope={**self.department_scope(department_row), "employee_id": employee},
         )
 
     async def get_growth_insights(
         self,
         period: str = "month",
         department_id: Any = None,
+        department_ref: Any = None,
         employee_id: Any = None,
         start_date: str | None = None,
         end_date: str | None = None,
@@ -888,13 +1279,19 @@ class AnalyticsAdapter:
         **_: Any,
     ) -> dict[str, Any]:
         bounds = _period_bounds(period, start_date, end_date)
-        department = str(department_id) if department_id else None
-        employee = str(employee_id) if employee_id else None
-        employees, complete = await self.employees(department_id=department, include_inactive=False)
-        if employee:
-            employees = [row for row in employees if row["id"] == employee]
-            if not employees:
-                return await self.envelope({}, status="not_available")
+        department_row, employee_row, invalid = await self.resolve_entity_scope(
+            department_id=department_id,
+            department_ref=department_ref,
+            employee_id=employee_id,
+        )
+        if invalid:
+            return await self.envelope({"reason": "requested_scope_not_available"}, status="not_available")
+        department = str(department_row["id"]) if department_row else None
+        employee = str(employee_row["id"]) if employee_row else None
+        if employee_row:
+            employees, complete = [employee_row], True
+        else:
+            employees, complete, _ = await self.employees(department_id=department, include_inactive=False)
 
         async def load(row: dict[str, Any]) -> dict[str, Any]:
             page = await self._bounded(lambda: self._page_data(row["id"], *bounds))
@@ -907,21 +1304,34 @@ class AnalyticsAdapter:
             }
 
         rows = await asyncio.gather(*(load(row) for row in employees))
-        strengths = Counter(value for row in rows for value in row["strengths"])
-        growth = Counter(value for row in rows for value in row["growth_areas"])
+
+        def employee_mentions(field: str) -> list[dict[str, Any]]:
+            labels: dict[str, str] = {}
+            mentions: dict[str, set[str]] = defaultdict(set)
+            for row in rows:
+                employee_key = str(row["employee"]["id"])
+                for value in row[field]:
+                    text = _insight_text(value)
+                    if not text:
+                        continue
+                    key = " ".join(unicodedata.normalize("NFKC", text).casefold().split())
+                    labels.setdefault(key, text)
+                    mentions[key].add(employee_key)
+            ranked = sorted(
+                mentions,
+                key=lambda key: (-len(mentions[key]), labels[key].casefold()),
+            )
+            return [{"text": labels[key], "employee_mentions": len(mentions[key])} for key in ranked[:limit]]
+
         data = {
-            "strengths": [
-                {"text": key, "employee_mentions": value} for key, value in strengths.most_common(limit)
-            ],
-            "growth_areas": [
-                {"text": key, "employee_mentions": value} for key, value in growth.most_common(limit)
-            ],
+            "strengths": employee_mentions("strengths"),
+            "growth_areas": employee_mentions("growth_areas"),
             "employees": rows,
         }
         return await self.envelope(
             data,
-            status="ok" if complete else "partial",
-            scope={"department_id": department, "employee_id": employee},
+            status="partial" if not complete else ("ok" if rows else "no_data"),
+            scope={**self.department_scope(department_row), "employee_id": employee},
             period=bounds,
         )
 
@@ -929,6 +1339,7 @@ class AnalyticsAdapter:
         self,
         period: str = "month",
         department_id: Any = None,
+        department_ref: Any = None,
         employee_id: Any = None,
         task_status: str | None = None,
         start_date: str | None = None,
@@ -938,13 +1349,19 @@ class AnalyticsAdapter:
         **_: Any,
     ) -> dict[str, Any]:
         bounds = _period_bounds(period, start_date, end_date)
-        department = str(department_id) if department_id else None
-        employee = str(employee_id) if employee_id else None
-        employees, _ = await self.employees(department_id=department, include_inactive=True)
-        if employee:
-            employees = [row for row in employees if row["id"] == employee]
-            if not employees:
-                return await self.envelope({}, status="not_available")
+        department_row, employee_row, invalid = await self.resolve_entity_scope(
+            department_id=department_id,
+            department_ref=department_ref,
+            employee_id=employee_id,
+        )
+        if invalid:
+            return await self.envelope({"reason": "requested_scope_not_available"}, status="not_available")
+        department = str(department_row["id"]) if department_row else None
+        employee = str(employee_row["id"]) if employee_row else None
+        if employee_row:
+            employees, complete = [employee_row], True
+        else:
+            employees, complete, _ = await self.employees(department_id=department, include_inactive=True)
 
         async def load(row: dict[str, Any]) -> list[dict[str, Any]]:
             data = await self._bounded(lambda: self._page_data(row["id"], *bounds))
@@ -952,7 +1369,19 @@ class AnalyticsAdapter:
             return [{"employee": row, **self._safe_task(task)} for task in tasks]
 
         nested = await asyncio.gather(*(load(row) for row in employees))
-        tasks = [task for group in nested for task in group]
+        source_tasks = [task for group in nested for task in group]
+        tasks: list[dict[str, Any]] = []
+        unfilterable_timestamps = 0
+        for task in source_tasks:
+            timestamp = (
+                task.get("completed_at") if task.get("status") == "completed" else task.get("created_at")
+            )
+            parsed = _aware_datetime(timestamp)
+            if not parsed:
+                unfilterable_timestamps += 1
+                continue
+            if bounds[0] <= parsed.date() <= bounds[1]:
+                tasks.append(task)
         if task_status:
             tasks = [task for task in tasks if task.get("status") == task_status]
         statuses = Counter(str(task.get("status") or "unknown") for task in tasks)
@@ -962,18 +1391,14 @@ class AnalyticsAdapter:
         for task in tasks:
             due = task.get("due_date")
             if due and task.get("status") != "completed":
-                try:
-                    if datetime.fromisoformat(str(due).replace("Z", "+00:00")) < now:
-                        overdue += 1
-                except ValueError:
-                    pass
+                parsed_due = _aware_datetime(due)
+                if parsed_due and parsed_due < now:
+                    overdue += 1
             if task.get("created_at") and task.get("completed_at"):
-                try:
-                    created = datetime.fromisoformat(str(task["created_at"]).replace("Z", "+00:00"))
-                    completed = datetime.fromisoformat(str(task["completed_at"]).replace("Z", "+00:00"))
+                created = _aware_datetime(task["created_at"])
+                completed = _aware_datetime(task["completed_at"])
+                if created and completed:
                     durations.append((completed - created).total_seconds() / 86400)
-                except ValueError:
-                    pass
         start = (page - 1) * page_size
         data = {
             "summary": {
@@ -985,31 +1410,45 @@ class AnalyticsAdapter:
                 "avg_completion_days": round(sum(durations) / len(durations), 1) if durations else None,
             },
             "items": tasks[start : start + page_size],
-            "total_in_recent_window": len(tasks),
+            "total_in_period": len(tasks),
+            "source_tasks_in_bounded_api_window": len(source_tasks),
             "page": page,
             "page_size": page_size,
+            "pages": math.ceil(len(tasks) / page_size) if tasks else 0,
+            "task_period_basis": "completed_at for completed tasks; created_at otherwise",
+            "source_tasks_without_filterable_timestamp": unfilterable_timestamps,
             "history_window_per_employee": {"active_limit": 5, "completed_limit": 10, "complete": False},
         }
         return await self.envelope(
             data,
             status="partial" if employees else "no_data",
-            scope={"department_id": department, "employee_id": employee},
+            scope={
+                **self.department_scope(department_row),
+                "employee_id": employee,
+                "employee_population_complete": complete,
+            },
             period=bounds,
         )
 
     async def list_scenarios(
         self,
         department_id: Any = None,
+        department_ref: Any = None,
         search: str | None = None,
-        include_inactive: bool = False,
+        include_historical: bool = False,
         page: int = 1,
         page_size: int = 50,
         **_: Any,
     ) -> dict[str, Any]:
-        department = str(department_id) if department_id else None
-        rows, accessible = await self.scenarios(department, include_inactive=include_inactive)
-        if department and not accessible:
-            return await self.envelope({}, status="not_available")
+        department_row, selector_supplied = await self.resolve_department(
+            department_id=department_id, department_ref=department_ref
+        )
+        if selector_supplied and not department_row:
+            return await self.unavailable_department()
+        department = str(department_row["id"]) if department_row else None
+        context = await self.context()
+        historical_applied = include_historical and context.is_admin
+        rows, _ = await self.scenarios(department, include_inactive=historical_applied)
         safe = [self._safe_scenario(row) for row in rows]
         if search:
             needle = search.casefold()
@@ -1021,19 +1460,48 @@ class AnalyticsAdapter:
             "page": page,
             "page_size": page_size,
             "pages": math.ceil(len(safe) / page_size) if safe else 0,
+            "include_historical_requested": include_historical,
+            "include_historical_applied": historical_applied,
         }
         return await self.envelope(
-            data, status="ok" if safe else "no_data", scope={"department_id": department}
+            data,
+            status="ok" if safe else "no_data",
+            scope=self.department_scope(department_row),
+            omitted=int(include_historical and not historical_applied),
         )
 
-    async def get_scenario_criteria(self, scenario_id: str, **_: Any) -> dict[str, Any]:
-        rows, _ = await self.scenarios()
+    async def get_scenario_criteria(
+        self,
+        scenario_id: str,
+        department_id: Any = None,
+        department_ref: Any = None,
+        **_: Any,
+    ) -> dict[str, Any]:
+        department_row, selector_supplied = await self.resolve_department(
+            department_id=department_id, department_ref=department_ref
+        )
+        if selector_supplied and not department_row:
+            return await self.unavailable_department()
+        department = str(department_row["id"]) if department_row else None
+        rows, _ = await self.scenarios(department, include_inactive=True)
         row = next((item for item in rows if str(item.get("id")) == scenario_id), None)
         if not row:
             return await self.envelope({}, status="not_available")
+        if department_row is None:
+            scenario_department_id = str(row.get("department_id") or "")
+            department_row = next(
+                (
+                    visible
+                    for visible in await self.departments()
+                    if str(visible.get("id")) == scenario_department_id
+                ),
+                None,
+            )
+            if department_row is None:
+                return await self.envelope({}, status="not_available")
         return await self.envelope(
             {"scenario": self._safe_scenario(row), "criteria": self._criteria(row)},
-            scope={"scenario_id": scenario_id},
+            scope={**self.department_scope(department_row), "scenario_id": scenario_id},
         )
 
     async def get_scenario_performance(
@@ -1041,22 +1509,54 @@ class AnalyticsAdapter:
         period: str = "month",
         scenario_ids: Any = None,
         department_id: Any = None,
+        department_ref: Any = None,
         employee_id: Any = None,
         start_date: str | None = None,
         end_date: str | None = None,
         **_: Any,
     ) -> dict[str, Any]:
         bounds = _period_bounds(period, start_date, end_date)
-        catalog, _ = await self.scenarios(str(department_id) if department_id else None)
-        index = {str(row.get("id")): row for row in catalog}
+        department_row, employee_row, invalid = await self.resolve_entity_scope(
+            department_id=department_id,
+            department_ref=department_ref,
+            employee_id=employee_id,
+        )
+        if invalid:
+            return await self.envelope({"reason": "requested_scope_not_available"}, status="not_available")
+        department = str(department_row["id"]) if department_row else None
+        employee = str(employee_row["id"]) if employee_row else None
         requested = [str(value) for value in scenario_ids or []]
-        effective = [value for value in requested if value in index] if requested else list(index)
-        omitted = len(requested) - len(effective) if requested else 0
+        catalog, _ = await self.scenarios(department, include_inactive=bool(requested))
+        index = {str(row.get("id")): row for row in catalog}
+        effective, omitted = _select_visible(requested, set(index)) if requested else (list(index), 0)
+        if requested and not effective:
+            return await self.envelope(
+                {"reason": "scenarios_not_in_effective_scope"},
+                status="not_available",
+                scope={**self.department_scope(department_row), "employee_id": employee},
+                period=bounds,
+                omitted=omitted,
+            )
+        effective_department_ids = {str(index[value].get("department_id") or "") for value in effective} - {
+            ""
+        }
+        if department_row is None and len(effective_department_ids) == 1:
+            effective_department_id = next(iter(effective_department_ids))
+            department_row = next(
+                (
+                    visible
+                    for visible in await self.departments()
+                    if str(visible.get("id")) == effective_department_id
+                ),
+                None,
+            )
+            if department_row is not None:
+                department = str(department_row["id"])
         calls, total, complete = await self.calls(
             start=bounds[0],
             end=bounds[1],
-            department_id=str(department_id) if department_id else None,
-            employee_id=str(employee_id) if employee_id else None,
+            department_id=department,
+            employee_id=employee,
         )
         groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for call in calls:
@@ -1083,11 +1583,13 @@ class AnalyticsAdapter:
             )
         return await self.envelope(
             data,
-            status="ok" if complete else "partial",
+            status="partial" if not complete else ("ok" if data else "no_data"),
             scope={
                 "scenario_ids": effective,
-                "department_id": str(department_id) if department_id else None,
-                "employee_id": str(employee_id) if employee_id else None,
+                **self.department_scope(department_row),
+                "employee_id": employee,
+                "source_calls": len(calls),
+                "source_calls_total": total,
             },
             period=bounds,
             omitted=omitted,
@@ -1099,6 +1601,7 @@ class AnalyticsAdapter:
         scenario_id: Any = None,
         criterion_ids: Any = None,
         department_id: Any = None,
+        department_ref: Any = None,
         employee_id: Any = None,
         start_date: str | None = None,
         end_date: str | None = None,
@@ -1106,8 +1609,45 @@ class AnalyticsAdapter:
         **_: Any,
     ) -> dict[str, Any]:
         bounds = _period_bounds(period, start_date, end_date)
+        department_row, employee_row, invalid = await self.resolve_entity_scope(
+            department_id=department_id,
+            department_ref=department_ref,
+            employee_id=employee_id,
+        )
+        if invalid:
+            return await self.envelope({"reason": "requested_scope_not_available"}, status="not_available")
+        department = str(department_row["id"]) if department_row else None
+        employee = str(employee_row["id"]) if employee_row else None
         scenario = str(scenario_id) if scenario_id else None
-        catalog, _ = await self.scenarios(str(department_id) if department_id else None)
+        catalog, _ = await self.scenarios(department, include_inactive=bool(scenario))
+        scenario_row = next(
+            (row for row in catalog if str(row.get("id")) == scenario),
+            None,
+        )
+        if scenario and scenario_row is None:
+            return await self.envelope(
+                {"reason": "scenario_not_in_effective_scope"},
+                status="not_available",
+                scope={**self.department_scope(department_row), "employee_id": employee},
+                period=bounds,
+            )
+        if scenario_row is not None and department_row is None:
+            scenario_department_id = str(scenario_row.get("department_id") or "")
+            department_row = next(
+                (
+                    visible
+                    for visible in await self.departments()
+                    if str(visible.get("id")) == scenario_department_id
+                ),
+                None,
+            )
+            if department_row is None:
+                return await self.envelope(
+                    {"reason": "scenario_not_in_effective_scope"},
+                    status="not_available",
+                    period=bounds,
+                )
+            department = str(department_row["id"])
         visible_criteria = {
             str(item["id"]): item
             for row in catalog
@@ -1115,17 +1655,26 @@ class AnalyticsAdapter:
             for item in self._criteria(row)
         }
         requested = [str(value) for value in criterion_ids or []]
-        effective = (
-            [value for value in requested if value in visible_criteria]
-            if requested
-            else list(visible_criteria)
+        effective, omitted = (
+            _select_visible(requested, set(visible_criteria)) if requested else (list(visible_criteria), 0)
         )
-        omitted = len(requested) - len(effective) if requested else 0
+        if requested and not effective:
+            return await self.envelope(
+                {"reason": "criteria_not_in_effective_scope"},
+                status="not_available",
+                scope={
+                    **self.department_scope(department_row),
+                    "scenario_id": scenario,
+                    "employee_id": employee,
+                },
+                period=bounds,
+                omitted=omitted,
+            )
         calls, total, complete = await self.calls(
             start=bounds[0],
             end=bounds[1],
-            department_id=str(department_id) if department_id else None,
-            employee_id=str(employee_id) if employee_id else None,
+            department_id=department,
+            employee_id=employee,
             scenario_id=scenario,
         )
 
@@ -1174,17 +1723,21 @@ class AnalyticsAdapter:
             row["avg_score_percent"] = round(score / maximum * 100, 2) if maximum else None
             data.append(row)
         data.sort(key=lambda row: (row["avg_score_percent"] is None, row["avg_score_percent"] or 0))
-        truncated = not complete or total > len(calls)
+        matching_criteria_total = len(data)
+        truncated = not complete or total > len(calls) or matching_criteria_total > limit
         return await self.envelope(
             data[:limit],
             status="partial" if truncated else ("ok" if data else "no_data"),
             scope={
                 "scenario_id": scenario,
                 "criterion_ids": effective,
-                "department_id": str(department_id) if department_id else None,
-                "employee_id": str(employee_id) if employee_id else None,
+                **self.department_scope(department_row),
+                "employee_id": employee,
                 "source_calls": len(calls),
                 "source_calls_total": total,
+                "matching_criteria_total": matching_criteria_total,
+                "returned_criteria": min(matching_criteria_total, limit),
+                "criteria_limit": limit,
             },
             period=bounds,
             omitted=omitted,
@@ -1197,6 +1750,8 @@ class BackendClient:
     def __init__(self, settings: Settings, platform: OKKPlatformClient):
         self.settings = settings
         self.platform = platform
+        if settings.analytics_trace_enabled:
+            LOGGER.setLevel(logging.INFO)
 
     async def close(self) -> None:
         # The shared platform client is closed by the ASGI lifespan.
@@ -1223,11 +1778,103 @@ class BackendClient:
             self.settings,
             validated_context=validated_context,
         )
+        request_id = str(uuid4())
+        started = time.perf_counter()
         try:
-            return await adapter.dispatch(path, params)
+            result = await adapter.dispatch(path, params)
+            result["request_id"] = request_id
+            self._trace(
+                request_id=request_id,
+                subject=access_token.subject,
+                path=path,
+                params=params,
+                result=result,
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            return result
         except OKKNotAvailable:
-            return await adapter.envelope({}, status="not_available")
+            result = await adapter.envelope({}, status="not_available")
+            result["request_id"] = request_id
+            self._trace(
+                request_id=request_id,
+                subject=access_token.subject,
+                path=path,
+                params=params,
+                result=result,
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            return result
         except OKKAuthenticationError as exc:
+            self._trace(
+                request_id=request_id,
+                subject=access_token.subject,
+                path=path,
+                params=params,
+                result={"status": "not_available", "data": {}, "effective_scope": {}},
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
             raise PermissionError("OKK account session is no longer valid") from exc
         except OKKUnavailable as exc:
+            self._trace(
+                request_id=request_id,
+                subject=access_token.subject,
+                path=path,
+                params=params,
+                result={
+                    "status": "temporarily_unavailable",
+                    "data": {},
+                    "effective_scope": {},
+                },
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
             raise BackendUnavailable("OKK analytics is temporarily unavailable") from exc
+
+    def _trace(
+        self,
+        *,
+        request_id: str,
+        subject: str,
+        path: str,
+        params: dict[str, Any],
+        result: dict[str, Any],
+        duration_ms: float,
+    ) -> None:
+        """Emit a redacted operational trace without raw business data or identifiers."""
+        if not self.settings.analytics_trace_enabled:
+            return
+        data = result.get("data")
+        if isinstance(data, list):
+            result_items = len(data)
+        elif isinstance(data, dict) and isinstance(data.get("items"), list):
+            result_items = len(data["items"])
+        else:
+            result_items = None
+        scope = result.get("effective_scope") or {}
+        safe_inputs = {
+            "period": params.get("period"),
+            "custom_date_range": bool(params.get("start_date") or params.get("end_date")),
+            "department_filter": bool(params.get("department_id") or params.get("department_ref")),
+            "employee_filter": bool(params.get("employee_id") or params.get("employee_ids")),
+            "scenario_filter_count": len(params.get("scenario_ids") or [])
+            + int(bool(params.get("scenario_id"))),
+            "criterion_filter_count": len(params.get("criterion_ids") or []),
+            "search_filter": bool(params.get("search")),
+            "page": params.get("page"),
+            "page_size": params.get("page_size"),
+        }
+        event = {
+            "event": "okk_analytics_tool_call",
+            "request_id": request_id,
+            "actor_hash": hashlib.sha256(subject.encode("utf-8")).hexdigest()[:16],
+            "tool_path": UUID_IN_PATH.sub("/{entity_id}", path),
+            "inputs": {key: value for key, value in safe_inputs.items() if value is not None},
+            "duration_ms": round(duration_ms, 1),
+            "result": {
+                "status": result.get("status"),
+                "omitted_filters_count": result.get("omitted_filters_count", 0),
+                "department_code": scope.get("department_code"),
+                "source_complete": (data.get("source_complete") if isinstance(data, dict) else None),
+                "returned_items": result_items,
+            },
+        }
+        LOGGER.info(json.dumps(event, ensure_ascii=False, separators=(",", ":")))

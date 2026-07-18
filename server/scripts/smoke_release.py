@@ -32,6 +32,23 @@ EXPECTED_TOOLS = [
     "get_scenario_performance",
     "get_criterion_performance",
 ]
+DEPARTMENT_SCOPED_TOOLS = {
+    "get_overview_statistics",
+    "get_department_statistics",
+    "list_employees",
+    "get_employee_card",
+    "compare_employees",
+    "get_call_statistics",
+    "get_plan_fact_statistics",
+    "get_client_statistics",
+    "get_crm_statistics",
+    "get_growth_insights",
+    "get_mentoring_statistics",
+    "list_scenarios",
+    "get_scenario_criteria",
+    "get_scenario_performance",
+    "get_criterion_performance",
+}
 
 
 def _rpc(method: str, params: dict[str, Any], request_id: int) -> dict[str, Any]:
@@ -49,6 +66,11 @@ def validate_tool_inventory(payload: dict[str, Any]) -> None:
             raise RuntimeError(f"Tool is not read-only: {tool.get('name')}")
         if annotations.get("destructiveHint") is not False:
             raise RuntimeError(f"Tool is destructive: {tool.get('name')}")
+        properties = (tool.get("inputSchema") or {}).get("properties") or {}
+        if tool.get("name") in DEPARTMENT_SCOPED_TOOLS and "department_ref" not in properties:
+            raise RuntimeError(f"Tool cannot resolve a named department: {tool.get('name')}")
+        if tool.get("name") == "compare_departments" and "department_refs" not in properties:
+            raise RuntimeError("compare_departments cannot resolve named departments")
 
 
 async def run(base_url: str, token: str | None) -> dict[str, Any]:
@@ -107,6 +129,29 @@ async def run(base_url: str, token: str | None) -> dict[str, Any]:
             )
             access.raise_for_status()
             report["access_context_call"] = access.json()
+            inaccessible = await client.post(
+                mcp_url,
+                headers=authenticated,
+                json=_rpc(
+                    "tools/call",
+                    {
+                        "name": "get_department_statistics",
+                        "arguments": {
+                            "department_ref": "__mcp_acl_smoke_inaccessible_department__",
+                            "period": "today",
+                        },
+                    },
+                    4,
+                ),
+            )
+            inaccessible.raise_for_status()
+            inaccessible_payload = inaccessible.json()
+            structured = inaccessible_payload.get("result", {}).get("structuredContent") or {}
+            if structured.get("status") != "not_available":
+                raise RuntimeError("Unknown named department did not fail closed")
+            if structured.get("data") != {"reason": "department_not_in_access_scope"}:
+                raise RuntimeError("Unknown named department returned business data")
+            report["named_department_fail_closed"] = inaccessible_payload
         else:
             report["authenticated_checks"] = "skipped: set OKK_MCP_SMOKE_ACCESS_TOKEN"
     return report

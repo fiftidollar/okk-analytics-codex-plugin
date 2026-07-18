@@ -125,11 +125,37 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
         assert tool.annotations.openWorldHint is False
         assert tool.inputSchema["type"] == "object"
         assert tool.outputSchema["type"] == "object"
+        assert "request_id" in tool.outputSchema["properties"]
         assert tool.meta["securitySchemes"][0]["type"] == "oauth2"
 
     compare_schema = next(tool for tool in tools if tool.name == "compare_employees").inputSchema
     assert compare_schema["properties"]["employee_ids"]["minItems"] == 1
     assert compare_schema["properties"]["employee_ids"]["maxItems"] == 20
+
+    department_scoped = {
+        "get_overview_statistics",
+        "get_department_statistics",
+        "list_employees",
+        "get_employee_card",
+        "compare_employees",
+        "get_call_statistics",
+        "get_plan_fact_statistics",
+        "get_client_statistics",
+        "get_crm_statistics",
+        "get_growth_insights",
+        "get_mentoring_statistics",
+        "list_scenarios",
+        "get_scenario_criteria",
+        "get_scenario_performance",
+        "get_criterion_performance",
+    }
+    for tool in tools:
+        if tool.name in department_scoped:
+            assert "department_ref" in tool.inputSchema["properties"], tool.name
+    compare_departments_schema = next(
+        tool for tool in tools if tool.name == "compare_departments"
+    ).inputSchema
+    assert "department_refs" in compare_departments_schema["properties"]
 
 
 def test_mcp_transport_allows_only_the_configured_public_origin():

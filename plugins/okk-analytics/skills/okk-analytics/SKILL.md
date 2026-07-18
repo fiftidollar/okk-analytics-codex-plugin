@@ -20,6 +20,17 @@ areas, weekly focus, mentoring tasks, scenarios, criteria or their performance.
   plugin.
 - Respect `access_context`, `effective_scope`, `omitted_filters_count` and
   `status` in every response.
+- Treat a department explicitly named by the user as a mandatory filter. Pass
+  its exact visible name or code as `department_ref`; never drop that filter,
+  broaden the request to all departments, or relabel another department's
+  employees.
+- Verify that `effective_scope.department_code` or
+  `effective_scope.department_name` matches the requested department before
+  describing any employee or KPI as belonging to it.
+- If a named department returns `not_available`, stop. Say that it is not
+  available to the connected OKK account and mention only departments listed
+  in `access_context`. Do not retry the same question without the department
+  filter.
 - `not_available` deliberately does not distinguish a missing entity from an
   inaccessible one. Never infer or reveal which case occurred.
 - If a viewer has no assigned departments, an empty successful response is the
@@ -29,6 +40,11 @@ areas, weekly focus, mentoring tasks, scenarios, criteria or their performance.
 
 Start broad questions with `get_access_context` and
 `get_statistics_catalog` when the scope or available metrics is unclear.
+
+For a request such as "employees of B2B and their scores", call
+`get_department_statistics(department_ref="B2B")` first. It returns the full
+department ranking and KPI sources in one ACL-safe response. Use
+`list_employees` only when a directory/search result is also needed.
 
 - Company/overall KPI, ranking and trends: `get_overview_statistics`.
 - Department discovery and comparison: `list_departments`,
@@ -63,6 +79,13 @@ loaded.
   unrelated counters in the model.
 - Explain partial availability metadata inline when it materially affects the
   answer; do not turn it into a separate data-quality report.
+- Distinguish `no_data` (the account can access the scope but no observations
+  matched) from `not_available` (the scope/entity is unavailable). Never turn
+  either status into invented zeroes or employees from a broader query.
+- Treat `source_complete=false`, call totals larger than loaded calls, and the
+  mentoring history-window marker as hard limits on completeness.
+- CRM exposes only each employee's latest snapshot. If a requested historical
+  date is `not_available`, do not present the latest snapshot as that date.
 - For comparisons, report which requested filters were omitted only as a count.
   Do not repeat hidden IDs.
 

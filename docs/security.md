@@ -19,9 +19,17 @@
 
 - Admin: all departments returned by the live account.
 - Viewer: only live `department_ids` and entities underneath them.
+- The gateway intersects `/departments` with the viewer's revalidated live
+  `department_ids` as defense in depth even though the upstream route is also
+  ACL-aware.
 - Viewer with an empty ACL: successful empty/no-data responses, never 500/403
   noise.
 - Direct inaccessible or missing IDs: identical `not_available` response.
+- Exact department names/codes are resolved only inside the live visible ACL.
+  A failed or ambiguous named selector returns `not_available` and is never
+  treated as an absent filter.
+- When employee and department filters are combined, a cross-department
+  mismatch returns `not_available` before statistics endpoints are called.
 - Mixed ID filters: accessible rows plus only an omitted count.
 - Deactivation/role/department changes take effect on the next MCP request via
   `/auth/me`.
@@ -31,6 +39,10 @@
 Safe projections exclude email, password/PBX fields, phone numbers, audio URLs,
 transcripts, raw prompts, prompt runtime, raw reasoning, scripts, Megafon,
 routing and pipeline state. Nothing from an analytics response is persisted.
+
+Operational observability is deliberately metadata-only. Structured traces
+record filter presence/counts, timing, status and safe completeness markers,
+but never raw selectors, UUIDs, names or response payloads.
 
 Criterion aggregation currently has to read the existing OKK call-detail
 response because the platform does not yet expose a criteria-only endpoint. The

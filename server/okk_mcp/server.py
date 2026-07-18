@@ -56,6 +56,7 @@ class AnalyticsEnvelope(BaseModel):
     effective_scope: dict[str, Any] = Field(default_factory=dict)
     period: PeriodRange | None = None
     omitted_filters_count: int = 0
+    request_id: str | None = None
     data: dict[str, Any] | list[dict[str, Any]] = Field(default_factory=dict)
 
 
@@ -113,6 +114,11 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         name=settings.mcp_service_name,
         instructions=(
             "Read-only OKK business analytics. Respect access_context/effective_scope. "
+            "When the user names a department, pass that exact name or code as department_ref; "
+            "never silently omit a requested department filter and never relabel another "
+            "department's employees. If status is not_available, state that the requested "
+            "department is outside the connected account's visible scope and name only the "
+            "departments present in access_context. "
             "Never ask the user for their OKK password in chat: authentication happens only "
             "on the OKK authorization page. Never infer hidden departments or entities from "
             "not_available/omitted results. Do not request audio, transcripts, prompts, raw "
@@ -158,7 +164,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Сводная статистика",
-        description="Максимальная общая сводка: звонки, качество, клиенты, отделы, рейтинг и дневные тренды.",
+        description="Максимальная общая сводка: звонки, качество, клиенты, отделы, рейтинг и дневные тренды. Для названия или кода отдела обязательно передайте department_ref; не оставляйте фильтр пустым.",
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,
@@ -166,6 +172,11 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     async def get_overview_statistics(
         period: Period = "month",
         department_id: UUID | None = None,
+        department_ref: str | None = Field(
+            default=None,
+            max_length=200,
+            description="Exact visible department code or name, for example B2B or ORD.",
+        ),
         start_date: str | None = None,
         end_date: str | None = None,
         top_limit: int = Field(default=20, ge=1, le=50),
@@ -175,6 +186,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             client,
             "/mcp-read/overview-statistics",
             department_id=department_id,
+            department_ref=department_ref,
             top_limit=top_limit,
             **_period_params(period, start_date, end_date),
         )
@@ -192,21 +204,30 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Статистика отдела",
-        description="Полная карточка отдела: KPI, план/факт, рейтинг сотрудников и дневные тренды.",
+        description="Полная карточка одного доступного отдела: KPI, план/факт, рейтинг сотрудников и дневные тренды. При запросе пользователя по названию или коду используйте department_ref; недоступный отдел возвращает not_available без данных другого отдела.",
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,
     )
     async def get_department_statistics(
-        department_id: UUID,
+        department_id: UUID | None = None,
+        department_ref: str | None = Field(
+            default=None,
+            max_length=200,
+            description="Exact visible department code or name, for example B2B or ORD.",
+        ),
         period: Period = "month",
         start_date: str | None = None,
         end_date: str | None = None,
     ) -> AnalyticsEnvelope:
         _require_scopes(STAT_SCOPE)
+        if not department_id and not department_ref:
+            raise ValueError("department_id or department_ref is required")
         return await _read(
             client,
-            f"/mcp-read/department-statistics/{department_id}",
+            "/mcp-read/department-statistics",
+            department_id=department_id,
+            department_ref=department_ref,
             **_period_params(period, start_date, end_date),
         )
 
@@ -219,6 +240,11 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     )
     async def compare_departments(
         department_ids: list[UUID] | None = None,
+        department_refs: list[str] | None = Field(
+            default=None,
+            max_length=100,
+            description="Exact visible department codes or names.",
+        ),
         period: Period = "month",
         start_date: str | None = None,
         end_date: str | None = None,
@@ -228,18 +254,24 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             client,
             "/mcp-read/compare-departments",
             department_ids=department_ids,
+            department_refs=department_refs,
             **_period_params(period, start_date, end_date),
         )
 
     @mcp.tool(
         title="Список сотрудников",
-        description="Ищет сотрудников в доступных отделах без раскрытия email, телефона, PBX и учётных данных.",
+        description="Ищет сотрудников только в доступных отделах без раскрытия email, телефона, PBX и учётных данных. Если пользователь назвал отдел, передайте его точное имя или код в department_ref; не выполняйте общий поиск вместо фильтрованного.",
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,
     )
     async def list_employees(
         department_id: UUID | None = None,
+        department_ref: str | None = Field(
+            default=None,
+            max_length=200,
+            description="Exact visible department code or name. A failed match never broadens the query.",
+        ),
         search: str | None = Field(default=None, max_length=200),
         include_inactive: bool = False,
         page: int = Field(default=1, ge=1),
@@ -250,6 +282,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             client,
             "/mcp-read/employees",
             department_id=department_id,
+            department_ref=department_ref,
             search=search,
             include_inactive=include_inactive,
             page=page,
@@ -268,6 +301,12 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     )
     async def get_employee_card(
         employee_id: UUID,
+        department_id: UUID | None = None,
+        department_ref: str | None = Field(
+            default=None,
+            max_length=200,
+            description="Optional department guard by exact visible code or name.",
+        ),
         period: Period = "month",
         start_date: str | None = None,
         end_date: str | None = None,
@@ -277,6 +316,8 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         return await _read(
             client,
             f"/mcp-read/employee-card/{employee_id}",
+            department_id=department_id,
+            department_ref=department_ref,
             task_page_size=task_page_size,
             **_period_params(period, start_date, end_date),
         )
@@ -290,6 +331,12 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     )
     async def compare_employees(
         employee_ids: list[UUID] = Field(min_length=1, max_length=20),
+        department_id: UUID | None = None,
+        department_ref: str | None = Field(
+            default=None,
+            max_length=200,
+            description="Optional department guard by exact visible code or name.",
+        ),
         period: Period = "month",
         start_date: str | None = None,
         end_date: str | None = None,
@@ -299,6 +346,8 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             client,
             "/mcp-read/compare-employees",
             employee_ids=employee_ids,
+            department_id=department_id,
+            department_ref=department_ref,
             **_period_params(period, start_date, end_date),
         )
 
@@ -312,6 +361,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     async def get_call_statistics(
         period: Period = "month",
         department_id: UUID | None = None,
+        department_ref: str | None = Field(
+            default=None, max_length=200, description="Exact visible department code or name."
+        ),
         employee_id: UUID | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
@@ -321,6 +373,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             client,
             "/mcp-read/call-statistics",
             department_id=department_id,
+            department_ref=department_ref,
             employee_id=employee_id,
             **_period_params(period, start_date, end_date),
         )
@@ -336,6 +389,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         start_date: date,
         end_date: date,
         department_id: UUID | None = None,
+        department_ref: str | None = Field(
+            default=None, max_length=200, description="Exact visible department code or name."
+        ),
         employee_id: UUID | None = None,
     ) -> AnalyticsEnvelope:
         _require_scopes(STAT_SCOPE)
@@ -347,6 +403,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             start_date=start_date,
             end_date=end_date,
             department_id=department_id,
+            department_ref=department_ref,
             employee_id=employee_id,
         )
 
@@ -360,6 +417,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     async def get_client_statistics(
         period: Period = "month",
         department_id: UUID | None = None,
+        department_ref: str | None = Field(
+            default=None, max_length=200, description="Exact visible department code or name."
+        ),
         employee_id: UUID | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
@@ -369,6 +429,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             client,
             "/mcp-read/client-statistics",
             department_id=department_id,
+            department_ref=department_ref,
             employee_id=employee_id,
             **_period_params(period, start_date, end_date),
         )
@@ -382,6 +443,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     )
     async def get_crm_statistics(
         department_id: UUID | None = None,
+        department_ref: str | None = Field(
+            default=None, max_length=200, description="Exact visible department code or name."
+        ),
         employee_id: UUID | None = None,
         snapshot_date: date | None = None,
     ) -> AnalyticsEnvelope:
@@ -390,6 +454,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             client,
             "/mcp-read/crm-statistics",
             department_id=department_id,
+            department_ref=department_ref,
             employee_id=employee_id,
             snapshot_date=snapshot_date,
         )
@@ -404,6 +469,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     async def get_growth_insights(
         period: Period = "month",
         department_id: UUID | None = None,
+        department_ref: str | None = Field(
+            default=None, max_length=200, description="Exact visible department code or name."
+        ),
         employee_id: UUID | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
@@ -414,6 +482,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             client,
             "/mcp-read/growth-insights",
             department_id=department_id,
+            department_ref=department_ref,
             employee_id=employee_id,
             limit=limit,
             **_period_params(period, start_date, end_date),
@@ -429,6 +498,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     async def get_mentoring_statistics(
         period: Period = "month",
         department_id: UUID | None = None,
+        department_ref: str | None = Field(
+            default=None, max_length=200, description="Exact visible department code or name."
+        ),
         employee_id: UUID | None = None,
         task_status: TaskStatus | None = None,
         start_date: str | None = None,
@@ -441,6 +513,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             client,
             "/mcp-read/mentoring-statistics",
             department_id=department_id,
+            department_ref=department_ref,
             employee_id=employee_id,
             task_status=task_status,
             page=page,
@@ -457,7 +530,11 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     )
     async def list_scenarios(
         department_id: UUID | None = None,
-        include_historical: bool = True,
+        department_ref: str | None = Field(
+            default=None, max_length=200, description="Exact visible department code or name."
+        ),
+        search: str | None = Field(default=None, max_length=200),
+        include_historical: bool = False,
         page: int = Field(default=1, ge=1),
         page_size: int = Field(default=50, ge=1, le=100),
     ) -> AnalyticsEnvelope:
@@ -466,6 +543,8 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             client,
             "/mcp-read/scenarios",
             department_id=department_id,
+            department_ref=department_ref,
+            search=search,
             include_historical=include_historical,
             page=page,
             page_size=page_size,
@@ -473,14 +552,27 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Критерии сценария",
-        description="Полная бизнес-конфигурация категорий и критериев: веса, шкалы, индикаторы, обязательность и применимость.",
+        description="Полная доступная бизнес-конфигурация категорий и критериев: максимальные баллы, шкалы, индикаторы, обязательность, критичность и применимость.",
         annotations=READ_ONLY,
         meta=_security_meta(SCENARIO_SCOPE),
         structured_output=True,
     )
-    async def get_scenario_criteria(scenario_id: UUID) -> AnalyticsEnvelope:
+    async def get_scenario_criteria(
+        scenario_id: UUID,
+        department_id: UUID | None = None,
+        department_ref: str | None = Field(
+            default=None,
+            max_length=200,
+            description="Optional department guard by exact visible code or name.",
+        ),
+    ) -> AnalyticsEnvelope:
         _require_scopes(SCENARIO_SCOPE)
-        return await _read(client, f"/mcp-read/scenario-criteria/{scenario_id}")
+        return await _read(
+            client,
+            f"/mcp-read/scenario-criteria/{scenario_id}",
+            department_id=department_id,
+            department_ref=department_ref,
+        )
 
     @mcp.tool(
         title="Эффективность сценариев",
@@ -493,6 +585,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         period: Period = "month",
         scenario_ids: list[UUID] | None = Field(default=None, max_length=100),
         department_id: UUID | None = None,
+        department_ref: str | None = Field(
+            default=None, max_length=200, description="Exact visible department code or name."
+        ),
         employee_id: UUID | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
@@ -503,6 +598,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             "/mcp-read/scenario-performance",
             scenario_ids=scenario_ids,
             department_id=department_id,
+            department_ref=department_ref,
             employee_id=employee_id,
             **_period_params(period, start_date, end_date),
         )
@@ -519,6 +615,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         scenario_id: UUID | None = None,
         criterion_ids: list[UUID] | None = Field(default=None, max_length=100),
         department_id: UUID | None = None,
+        department_ref: str | None = Field(
+            default=None, max_length=200, description="Exact visible department code or name."
+        ),
         employee_id: UUID | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
@@ -531,6 +630,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             scenario_id=scenario_id,
             criterion_ids=criterion_ids,
             department_id=department_id,
+            department_ref=department_ref,
             employee_id=employee_id,
             limit=limit,
             **_period_params(period, start_date, end_date),

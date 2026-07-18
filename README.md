@@ -32,6 +32,11 @@ the Codex plugin package.
   the protected-resource metadata and marketplace authentication on install.
 - Live `/auth/me` verification on every MCP request.
 - Admin/viewer/empty-ACL semantics and neutral inaccessible-ID responses.
+- Exact department selection by visible UUID, code or name. A failed named
+  department never falls back to an unfiltered employee population.
+- Redacted operational tool traces with request ID, timing, applied department
+  code, result status and completeness markers; raw business payloads, names,
+  IDs and credentials are never logged.
 
 ## Deliberately excluded
 
@@ -42,7 +47,7 @@ operations and every write action.
 ## Repository layout
 
 ```text
-plugin/                  Codex plugin manifest, MCP declaration and skill
+plugins/okk-analytics/   Codex plugin manifest, MCP declaration and skill
 .agents/plugins/         Local/community marketplace manifest
 server/okk_mcp/          OAuth server, encrypted sessions and 19 MCP tools
 server/migrations/       Standalone PostgreSQL schema
@@ -68,9 +73,9 @@ docs/                    Architecture, tools, security and deployment runbooks
    Invoke-RestMethod http://localhost:8020/.well-known/oauth-protected-resource/mcp
    ```
 
-5. For a local marketplace checkout, update `plugin/.mcp.json` to your HTTPS
-   gateway URL, then add this repository as a Codex marketplace and install
-   `okk-analytics@alpes-community`.
+5. For a local marketplace checkout, update
+   `plugins/okk-analytics/.mcp.json` to your HTTPS gateway URL, then add this
+   repository as a Codex marketplace and install the **OKK Analytics** entry.
 
 ## Install in Codex
 
@@ -95,12 +100,12 @@ Start a new task after installation so the skill and MCP server are loaded.
 older environments; cloning this repository is not part of the normal user
 installation flow.
 
-To pick up a newer published version, refresh the marketplace and reinstall the
-plugin from the same entry:
+To pick up a newer published version, refresh the marketplace, restart Codex,
+then open **Plugins → Alpes Community → OKK Analytics** and choose the offered
+update/reinstall action:
 
 ```powershell
 codex plugin marketplace upgrade alpes-community
-codex plugin add okk-analytics@alpes-community
 ```
 
 To force a fresh account login later, use **Authenticate** in Codex or run
@@ -113,12 +118,14 @@ The production target is the live OKK API at
 deployment template. Production requires HTTPS for both the MCP gateway and
 the OKK API. See
 [deployment](docs/deployment.md), [security](docs/security.md) and the complete
-[tool catalog](docs/tool-catalog.md).
+[tool catalog](docs/tool-catalog.md). Public policies are in
+[PRIVACY.md](PRIVACY.md) and [TERMS.md](TERMS.md).
 
 ## Production rollout status
 
 This is a live production plugin, not a test-stand connector. Its public MCP URL
 is `https://okk-mcp.akfixdev.ru/mcp`, and its upstream is the production OKK API
 above. Production OAuth, a one-department viewer ACL and all 19 read-only tools
-were verified on `2026-07-14`; the broader role/ACL matrix remains a recurring
-release gate described in `docs/deployment.md`.
+for release `1.0.2` were verified on `2026-07-14`. Release `1.1.0` is currently
+a local candidate and is not live until its commit is explicitly approved,
+pushed and verified through the gate in `docs/deployment.md`.

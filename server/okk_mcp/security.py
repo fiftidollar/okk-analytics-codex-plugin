@@ -89,9 +89,7 @@ def _serialize_redirect_host(host: str) -> str:
                 or len(label) > 63
                 or label.startswith("-")
                 or label.endswith("-")
-                or any(
-                    character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in label
-                )
+                or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in label)
                 for label in labels
             )
         ):

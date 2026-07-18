@@ -21,9 +21,33 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `get_growth_insights` | Employee and aggregate AI strengths/growth areas without raw reasoning |
 | `get_mentoring_statistics` | Active/recent completed task window, status/overdue/completion stats |
 | `list_scenarios` | Safe scenario catalog; archived rows are admin-only |
-| `get_scenario_criteria` | Categories, weights, scales, indicators and applicability |
+| `get_scenario_criteria` | Categories, maximum scores, scales, indicators and applicability |
 | `get_scenario_performance` | Evaluation count, employee coverage, score distribution and pass rate |
 | `get_criterion_performance` | Observation count, score %, penalties, coverage and recency |
+
+## Department selection contract
+
+Every department-scoped tool accepts both `department_id` and
+`department_ref`. Use the UUID only when it is already known. When a user says
+"B2B", "ORD" or a full department name, pass that exact value through
+`department_ref`.
+
+The gateway resolves the selector only against departments returned to the
+current account by the live OKK ACL. Matching is case-insensitive and exact
+after normalizing spaces and punctuation; a unique displayed acronym is also
+accepted, but the resolver does not guess by substring. If a
+selector is absent from the visible scope, ambiguous, or conflicts with a
+simultaneously supplied UUID, the result is `not_available`. The gateway never
+falls back to all visible departments.
+
+`effective_scope` returns the resolved `department_id`, `department_code` and
+`department_name`. A model must verify these fields before attributing employee
+or KPI rows to the requested department. If `not_available` is returned, the
+model may name only departments already present in `access_context`.
+
+When both employee and department filters are supplied, the employee must
+belong to that resolved department. Employee cards/comparisons, calls, clients,
+plans, CRM, growth, mentoring, scenarios and criteria all apply this guard.
 
 ## Common response envelope
 
@@ -34,7 +58,24 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 - `period`: exact inclusive dates.
 - `omitted_filters_count`: number of inaccessible mixed-list filters, without
   echoing their IDs.
+- `request_id`: correlation ID for the gateway's redacted operational trace.
 - `data`: the business payload.
+
+`no_data` means the scope is accessible but has no matching observations.
+`not_available` means the requested scope/entity cannot be supplied. Neither
+status permits substituting results from a broader query.
+
+Employee populations expose `source_total`, `returned_population` and
+`source_complete`. Call-derived tools expose source-call counts. Configured
+caps return `partial`; they never claim a complete ranking. CRM exposes only
+the latest snapshot per employee and explicitly rejects an unavailable
+historical date instead of relabeling current data; unavailable employee
+snapshots also make coverage `partial`. Criterion output limits report the
+matching and returned counts and cannot silently truncate an `ok` result.
+
+Aggregate strengths and growth areas count distinct employees mentioning a
+normalized observation. Repeated or differently cased copies of the same
+observation inside one employee card do not inflate `employee_mentions`.
 
 The current OKK employee-page API returns at most five active and ten completed
 mentoring tasks per employee. Task tools therefore mark this window as

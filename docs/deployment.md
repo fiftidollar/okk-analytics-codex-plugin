@@ -56,6 +56,11 @@ public OKK login API and does not mint OKK tokens.
    - deactivated user after an already issued MCP token.
 8. Check direct inaccessible IDs return neutral `not_available`, and mixed
    filters expose only `omitted_filters_count`.
+   For every named department in the test matrix, query by code and full name
+   and assert `effective_scope` resolves to that department. For a
+   one-department ORD viewer, request B2B and assert `not_available`, zero
+   employee/statistics calls after resolution, and an `access_context` that
+   names only ORD.
 9. Exercise all 19 tools and search saved JSON for forbidden fields/values:
    password, phone, audio, transcript, prompt, reasoning, script, Megafon,
    routing and pipeline.
@@ -64,6 +69,9 @@ public OKK login API and does not mint OKK tokens.
 11. Install the marketplace plugin and repeat the main user flows in Codex.
     Confirm installation itself starts OAuth (`ON_INSTALL`) and that the loaded
     MCP configuration contains the exact production `oauth_resource`.
+12. Inspect structured `okk_analytics_tool_call` logs. Confirm request IDs,
+    timings, status and department code are present, while credentials, raw
+    selectors, entity IDs, employee names and response payloads are absent.
 
 ## Dokploy production compose
 
@@ -93,7 +101,10 @@ docker compose --env-file .env.production up --build -d
 ## Local verification
 
 ```powershell
+$env:PYTHONPATH = "server"
 python -m pytest
+python -m ruff check server
+python -m ruff format server --check
 python -m compileall -q server/okk_mcp server/scripts server/tests server/migrations
 Set-Location server
 python -m alembic -c alembic.ini heads

@@ -1,12 +1,15 @@
 {
   "name": "okk-analytics",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Read-only OKK analytics: KPI, employees, mentoring, scenarios and criteria with native account OAuth.",
   "author": {
-    "name": "Alpes"
+    "name": "Alpes",
+    "url": "https://github.com/fiftidollar"
   },
   "homepage": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
   "repository": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
+  "license": "MIT",
+  "keywords": ["okk", "analytics", "kpi", "employees", "read-only"],
   "skills": "./skills/",
   "interface": {
     "displayName": "OKK Analytics",
@@ -14,13 +17,17 @@
     "longDescription": "Подключает Codex к вашему аккаунту ОКК через OAuth: общая, отделовая и персональная статистика, клиентские и CRM-метрики, план/факт, AI-сильные стороны и зоны роста, наставнические задачи, сценарии, критерии и их эффективность. Результаты всегда ограничены текущими правами пользователя.",
     "developerName": "Alpes",
     "category": "Data & Analytics",
+    "websiteURL": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
+    "privacyPolicyURL": "https://github.com/fiftidollar/okk-analytics-codex-plugin/blob/main/PRIVACY.md",
+    "termsOfServiceURL": "https://github.com/fiftidollar/okk-analytics-codex-plugin/blob/main/TERMS.md",
+    "brandColor": "#DC3F4F",
     "capabilities": [
       "Read-only analytics",
       "Native OKK OAuth",
       "Access-aware employee insights"
     ],
     "defaultPrompt": [
-      "Покажи сводную статистику ОКК за текущий месяц.",
+      "Покажи сотрудников отдела B2B и их оценки за текущий месяц.",
       "Покажи зоны роста и задачи наставничества в моём доступе.",
       "Сравни сценарии и критерии по эффективности."
     ]

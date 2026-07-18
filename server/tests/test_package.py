@@ -11,16 +11,20 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_plugin_and_marketplace_point_to_the_standalone_package():
-    manifest = json.loads((ROOT / "plugin/.codex-plugin/plugin.json").read_text(encoding="utf-8"))
+    plugin = ROOT / "plugins/okk-analytics"
+    manifest = json.loads((plugin / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
     marketplace = json.loads((ROOT / ".agents/plugins/marketplace.json").read_text(encoding="utf-8"))
-    mcp = json.loads((ROOT / "plugin/.mcp.json").read_text(encoding="utf-8"))
+    mcp = json.loads((plugin / ".mcp.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "okk-analytics"
-    assert manifest["version"] == "1.0.2"
+    assert manifest["version"] == "1.1.0"
     assert manifest["mcpServers"] == "./.mcp.json"
     assert manifest["repository"].endswith("/okk-analytics-codex-plugin")
+    assert manifest["license"] == "MIT"
+    assert manifest["interface"]["privacyPolicyURL"].endswith("/PRIVACY.md")
+    assert manifest["interface"]["termsOfServiceURL"].endswith("/TERMS.md")
     assert len(manifest["interface"]["defaultPrompt"]) == 3
     assert all(len(prompt) <= 128 for prompt in manifest["interface"]["defaultPrompt"])
-    assert marketplace["plugins"][0]["source"]["path"] == "./plugin"
+    assert marketplace["plugins"][0]["source"]["path"] == "./plugins/okk-analytics"
     assert marketplace["plugins"][0]["policy"] == {
         "installation": "AVAILABLE",
         "authentication": "ON_INSTALL",
@@ -50,6 +54,7 @@ def test_published_connector_is_wired_for_production_not_test_stand():
     assert "APP_ENV=production" in production_env
     assert "OKK_API_BASE_URL=https://okk-backend.akfixdev.ru/api/v1" in production_env
     assert "MCP_RESOURCE_URL=https://okk-mcp.akfixdev.ru/mcp" in production_env
+    assert "REDIS_PASSWORD=REPLACE_WITH_REDIS_PASSWORD" in production_env
     assert "test-stand connector" in readme
     assert "ready for a test environment" not in readme
     settings = Settings(_env_file=ROOT / ".env.production.example")
@@ -58,7 +63,7 @@ def test_published_connector_is_wired_for_production_not_test_stand():
 
 
 def test_skill_forbids_credentials_writes_and_excluded_surfaces():
-    skill = (ROOT / "plugin/skills/okk-analytics/SKILL.md").read_text(encoding="utf-8").lower()
+    skill = (ROOT / "plugins/okk-analytics/skills/okk-analytics/SKILL.md").read_text(encoding="utf-8").lower()
     for required in (
         "never ask",
         "password",
@@ -75,3 +80,10 @@ def test_skill_forbids_credentials_writes_and_excluded_surfaces():
         "write action",
     ):
         assert required in skill
+
+
+def test_submission_matrix_has_exactly_five_positive_and_three_negative_cases():
+    cases = (ROOT / "docs/submission-test-cases.md").read_text(encoding="utf-8")
+    positive, negative = cases.split("## Negative", maxsplit=1)
+    assert positive.count("**Prompt:**") == 5
+    assert negative.count("**Prompt:**") == 3
