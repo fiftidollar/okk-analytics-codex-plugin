@@ -64,6 +64,12 @@ punctuation, requires one unambiguous match, and places the resolved ID/code/nam
 in `effective_scope`. Any explicit selector that does not resolve fails closed
 as `not_available`; it cannot become a missing filter.
 
+The resolver has no compiled department registry. `get_access_context` exposes
+the live catalog to Codex, and each subsequent tool call creates a fresh
+adapter and reloads the platform catalog before resolution. A department added,
+renamed or removed in OKK therefore takes effect without changing or releasing
+the plugin, subject only to the account's current ACL.
+
 Employee filters are checked against both the live employee endpoint and the
 resolved department. Comparison, scenario and criterion tools use the same
 scope contract, so mixing entities from different visible departments is not

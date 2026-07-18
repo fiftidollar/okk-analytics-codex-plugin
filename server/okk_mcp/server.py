@@ -118,8 +118,12 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             "'OKK подключён' and summarize only the role and visible departments. A browser "
             "redirect alone is not proof of a completed connection. Respect "
             "access_context/effective_scope. "
+            "Treat access_context.departments as the live department catalog for this request; "
+            "never rely on a fixed list of department names or assume an example department exists. "
             "When the user names a department, pass that exact name or code as department_ref; "
-            "never silently omit a requested department filter and never relabel another "
+            "if the user's wording does not identify exactly one live visible department, ask them "
+            "to choose instead of guessing. "
+            "Never silently omit a requested department filter and never relabel another "
             "department's employees. If status is not_available, state that the requested "
             "department is outside the connected account's visible scope and name only the "
             "departments present in access_context. "
@@ -179,7 +183,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         department_ref: str | None = Field(
             default=None,
             max_length=200,
-            description="Exact visible department code or name, for example B2B or ORD.",
+            description="Exact code or full name from the current access_context.departments catalog.",
         ),
         start_date: str | None = None,
         end_date: str | None = None,
@@ -218,7 +222,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         department_ref: str | None = Field(
             default=None,
             max_length=200,
-            description="Exact visible department code or name, for example B2B or ORD.",
+            description="Exact code or full name from the current access_context.departments catalog.",
         ),
         period: Period = "month",
         start_date: str | None = None,

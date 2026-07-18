@@ -4,6 +4,9 @@
 
 - Added one ACL-safe department resolver for UUIDs, exact codes and normalized
   names across every department-scoped tool.
+- Department discovery is explicitly live and data-driven: the plugin carries
+  no fixed department catalog, and newly added or renamed visible departments
+  require no plugin update.
 - Failed named selectors now return `not_available` and can never broaden into
   an all-department query; employee/department cross-filter mismatches fail
   closed as well.

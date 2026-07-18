@@ -28,17 +28,25 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 ## Department selection contract
 
 Every department-scoped tool accepts both `department_id` and
-`department_ref`. Use the UUID only when it is already known. When a user says
-"B2B", "ORD" or a full department name, pass that exact value through
+`department_ref`. Use the UUID only when it is already known. When a user names
+any department or supplies its current code, pass that exact value through
 `department_ref`.
 
 The gateway resolves the selector only against departments returned to the
-current account by the live OKK ACL. Matching is case-insensitive and exact
-after normalizing spaces and punctuation; a unique displayed acronym is also
-accepted, but the resolver does not guess by substring. If a
+current account by the live OKK ACL. There is no department allowlist or
+bundled name-to-ID mapping in the plugin: additions and renames become visible
+from the platform without a plugin release. Matching is case-insensitive and
+exact after normalizing spaces and punctuation; a unique acronym derived from
+the currently displayed name is also accepted, but the resolver does not guess
+by substring. If a
 selector is absent from the visible scope, ambiguous, or conflicts with a
 simultaneously supplied UUID, the result is `not_available`. The gateway never
 falls back to all visible departments.
+
+At the conversation layer, Codex matches the user's wording against the live
+catalog returned by `get_access_context`. If more than one current department
+could be intended, it asks the user to choose; it must not guess or select the
+first row.
 
 `effective_scope` returns the resolved `department_id`, `department_code` and
 `department_name`. A model must verify these fields before attributing employee

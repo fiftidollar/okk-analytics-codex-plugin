@@ -25,6 +25,9 @@ def test_plugin_and_marketplace_point_to_the_standalone_package():
     assert len(manifest["interface"]["defaultPrompt"]) == 3
     assert all(len(prompt) <= 128 for prompt in manifest["interface"]["defaultPrompt"])
     assert manifest["interface"]["defaultPrompt"][0] == ("Проверить подключение OKK и показать мой доступ.")
+    assert manifest["interface"]["defaultPrompt"][1] == (
+        "Покажи доступные мне отделы и краткую статистику по каждому."
+    )
     assert marketplace["plugins"][0]["source"]["path"] == "./plugins/okk-analytics"
     assert marketplace["plugins"][0]["policy"] == {
         "installation": "AVAILABLE",

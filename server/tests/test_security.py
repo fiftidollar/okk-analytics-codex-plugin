@@ -152,6 +152,8 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
     for tool in tools:
         if tool.name in department_scoped:
             assert "department_ref" in tool.inputSchema["properties"], tool.name
+            description = tool.inputSchema["properties"]["department_ref"].get("description", "")
+            assert "B2B" not in description and "ORD" not in description, tool.name
     compare_departments_schema = next(
         tool for tool in tools if tool.name == "compare_departments"
     ).inputSchema

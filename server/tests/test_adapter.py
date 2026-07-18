@@ -486,6 +486,34 @@ async def test_department_ref_resolves_exact_code_and_normalized_name_for_every_
 
 
 @pytest.mark.anyio
+async def test_new_runtime_department_requires_no_plugin_mapping_or_release():
+    first_id, new_id = str(uuid4()), str(uuid4())
+    suffix = uuid4().hex[:10]
+    platform = FakePlatform(
+        role="admin",
+        responses={"/departments": [{"id": first_id, "name": "Первоначальный отдел", "code": "initial"}]},
+    )
+
+    first, _ = await adapter(platform).resolve_department(department_ref="initial")
+    assert first["id"] == first_id
+
+    runtime_name = f"Новый отдел {suffix}"
+    runtime_code = f"runtime_{suffix}"
+    platform.responses["/departments"] = [{"id": new_id, "name": runtime_name, "code": runtime_code}]
+
+    discovered_by_code, _ = await adapter(platform).resolve_department(department_ref=runtime_code)
+    discovered_by_name, _ = await adapter(platform).resolve_department(department_ref=runtime_name)
+
+    assert discovered_by_code["id"] == new_id
+    assert discovered_by_name["id"] == new_id
+    assert [path for path, _params in platform.calls] == [
+        "/departments",
+        "/departments",
+        "/departments",
+    ]
+
+
+@pytest.mark.anyio
 async def test_filtered_overview_cannot_leak_other_department_rollups():
     b2b_id, ord_id = str(uuid4()), str(uuid4())
     platform = FakePlatform(

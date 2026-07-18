@@ -28,6 +28,13 @@ areas, weekly focus, mentoring tasks, scenarios, criteria or their performance.
 - If authentication was just completed during a task, retry
   `get_access_context`. Only its successful authenticated response may turn
   the pending login into a chat confirmation.
+- Treat `get_access_context.data.departments` as the live department catalog,
+  not as a fixed list bundled with the plugin. Never rely on remembered example
+  names or codes. A newly added or renamed department must work without a
+  plugin update as soon as it appears in the connected account's live access.
+- Match the user's wording to that live catalog. If it does not identify
+  exactly one visible department, show the applicable visible choices and ask
+  the user to select one; never guess or silently choose the first department.
 - Treat a department explicitly named by the user as a mandatory filter. Pass
   its exact visible name or code as `department_ref`; never drop that filter,
   broaden the request to all departments, or relabel another department's
@@ -49,10 +56,12 @@ areas, weekly focus, mentoring tasks, scenarios, criteria or their performance.
 Always start a task's first OKK request with `get_access_context`. Use
 `get_statistics_catalog` next when the available metrics are unclear.
 
-For a request such as "employees of B2B and their scores", call
-`get_department_statistics(department_ref="B2B")` first. It returns the full
-department ranking and KPI sources in one ACL-safe response. Use
-`list_employees` only when a directory/search result is also needed.
+For a request such as "employees of <department name> and their scores", match
+the name against the current live department catalog, then call
+`get_department_statistics(department_ref="<exact current name or code>")`
+first. It returns the full department ranking and KPI sources in one ACL-safe
+response. Use `list_employees` only when a directory/search result is also
+needed.
 
 - Company/overall KPI, ranking and trends: `get_overview_statistics`.
 - Department discovery and comparison: `list_departments`,
