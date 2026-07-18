@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 - Unreleased
+## 1.1.0 - 2026-07-18
 
 - Added three dedicated transcript tools: paginated call/transcript discovery,
   full raw/diarized/segment reading and bounded full-text search with excerpts.

@@ -131,10 +131,14 @@ $env:OKK_MCP_SMOKE_ACCESS_TOKEN = "..."
 python server/scripts/smoke_release.py --output artifacts/mcp-smoke.json
 ```
 
-The initial live gate passed TLS, migration, native production OAuth login, a
-one-department viewer ACL, and all 19 tools in release 1.0.2. The 22-tool 1.1.0
-candidate, including transcripts, requires a fresh full gate. Before each release, repeat the
-complete account/ACL matrix; accounts outside the available smoke inventory are
+The `1.1.0` live gate passed TLS/health, OAuth and protected-resource metadata,
+the unauthenticated MCP challenge, authenticated `/auth/me` revalidation for a
+one-department ORD viewer, and the runtime transcript catalog/routing contract.
+The 22-tool inventory and transcript behavior are also covered by the release
+test suite. The remaining live transcript-read smoke requires a freshly
+re-authorized account holding `okk.transcripts.read`; an older token cannot be
+upgraded through refresh by design. Before each release, repeat the complete
+account/ACL matrix; accounts outside the available smoke inventory are
 an explicit remaining coverage item, not a reason to weaken live ACL checks.
 
 Set `FORWARDED_ALLOW_IPS` only to the actual ingress proxy addresses. Using `*`

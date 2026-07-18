@@ -194,8 +194,10 @@ the OKK API. See
 
 This is a live production plugin, not a test-stand connector. Its public MCP URL
 is `https://okk-mcp.akfixdev.ru/mcp`, and its upstream is the production OKK API
-above. Production OAuth, a one-department viewer ACL and all 19 read-only tools
-for release `1.0.2` were verified on `2026-07-14`. Release `1.1.0` is currently
-a local 22-tool candidate, including transcript access, and is not live until
-its commit is explicitly approved,
-pushed and verified through the gate in `docs/deployment.md`.
+above. Release `1.1.0` is live from runtime commit `96a2b33` with 22 read-only
+tools, including ACL-safe transcript catalog/read/search. On `2026-07-18`, the
+production Compose completed successfully; health reported `1.1.0`, OAuth and
+protected-resource metadata advertised `okk.transcripts.read`, unauthenticated
+MCP returned the expected `401`, and an authenticated one-department viewer
+received only ORD plus the new transcript catalog/routing contract. Existing
+pre-`1.1.0` sessions must re-authorize before calling transcript tools.
