@@ -1,7 +1,7 @@
 {
   "name": "okk-analytics",
   "version": "1.1.0",
-  "description": "Read-only OKK analytics with native account OAuth and live ACL-aware department discovery.",
+  "description": "Read-only OKK analytics and call transcripts with native OAuth and live ACL-aware department discovery.",
   "author": {
     "name": "Alpes",
     "url": "https://github.com/fiftidollar"
@@ -9,6 +9,6 @@
   "homepage": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
   "repository": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
   "license": "MIT",
-  "keywords": ["okk", "analytics", "mcp", "read-only"],
+  "keywords": ["okk", "analytics", "transcripts", "mcp", "read-only"],
   "skills": "./skills/"
 }

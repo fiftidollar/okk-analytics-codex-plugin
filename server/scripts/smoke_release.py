@@ -22,6 +22,9 @@ EXPECTED_TOOLS = [
     "get_employee_card",
     "compare_employees",
     "get_call_statistics",
+    "list_call_transcripts",
+    "get_call_transcript",
+    "search_call_transcripts",
     "get_plan_fact_statistics",
     "get_client_statistics",
     "get_crm_statistics",
@@ -39,6 +42,9 @@ DEPARTMENT_SCOPED_TOOLS = {
     "get_employee_card",
     "compare_employees",
     "get_call_statistics",
+    "list_call_transcripts",
+    "get_call_transcript",
+    "search_call_transcripts",
     "get_plan_fact_statistics",
     "get_client_statistics",
     "get_crm_statistics",
@@ -71,6 +77,11 @@ def validate_tool_inventory(payload: dict[str, Any]) -> None:
             raise RuntimeError(f"Tool cannot resolve a named department: {tool.get('name')}")
         if tool.get("name") == "compare_departments" and "department_refs" not in properties:
             raise RuntimeError("compare_departments cannot resolve named departments")
+        if "transcript" in str(tool.get("name")):
+            schemes = (tool.get("_meta") or tool.get("meta") or {}).get("securitySchemes") or []
+            scopes = set(schemes[0].get("scopes") or []) if schemes else set()
+            if "okk.transcripts.read" not in scopes:
+                raise RuntimeError(f"Transcript tool has no transcript scope: {tool.get('name')}")
 
 
 def validate_connection_confirmation(payload: dict[str, Any]) -> None:
@@ -110,6 +121,9 @@ async def run(base_url: str, token: str | None) -> dict[str, Any]:
             raise RuntimeError("OAuth metadata does not require PKCE S256")
         if report["resource_metadata"].get("resource") != mcp_url:
             raise RuntimeError("Protected resource metadata points to another MCP URL")
+        for metadata in (report["authorization_metadata"], report["resource_metadata"]):
+            if "okk.transcripts.read" not in metadata.get("scopes_supported", []):
+                raise RuntimeError("OAuth metadata does not advertise the transcript read scope")
 
         initialize = _rpc(
             "initialize",

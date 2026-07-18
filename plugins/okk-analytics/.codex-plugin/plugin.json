@@ -1,7 +1,7 @@
 {
   "name": "okk-analytics",
   "version": "1.1.0",
-  "description": "Read-only OKK analytics: KPI, employees, mentoring, scenarios and criteria with native account OAuth.",
+  "description": "Read-only OKK analytics and ACL-safe call transcripts with native account OAuth.",
   "author": {
     "name": "Alpes",
     "url": "https://github.com/fiftidollar"
@@ -9,12 +9,12 @@
   "homepage": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
   "repository": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
   "license": "MIT",
-  "keywords": ["okk", "analytics", "kpi", "employees", "read-only"],
+  "keywords": ["okk", "analytics", "kpi", "employees", "transcripts", "read-only"],
   "skills": "./skills/",
   "interface": {
     "displayName": "OKK Analytics",
-    "shortDescription": "Вся статистика ОКК — безопасно и только на чтение.",
-    "longDescription": "Подключает Codex к вашему аккаунту ОКК через OAuth: общая, отделовая и персональная статистика, клиентские и CRM-метрики, план/факт, AI-сильные стороны и зоны роста, наставнические задачи, сценарии, критерии и их эффективность. Результаты всегда ограничены текущими правами пользователя.",
+    "shortDescription": "Статистика и транскрипции ОКК — безопасно и только на чтение.",
+    "longDescription": "Подключает Codex к вашему аккаунту ОКК через OAuth: общая, отделовая и персональная статистика, клиентские и CRM-метрики, план/факт, AI-сильные стороны и зоны роста, наставнические задачи, сценарии, критерии, транскрипции доступных звонков и поиск по ним. Результаты всегда ограничены текущими правами пользователя.",
     "developerName": "Alpes",
     "category": "Data & Analytics",
     "websiteURL": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
@@ -24,7 +24,8 @@
     "capabilities": [
       "Read-only analytics",
       "Native OKK OAuth",
-      "Access-aware employee insights"
+      "Access-aware employee insights",
+      "ACL-safe transcript search"
     ],
     "defaultPrompt": [
       "Проверить подключение OKK и показать мой доступ.",

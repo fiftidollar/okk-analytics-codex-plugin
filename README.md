@@ -15,8 +15,9 @@ the Codex/Claude Code plugin packages.
 
 ## Included
 
-- 19 strictly typed MCP tools for company, department, employee, call, client,
-  plan/fact, CRM, growth, mentoring, scenario and criterion statistics.
+- 22 strictly typed MCP tools for company, department, employee, call, client,
+  plan/fact, CRM, growth, mentoring, scenario and criterion statistics, plus
+  ACL-safe transcript catalog, full transcript reading and full-text search.
 - Full employee-card view available through the current OKK API: KPI, plan/fact,
   client and CRM metrics, AI strengths, growth areas, weekly/saved focus, active
   tasks and recent completed tasks.
@@ -42,7 +43,7 @@ the Codex/Claude Code plugin packages.
 
 ## Deliberately excluded
 
-Audio, transcripts, phone numbers, raw prompts, prompt runtime, raw AI
+Audio, structured phone-number fields, raw prompts, prompt runtime, raw AI
 reasoning, scripts, Megafon administration, processing pipeline, routing, bulk
 operations and every write action.
 
@@ -52,7 +53,7 @@ operations and every write action.
 plugins/okk-analytics/   Shared skill plus Codex and Claude Code plugin manifests
 .agents/plugins/         Codex community marketplace manifest
 .claude-plugin/          Claude Code community marketplace manifest
-server/okk_mcp/          OAuth server, encrypted sessions and 19 MCP tools
+server/okk_mcp/          OAuth server, encrypted sessions and 22 MCP tools
 server/migrations/       Standalone PostgreSQL schema
 server/tests/            Security, ACL, projection and tool-contract tests
 docs/                    Architecture, tools, security and deployment runbooks
@@ -135,6 +136,11 @@ To force a fresh account login later, use **Authenticate** in Codex or run
 The `127.0.0.1:<port>/callback/<id>` URL is the standard temporary Codex
 callback; the MCP gateway does not invent or host that address.
 
+Release `1.1.0` adds the dedicated `okk.transcripts.read` scope. Users upgrading
+from an older authenticated version must run the fresh-login action once before
+the transcript tools can be used; refresh tokens intentionally cannot gain a
+scope that was not granted during their original authorization.
+
 ## Install in Claude Code
 
 Use a current Claude Code release, then add the same public repository as a
@@ -173,6 +179,9 @@ claude plugin marketplace update alpes-community
 claude plugin update okk-analytics@alpes-community
 ```
 
+After upgrading from a pre-`1.1.0` connection, clear authentication and
+authenticate once so Claude receives the new transcript-read scope.
+
 The production target is the live OKK API at
 `https://okk-backend.akfixdev.ru/api/v1`; use `.env.production.example` as the
 deployment template. Production requires HTTPS for both the MCP gateway and
@@ -187,5 +196,6 @@ This is a live production plugin, not a test-stand connector. Its public MCP URL
 is `https://okk-mcp.akfixdev.ru/mcp`, and its upstream is the production OKK API
 above. Production OAuth, a one-department viewer ACL and all 19 read-only tools
 for release `1.0.2` were verified on `2026-07-14`. Release `1.1.0` is currently
-a local candidate and is not live until its commit is explicitly approved,
+a local 22-tool candidate, including transcript access, and is not live until
+its commit is explicitly approved,
 pushed and verified through the gate in `docs/deployment.md`.

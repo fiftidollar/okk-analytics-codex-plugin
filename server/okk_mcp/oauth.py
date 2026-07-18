@@ -26,6 +26,7 @@ from okk_mcp.models import OAuthAuthorizationCode, OAuthClient, OAuthToken
 from okk_mcp.platform_client import OKKAuthenticationError, OKKUnavailable
 from okk_mcp.runtime import platform_client
 from okk_mcp.security import (
+    ALLOWED_SCOPES,
     random_token,
     redirect_origin,
     token_hash,
@@ -68,7 +69,7 @@ def _authorization_metadata(settings: Settings) -> dict[str, Any]:
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "token_endpoint_auth_methods_supported": ["none"],
         "code_challenge_methods_supported": ["S256"],
-        "scopes_supported": ["okk.statistics.read", "okk.scenarios.read"],
+        "scopes_supported": sorted(ALLOWED_SCOPES),
         "service_documentation": f"{settings.issuer_url}/",
     }
 
@@ -83,7 +84,7 @@ def _protected_resource_metadata(settings: Settings) -> dict[str, Any]:
         "resource": settings.resource_url,
         "authorization_servers": [settings.issuer_url],
         "bearer_methods_supported": ["header"],
-        "scopes_supported": ["okk.statistics.read", "okk.scenarios.read"],
+        "scopes_supported": sorted(ALLOWED_SCOPES),
         "resource_documentation": f"{settings.issuer_url}/",
     }
 
@@ -226,9 +227,11 @@ def _render_login(
     signed_request: str,
     csrf_token: str,
     redirect_uri: str,
+    scope: str,
     error: str | None = None,
 ) -> HTMLResponse:
     error_html = f'<div class="error">{html.escape(error)}</div>' if error else ""
+    transcript_scope = ", транскрипции доступных звонков" if "okk.transcripts.read" in scope.split() else ""
     body = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Вход в ОКК</title>
 <style>:root{{--bg:#f4f6f8;--card:#fff;--text:#17202a;--muted:#637083;--brand:#1769e0;--danger:#b42318}}
@@ -240,7 +243,7 @@ button{{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;back
 <form method="post" action="/authorize"><input type="hidden" name="authorization_request" value="{html.escape(signed_request, quote=True)}"><input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}">
 <label for="email">Логин (email)</label><input id="email" name="email" type="email" autocomplete="username" maxlength="200" required autofocus>
 <label for="password">Пароль</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required>
-<div class="scope">Только чтение: статистика, карточки сотрудников, наставничество, сценарии и критерии — строго в пределах прав аккаунта.</div>
+<div class="scope">Только чтение: статистика, карточки сотрудников, наставничество, сценарии и критерии{transcript_scope} — строго в пределах прав аккаунта.</div>
 <button type="submit">Войти и разрешить доступ</button></form>
 <div class="next"><strong>Что произойдёт дальше</strong><br>Браузер передаст вход обратно в Codex. Вернитесь в Codex и выберите «Проверить подключение OKK»: сообщение «OKK подключён» с ролью и отделами означает, что вход действительно завершён.</div>
 <p><small>MCP-шлюз сразу передаёт пароль в штатный API ОКК, не сохраняет его и никогда не передаёт Codex.</small></p></section></main></body></html>"""
@@ -272,6 +275,7 @@ async def _refresh_authorization_form(
         signed_request=refreshed_request,
         csrf_token=refreshed_csrf,
         redirect_uri=auth_request["redirect_uri"],
+        scope=auth_request["scope"],
         error=error,
     )
 
@@ -321,6 +325,7 @@ async def authorize(
         signed_request=signed,
         csrf_token=csrf_token,
         redirect_uri=redirect_uri,
+        scope=requested_scope,
     )
 
 
@@ -377,6 +382,7 @@ async def authorize_login(
             signed_request=authorization_request,
             csrf_token=csrf_token,
             redirect_uri=auth_request["redirect_uri"],
+            scope=auth_request["scope"],
             error="Неверный логин или пароль",
         )
     except OKKUnavailable as exc:

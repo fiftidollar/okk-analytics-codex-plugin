@@ -94,7 +94,7 @@ def test_published_connector_is_wired_for_production_not_test_stand():
     assert settings.api_base_url == "https://okk-backend.akfixdev.ru/api/v1"
 
 
-def test_skill_forbids_credentials_writes_and_excluded_surfaces():
+def test_skill_forbids_credentials_writes_and_routes_transcripts_to_dedicated_tools():
     skill = (ROOT / "plugins/okk-analytics/skills/okk-analytics/SKILL.md").read_text(encoding="utf-8").lower()
     for required in (
         "never ask",
@@ -113,6 +113,10 @@ def test_skill_forbids_credentials_writes_and_excluded_surfaces():
         "authenticated=true",
         "okk подключён",
         "browser redirect alone",
+        "okk.transcripts.read",
+        "list_call_transcripts",
+        "get_call_transcript",
+        "search_call_transcripts",
     ):
         assert required in skill
 

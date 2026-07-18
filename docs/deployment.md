@@ -64,11 +64,17 @@ public OKK login API and does not mint OKK tokens.
    one-department ORD viewer, request B2B and assert `not_available`, zero
    employee/statistics calls after resolution, and an `access_context` that
    names only ORD.
-9. Exercise all 19 tools and search saved JSON for forbidden fields/values:
-   password, phone, audio, transcript, prompt, reasoning, script, Megafon,
-   routing and pipeline.
+9. Exercise all 22 tools. For the 19 non-transcript tools, search saved JSON
+   for forbidden fields/values: password, phone, audio, transcript, prompt,
+   reasoning, script, Megafon, routing and pipeline. For the three transcript
+   tools, verify text appears only under their documented transcript/preview/
+   excerpt fields, while structured phone, audio, PBX/external IDs and internal
+   processing fields remain absent. Test raw, diarized and segment formats,
+   search caps, result limits and a call ID outside the viewer ACL.
 10. Validate refresh rotation, reuse revocation, logout/revoke and concurrent
-    refresh behavior.
+    refresh behavior. Upgrade an account holding a pre-transcript token and
+    prove that refresh cannot silently add `okk.transcripts.read`; after a fresh
+    authorization, prove the new scope is present and transcript tools work.
 11. Install the marketplace plugin and repeat the main user flows in both
     clients:
     - Codex: confirm installation itself starts OAuth (`ON_INSTALL`) and the
@@ -126,7 +132,8 @@ python server/scripts/smoke_release.py --output artifacts/mcp-smoke.json
 ```
 
 The initial live gate passed TLS, migration, native production OAuth login, a
-one-department viewer ACL, and all 19 tools. Before each release, repeat the
+one-department viewer ACL, and all 19 tools in release 1.0.2. The 22-tool 1.1.0
+candidate, including transcripts, requires a fresh full gate. Before each release, repeat the
 complete account/ACL matrix; accounts outside the available smoke inventory are
 an explicit remaining coverage item, not a reason to weaken live ACL checks.
 

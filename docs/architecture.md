@@ -9,6 +9,7 @@ Codex MCP client
        -> existing OKK /api/v1 over HTTPS
             -> /auth/login, /auth/refresh, /auth/me
             -> existing read-only analytics GET endpoints
+            -> ACL-protected /calls/{call_id}/transcript
 ```
 
 The gateway is both the OAuth authorization server and MCP resource server. It
@@ -128,3 +129,7 @@ the same rotating OKK refresh token. No sticky sessions are required.
 Expensive cross-employee and criterion aggregation uses bounded concurrency.
 `ANALYTICS_MAX_CALLS` and `ANALYTICS_MAX_EMPLOYEES` cap a single request; a
 truncated response returns `partial` rather than silently claiming completeness.
+Transcript full-text search has its own lower
+`TRANSCRIPT_SEARCH_MAX_CALLS` cap and bounded request concurrency. Transcript
+bodies live only for the duration of the MCP request and are not written to
+PostgreSQL, Redis or operational logs.

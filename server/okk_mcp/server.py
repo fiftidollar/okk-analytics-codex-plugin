@@ -31,6 +31,8 @@ Period = Literal[
     "custom",
 ]
 TaskStatus = Literal["pending", "in_progress", "completed", "cancelled"]
+TranscriptFormat = Literal["raw", "diarized", "segments"]
+TranscriptMatchMode = Literal["phrase", "all_terms", "any_terms"]
 
 
 class AccessDepartment(BaseModel):
@@ -68,6 +70,7 @@ READ_ONLY = ToolAnnotations(
 )
 STAT_SCOPE = "okk.statistics.read"
 SCENARIO_SCOPE = "okk.scenarios.read"
+TRANSCRIPT_SCOPE = "okk.transcripts.read"
 
 
 def _security_meta(*scopes: str) -> dict[str, Any]:
@@ -129,7 +132,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             "departments present in access_context. "
             "Never ask the user for their OKK password in chat: authentication happens only "
             "on the OKK authorization page. Never infer hidden departments or entities from "
-            "not_available/omitted results. Do not request audio, transcripts, prompts, raw "
+            "not_available/omitted results. Transcripts may be read only through the dedicated "
+            "transcript tools and only for calls in the connected account's current ACL. Do not "
+            "copy transcript text into operational logs. Do not request audio, prompts, raw "
             "reasoning, routing, pipeline, Megafon administration or write operations."
         ),
         token_verifier=OKKTokenVerifier(settings.resource_url),
@@ -383,6 +388,122 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             department_id=department_id,
             department_ref=department_ref,
             employee_id=employee_id,
+            **_period_params(period, start_date, end_date),
+        )
+
+    @mcp.tool(
+        title="Каталог транскрипций звонков",
+        description=(
+            "Возвращает только доступные текущему аккаунту звонки, наличие транскрипции и "
+            "короткое превью без телефонов и аудио. Поддерживает фильтры отдела, сотрудника, "
+            "сценария и периода; недоступный фильтр никогда не расширяется до всех звонков."
+        ),
+        annotations=READ_ONLY,
+        meta=_security_meta(STAT_SCOPE, TRANSCRIPT_SCOPE),
+        structured_output=True,
+    )
+    async def list_call_transcripts(
+        period: Period = "month",
+        department_id: UUID | None = None,
+        department_ref: str | None = Field(
+            default=None, max_length=200, description="Exact visible department code or name."
+        ),
+        employee_id: UUID | None = None,
+        scenario_id: UUID | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        transcript_format: TranscriptFormat = "diarized",
+        preview_chars: int = Field(default=300, ge=0, le=2000),
+        page: int = Field(default=1, ge=1),
+        page_size: int = Field(default=25, ge=1, le=100),
+    ) -> AnalyticsEnvelope:
+        _require_scopes(STAT_SCOPE, TRANSCRIPT_SCOPE)
+        return await _read(
+            client,
+            "/mcp-read/call-transcripts",
+            department_id=department_id,
+            department_ref=department_ref,
+            employee_id=employee_id,
+            scenario_id=scenario_id,
+            transcript_format=transcript_format,
+            preview_chars=preview_chars,
+            page=page,
+            page_size=page_size,
+            **_period_params(period, start_date, end_date),
+        )
+
+    @mcp.tool(
+        title="Полная транскрипция звонка",
+        description=(
+            "Читает полную raw/diarized транскрипцию или безопасно спроецированные сегменты "
+            "одного доступного звонка. Недоступный и несуществующий UUID дают одинаковый "
+            "not_available; телефоны, аудио и внутренние поля звонка не возвращаются."
+        ),
+        annotations=READ_ONLY,
+        meta=_security_meta(STAT_SCOPE, TRANSCRIPT_SCOPE),
+        structured_output=True,
+    )
+    async def get_call_transcript(
+        call_id: UUID,
+        transcript_format: TranscriptFormat = "diarized",
+        max_chars: int = Field(default=120000, ge=1000, le=500000),
+        max_segments: int = Field(default=2000, ge=1, le=10000),
+        department_id: UUID | None = None,
+        department_ref: str | None = Field(
+            default=None, max_length=200, description="Optional exact visible department guard."
+        ),
+        employee_id: UUID | None = None,
+    ) -> AnalyticsEnvelope:
+        _require_scopes(STAT_SCOPE, TRANSCRIPT_SCOPE)
+        return await _read(
+            client,
+            f"/mcp-read/call-transcript/{call_id}",
+            transcript_format=transcript_format,
+            max_chars=max_chars,
+            max_segments=max_segments,
+            department_id=department_id,
+            department_ref=department_ref,
+            employee_id=employee_id,
+        )
+
+    @mcp.tool(
+        title="Поиск по транскрипциям",
+        description=(
+            "Ищет фразу или слова только в транскрипциях звонков из текущего ACL и возвращает "
+            "контекстные фрагменты с безопасными карточками звонков. Ответ явно показывает "
+            "число просмотренных звонков и полноту поиска."
+        ),
+        annotations=READ_ONLY,
+        meta=_security_meta(STAT_SCOPE, TRANSCRIPT_SCOPE),
+        structured_output=True,
+    )
+    async def search_call_transcripts(
+        query: str = Field(min_length=2, max_length=500),
+        period: Period = "month",
+        department_id: UUID | None = None,
+        department_ref: str | None = Field(
+            default=None, max_length=200, description="Exact visible department code or name."
+        ),
+        employee_id: UUID | None = None,
+        scenario_id: UUID | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        match_mode: TranscriptMatchMode = "phrase",
+        context_chars: int = Field(default=240, ge=40, le=2000),
+        limit: int = Field(default=25, ge=1, le=100),
+    ) -> AnalyticsEnvelope:
+        _require_scopes(STAT_SCOPE, TRANSCRIPT_SCOPE)
+        return await _read(
+            client,
+            "/mcp-read/search-call-transcripts",
+            query=query,
+            department_id=department_id,
+            department_ref=department_ref,
+            employee_id=employee_id,
+            scenario_id=scenario_id,
+            match_mode=match_mode,
+            context_chars=context_chars,
+            limit=limit,
             **_period_params(period, start_date, end_date),
         )
 

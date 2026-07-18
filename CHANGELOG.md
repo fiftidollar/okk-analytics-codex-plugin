@@ -2,6 +2,11 @@
 
 ## 1.1.0 - Unreleased
 
+- Added three dedicated transcript tools: paginated call/transcript discovery,
+  full raw/diarized/segment reading and bounded full-text search with excerpts.
+  They use the new `okk.transcripts.read` OAuth scope, upstream call ACL plus a
+  second live department/employee guard, safe call projections and explicit
+  scan/result completeness metadata.
 - Added a native Claude Code plugin manifest, marketplace, standard remote HTTP
   MCP configuration and `/okk-analytics:check-connection` command alongside the
   existing Codex package. Both clients share one skill and backend.

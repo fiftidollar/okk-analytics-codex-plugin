@@ -6,11 +6,11 @@ from uuid import uuid4
 
 import pytest
 
-from okk_mcp.backend_client import AnalyticsAdapter, BackendClient
+from okk_mcp.backend_client import AnalyticsAdapter, BackendClient, _match_positions
 from okk_mcp.config import Settings
 from okk_mcp.crypto import SessionCipher
 from okk_mcp.models import OAuthAuthorizationCode, OAuthToken, OkkAccountSession
-from okk_mcp.platform_client import AccountContext
+from okk_mcp.platform_client import AccountContext, OKKNotAvailable
 
 
 @pytest.fixture
@@ -47,6 +47,16 @@ def adapter(platform: FakePlatform) -> AnalyticsAdapter:
     return AnalyticsAdapter(platform, str(platform.context.session_id), Settings())
 
 
+def test_transcript_match_modes_are_literal_case_insensitive_and_non_regex():
+    text = "Manager: Delivery is Tuesday. Client: DELAY delivery?"
+
+    assert _match_positions(text, "delivery is Tuesday", "phrase") == [(9, 28)]
+    assert _match_positions(text, "delivery Tuesday", "all_terms")
+    assert _match_positions(text, "delivery missing", "all_terms") == []
+    assert len(_match_positions(text, "missing delivery", "any_terms")) == 2
+    assert _match_positions(text, ".*", "phrase") == []
+
+
 @pytest.mark.anyio
 async def test_access_context_is_the_definitive_authenticated_connection_confirmation():
     department_id = str(uuid4())
@@ -75,6 +85,26 @@ async def test_access_context_is_the_definitive_authenticated_connection_confirm
         "departments": [{"id": department_id, "name": "Отдел региональных продаж", "code": "ord"}],
     }
     assert platform.calls == [("/departments", [])]
+
+
+@pytest.mark.anyio
+async def test_statistics_catalog_routes_transcripts_without_listing_them_as_excluded():
+    result = await adapter(FakePlatform(role="viewer", department_ids=())).get_statistics_catalog()
+
+    domains = {row["domain"]: row["metrics"] for row in result["data"]["domains"]}
+    routes = {row["tool"] for row in result["data"]["tool_routing"]}
+    assert domains["transcripts"] == [
+        "call_catalog",
+        "full_text",
+        "speaker_segments",
+        "full_text_search",
+    ]
+    assert {
+        "list_call_transcripts",
+        "get_call_transcript",
+        "search_call_transcripts",
+    }.issubset(routes)
+    assert "transcripts" not in result["data"]["explicit_exclusions"]
 
 
 @pytest.mark.anyio
@@ -427,6 +457,15 @@ async def test_named_department_outside_acl_never_falls_back_to_visible_ord_popu
         ("get_employee_card", {"employee_id": str(uuid4()), "department_ref": "B2B"}),
         ("compare_employees", {"employee_ids": [str(uuid4())], "department_ref": "B2B"}),
         ("get_call_statistics", {"department_ref": "B2B"}),
+        ("list_call_transcripts", {"department_ref": "B2B"}),
+        (
+            "get_call_transcript",
+            {"call_id": str(uuid4()), "department_ref": "B2B"},
+        ),
+        (
+            "search_call_transcripts",
+            {"query": "delivery", "department_ref": "B2B"},
+        ),
         (
             "get_plan_fact_statistics",
             {"start_date": "2026-07-01", "end_date": "2026-07-18", "department_ref": "B2B"},
@@ -966,3 +1005,347 @@ def test_operational_trace_is_useful_but_redacts_ids_names_and_business_payload(
         "secret-session-subject",
     ):
         assert secret not in trace
+
+
+def test_transcript_search_trace_never_logs_query_or_excerpt(caplog):
+    client = BackendClient(Settings(), object())
+    with caplog.at_level("INFO", logger="okk_mcp.analytics_trace"):
+        client._trace(
+            request_id="request-transcript",
+            subject="session-secret",
+            path="/mcp-read/search-call-transcripts",
+            params={"query": "confidential delivery phrase", "period": "month"},
+            result={
+                "status": "ok",
+                "omitted_filters_count": 0,
+                "effective_scope": {"department_code": "sales"},
+                "data": {
+                    "items": [{"excerpts": [{"text": "private customer conversation"}]}],
+                    "source_complete": True,
+                },
+            },
+            duration_ms=5,
+        )
+
+    trace = caplog.text
+    assert "search_filter" in trace
+    assert "confidential delivery phrase" not in trace
+    assert "private customer conversation" not in trace
+    assert "session-secret" not in trace
+
+
+@pytest.mark.anyio
+async def test_list_call_transcripts_is_acl_scoped_and_projects_no_phone_or_audio_fields():
+    department_id, employee_id, scenario_id, call_id = (str(uuid4()) for _ in range(4))
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Sales", "code": "sales"}],
+            f"/employees/{employee_id}": {
+                "id": employee_id,
+                "full_name": "Visible Employee",
+                "department_id": department_id,
+                "department": {"id": department_id, "name": "Sales", "code": "sales"},
+            },
+            "/scenarios": {
+                "items": [
+                    {
+                        "id": scenario_id,
+                        "department_id": department_id,
+                        "name": "Discovery",
+                        "code": "discovery",
+                    }
+                ],
+                "pages": 1,
+            },
+            "/calls": {
+                "items": [
+                    {
+                        "id": call_id,
+                        "employee_id": employee_id,
+                        "scenario_id": scenario_id,
+                        "started_at": "2026-07-18T09:00:00Z",
+                        "audio_url": "https://secret.example/audio.mp3",
+                        "caller_number": "+79990000000",
+                        "callee_number": "+78880000000",
+                        "external_call_id": "private-pbx-id",
+                        "employee": {
+                            "id": employee_id,
+                            "full_name": "Visible Employee",
+                            "department": {
+                                "id": department_id,
+                                "name": "Sales",
+                                "code": "sales",
+                            },
+                        },
+                        "client": {"id": str(uuid4()), "name": "Client", "phone": "+77770000000"},
+                        "scenario": {"id": scenario_id, "name": "Discovery", "code": "discovery"},
+                    }
+                ],
+                "total": 1,
+                "page": 1,
+                "page_size": 25,
+                "pages": 1,
+            },
+            f"/calls/{call_id}/transcript": {"transcript": "Manager: Hello, client."},
+        },
+    )
+
+    result = await adapter(platform).list_call_transcripts(
+        department_ref="sales",
+        employee_id=employee_id,
+        scenario_id=scenario_id,
+        period="custom",
+        start_date="2026-07-18",
+        end_date="2026-07-18",
+    )
+
+    assert result["status"] == "ok"
+    assert result["data"]["items"][0]["preview"] == "Manager: Hello, client."
+    assert result["data"]["items"][0]["transcript_available"] is True
+    serialized = str(result)
+    for forbidden in (
+        "+79990000000",
+        "+78880000000",
+        "+77770000000",
+        "audio.mp3",
+        "private-pbx-id",
+    ):
+        assert forbidden not in serialized
+    calls_params = dict(next(params for path, params in platform.calls if path == "/calls"))
+    assert calls_params["department_id"] == department_id
+    assert calls_params["employee_id"] == employee_id
+    assert calls_params["scenario_id"] == scenario_id
+
+
+@pytest.mark.anyio
+async def test_get_call_transcript_returns_full_acl_visible_text_and_explicit_truncation():
+    department_id, employee_id, call_id = (str(uuid4()) for _ in range(3))
+    transcript = "Manager: " + ("useful conversation " * 20)
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Sales", "code": "sales"}],
+            f"/calls/{call_id}": {
+                "id": call_id,
+                "employee_id": employee_id,
+                "caller_number": "+79990000000",
+                "audio_url": "secret-audio",
+                "employee": {
+                    "id": employee_id,
+                    "full_name": "Visible Employee",
+                    "department": {"id": department_id, "name": "Sales", "code": "sales"},
+                },
+            },
+            f"/calls/{call_id}/transcript": {"transcript": transcript},
+        },
+    )
+
+    result = await adapter(platform).get_call_transcript(call_id, max_chars=120)
+
+    assert result["status"] == "partial"
+    assert result["data"]["transcript"] == transcript[:120]
+    assert result["data"]["total_chars"] == len(transcript)
+    assert result["data"]["returned_chars"] == 120
+    assert result["data"]["truncated"] is True
+    assert result["effective_scope"]["department_id"] == department_id
+    assert result["effective_scope"]["employee_id"] == employee_id
+    assert "+79990000000" not in str(result)
+    assert "secret-audio" not in str(result)
+
+
+@pytest.mark.anyio
+async def test_hidden_call_id_is_neutral_and_never_requests_its_transcript():
+    department_id, hidden_call_id = str(uuid4()), str(uuid4())
+
+    def hidden(_params):
+        raise OKKNotAvailable("hidden or missing")
+
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Sales", "code": "sales"}],
+            f"/calls/{hidden_call_id}": hidden,
+        },
+    )
+
+    result = await adapter(platform).get_call_transcript(hidden_call_id)
+
+    assert result["status"] == "not_available"
+    assert result["data"] == {}
+    assert not any(path.endswith("/transcript") for path, _params in platform.calls)
+
+
+@pytest.mark.anyio
+async def test_transcript_segment_projection_drops_unexpected_upstream_fields():
+    department_id, employee_id, call_id = (str(uuid4()) for _ in range(3))
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Sales", "code": "sales"}],
+            f"/calls/{call_id}": {
+                "id": call_id,
+                "employee_id": employee_id,
+                "employee": {
+                    "id": employee_id,
+                    "full_name": "Visible Employee",
+                    "department": {"id": department_id, "name": "Sales", "code": "sales"},
+                },
+            },
+            f"/calls/{call_id}/transcript": {
+                "segments": [
+                    {
+                        "speaker": "speaker_0",
+                        "text": "Hello",
+                        "start": 0.0,
+                        "end": 1.2,
+                        "voice_embedding": "must-not-leave",
+                        "internal_confidence": 0.99,
+                    }
+                ]
+            },
+        },
+    )
+
+    result = await adapter(platform).get_call_transcript(
+        call_id,
+        transcript_format="segments",
+    )
+
+    assert result["status"] == "ok"
+    assert result["data"]["segments"] == [{"speaker": "speaker_0", "text": "Hello", "start": 0.0, "end": 1.2}]
+    assert "must-not-leave" not in str(result)
+    assert "internal_confidence" not in str(result)
+
+
+@pytest.mark.anyio
+async def test_gateway_drops_a_hidden_department_call_even_if_upstream_list_leaks_it():
+    visible_department_id, hidden_department_id = str(uuid4()), str(uuid4())
+    employee_id, call_id = str(uuid4()), str(uuid4())
+    platform = FakePlatform(
+        department_ids=(visible_department_id,),
+        responses={
+            "/departments": [
+                {"id": visible_department_id, "name": "Visible", "code": "visible"},
+                {"id": hidden_department_id, "name": "Hidden", "code": "hidden"},
+            ],
+            "/calls": {
+                "items": [
+                    {
+                        "id": call_id,
+                        "employee_id": employee_id,
+                        "employee": {
+                            "id": employee_id,
+                            "full_name": "Hidden Employee",
+                            "department": {
+                                "id": hidden_department_id,
+                                "name": "Hidden",
+                                "code": "hidden",
+                            },
+                        },
+                    }
+                ],
+                "total": 1,
+                "page": 1,
+                "page_size": 25,
+                "pages": 1,
+            },
+        },
+    )
+
+    result = await adapter(platform).list_call_transcripts()
+
+    assert result["status"] == "no_data"
+    assert result["data"]["items"] == []
+    assert result["omitted_filters_count"] == 1
+    assert "Hidden Employee" not in str(result)
+    assert not any(path.endswith("/transcript") for path, _params in platform.calls)
+
+
+@pytest.mark.anyio
+async def test_search_call_transcripts_matches_only_acl_visible_calls_and_reports_completeness():
+    department_id, employee_id = str(uuid4()), str(uuid4())
+    first_call_id, second_call_id = str(uuid4()), str(uuid4())
+    call_rows = [
+        {
+            "id": call_id,
+            "employee_id": employee_id,
+            "started_at": f"2026-07-1{index}T09:00:00Z",
+            "employee": {
+                "id": employee_id,
+                "full_name": "Visible Employee",
+                "department": {"id": department_id, "name": "Sales", "code": "sales"},
+            },
+        }
+        for index, call_id in enumerate((first_call_id, second_call_id), start=1)
+    ]
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Sales", "code": "sales"}],
+            "/calls": {"items": call_rows, "total": 2, "pages": 1},
+            f"/calls/{first_call_id}/transcript": {
+                "transcript": "Manager: We discussed delivery next Tuesday with the client."
+            },
+            f"/calls/{second_call_id}/transcript": {
+                "transcript": "Manager: The customer asked only about pricing."
+            },
+        },
+    )
+
+    result = await adapter(platform).search_call_transcripts(
+        "delivery next Tuesday",
+        department_ref="Sales",
+        period="custom",
+        start_date="2026-07-01",
+        end_date="2026-07-18",
+    )
+
+    assert result["status"] == "ok"
+    assert result["data"]["source_complete"] is True
+    assert result["data"]["scanned_calls"] == 2
+    assert result["data"]["returned_matches"] == 1
+    assert result["data"]["items"][0]["call"]["id"] == first_call_id
+    assert "delivery next Tuesday" in result["data"]["items"][0]["excerpts"][0]["text"]
+    calls_params = dict(next(params for path, params in platform.calls if path == "/calls"))
+    assert calls_params["department_id"] == department_id
+
+
+@pytest.mark.anyio
+async def test_transcript_search_cap_returns_partial_instead_of_false_exhaustive_no_data():
+    department_id, employee_id = str(uuid4()), str(uuid4())
+    call_ids = [str(uuid4()) for _ in range(30)]
+    calls = [
+        {
+            "id": call_id,
+            "employee_id": employee_id,
+            "employee": {
+                "id": employee_id,
+                "full_name": "Visible Employee",
+                "department": {"id": department_id, "name": "Sales", "code": "sales"},
+            },
+        }
+        for call_id in call_ids
+    ]
+    responses = {
+        "/departments": [{"id": department_id, "name": "Sales", "code": "sales"}],
+        "/calls": {"items": calls, "total": 30, "pages": 1},
+        **{
+            f"/calls/{call_id}/transcript": {"transcript": "No matching phrase here."}
+            for call_id in call_ids[:25]
+        },
+    }
+    platform = FakePlatform(department_ids=(department_id,), responses=responses)
+    analytics = AnalyticsAdapter(
+        platform,
+        str(platform.context.session_id),
+        Settings(transcript_search_max_calls=25),
+    )
+
+    result = await analytics.search_call_transcripts("needle", period="today")
+
+    assert result["status"] == "partial"
+    assert result["data"]["returned_matches"] == 0
+    assert result["data"]["scanned_calls"] == 25
+    assert result["data"]["source_calls_total"] == 30
+    assert result["data"]["source_complete"] is False

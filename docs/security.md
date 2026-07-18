@@ -36,9 +36,17 @@
 
 ## Data minimization
 
-Safe projections exclude email, password/PBX fields, phone numbers, audio URLs,
-transcripts, raw prompts, prompt runtime, raw reasoning, scripts, Megafon,
+Safe projections exclude email, password/PBX fields, structured phone numbers,
+audio URLs, raw prompts, prompt runtime, raw reasoning, scripts, Megafon,
 routing and pipeline state. Nothing from an analytics response is persisted.
+
+Transcript content is a narrowly scoped exception. Only the three dedicated
+tools may serialize it, and all require both `okk.transcripts.read` and the
+statistics scope. The gateway first applies the normal
+upstream call ACL, then validates the call's employee/department against the
+fresh live catalog. It returns no phone/audio/external-call fields, never
+persists or caches transcript bodies, and never includes search text, excerpts
+or transcript payloads in operational traces.
 
 Operational observability is deliberately metadata-only. Structured traces
 record filter presence/counts, timing, status and safe completeness markers,
@@ -47,7 +55,8 @@ but never raw selectors, UUIDs, names or response payloads.
 Criterion aggregation currently has to read the existing OKK call-detail
 response because the platform does not yet expose a criteria-only endpoint. The
 gateway immediately selects evaluation item IDs/scores in memory and never
-serializes or stores transcript/reasoning/audio fields. A future platform
+serializes transcript text through a non-transcript tool or stores
+transcript/reasoning/audio fields. A future platform
 criteria-only GET endpoint should replace this compatibility path.
 
 ## OAuth requirements
@@ -71,6 +80,9 @@ criteria-only GET endpoint should replace this compatibility path.
   a no-store recovery page and tells the user to restart authentication from
   Codex; it does not manufacture an authorization session.
 - Exact MCP resource indicator.
+- Transcript access is a separate `okk.transcripts.read` grant. Existing access
+  and refresh tokens retain their original scope and require a fresh OAuth
+  authorization before transcript tools become available.
 - Public clients only (`token_endpoint_auth_method=none`).
 - Dynamic registration never serializes absent optional URI metadata as JSON
   `null`; fields such as `client_uri` are omitted unless they contain a

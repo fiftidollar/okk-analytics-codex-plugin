@@ -160,6 +160,54 @@ def _select_visible(requested: list[str], visible: set[str]) -> tuple[list[str],
     return effective, omitted
 
 
+def _normalized_search_text(value: Any) -> str:
+    return unicodedata.normalize("NFKC", str(value or "")).casefold()
+
+
+def _search_terms(query: str) -> list[str]:
+    return [term for term in re.findall(r"[\w-]+", _normalized_search_text(query)) if term]
+
+
+def _match_positions(text: str, query: str, mode: str) -> list[tuple[int, int]]:
+    """Return bounded, deterministic match spans without interpreting a regex."""
+    if mode == "phrase":
+        needles = [query]
+    else:
+        needles = _search_terms(query)
+    patterns = [re.compile(re.escape(needle), flags=re.IGNORECASE) for needle in needles if needle]
+    if mode == "all_terms" and any(pattern.search(text) is None for pattern in patterns):
+        return []
+    positions: list[tuple[int, int]] = []
+    for pattern in patterns:
+        positions.extend((match.start(), match.end()) for match in pattern.finditer(text))
+        if len(positions) >= 100:
+            break
+    return sorted(set(positions))[:100]
+
+
+def _match_excerpts(
+    text: str,
+    positions: list[tuple[int, int]],
+    *,
+    context_chars: int,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    excerpts: list[dict[str, Any]] = []
+    for start, end in positions[:limit]:
+        excerpt_start = max(0, start - context_chars)
+        excerpt_end = min(len(text), end + context_chars)
+        excerpts.append(
+            {
+                "text": text[excerpt_start:excerpt_end],
+                "start_char": excerpt_start,
+                "end_char": excerpt_end,
+                "match_start_char": start,
+                "match_end_char": end,
+            }
+        )
+    return excerpts
+
+
 class AnalyticsAdapter:
     def __init__(
         self,
@@ -373,6 +421,108 @@ class AnalyticsAdapter:
         }
 
     @staticmethod
+    def _safe_call(row: dict[str, Any]) -> dict[str, Any]:
+        employee = row.get("employee") if isinstance(row.get("employee"), dict) else None
+        department = (
+            employee.get("department") if employee and isinstance(employee.get("department"), dict) else None
+        )
+        client = row.get("client") if isinstance(row.get("client"), dict) else None
+        scenario = row.get("scenario") if isinstance(row.get("scenario"), dict) else None
+        return {
+            "id": str(row.get("id")),
+            "employee_id": str(row.get("employee_id")) if row.get("employee_id") else None,
+            "scenario_id": str(row.get("scenario_id")) if row.get("scenario_id") else None,
+            "detected_scenario_code": row.get("detected_scenario_code"),
+            "direction": row.get("direction"),
+            "started_at": row.get("started_at"),
+            "ended_at": row.get("ended_at"),
+            "duration": row.get("duration"),
+            "quality_score": row.get("quality_score"),
+            "processing_status": row.get("processing_status"),
+            "conversation_status": row.get("conversation_status"),
+            "call_status": row.get("call_status"),
+            "manual_tag": row.get("manual_tag"),
+            "call_summary": row.get("call_summary"),
+            "employee": {
+                "id": str(employee.get("id")),
+                "full_name": employee.get("full_name"),
+                "department": {
+                    "id": str(department.get("id")),
+                    "name": department.get("name"),
+                    "code": department.get("code"),
+                }
+                if department
+                else None,
+            }
+            if employee
+            else None,
+            "client": {
+                "id": str(client.get("id")),
+                "name": client.get("name"),
+            }
+            if client
+            else None,
+            "scenario": {
+                "id": str(scenario.get("id")),
+                "name": scenario.get("name"),
+                "code": scenario.get("code"),
+            }
+            if scenario
+            else None,
+        }
+
+    @staticmethod
+    def _safe_segments(rows: Any) -> list[dict[str, Any]]:
+        if not isinstance(rows, list):
+            return []
+        return [
+            {
+                "speaker": row.get("speaker"),
+                "text": row.get("text"),
+                "start": row.get("start"),
+                "end": row.get("end"),
+            }
+            for row in rows
+            if isinstance(row, dict)
+        ]
+
+    async def _visible_call(
+        self,
+        row: dict[str, Any],
+        *,
+        department_id: str | None = None,
+        employee_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Apply a second ACL/cross-filter guard to an upstream call payload."""
+        safe = self._safe_call(row)
+        if employee_id and safe.get("employee_id") != employee_id:
+            return None
+        nested_employee = safe.get("employee") or {}
+        nested_department = nested_employee.get("department") or {}
+        call_department_id = str(nested_department.get("id") or "")
+        if not call_department_id and safe.get("employee_id"):
+            resolved_employee = await self.employee(str(safe["employee_id"]))
+            if resolved_employee:
+                call_department_id = str(resolved_employee.get("department_id") or "")
+                if not safe.get("employee"):
+                    safe["employee"] = {
+                        "id": resolved_employee["id"],
+                        "full_name": resolved_employee.get("full_name"),
+                        "department": resolved_employee.get("department"),
+                    }
+        if department_id and call_department_id != department_id:
+            return None
+        context = await self.context()
+        if not context.is_admin:
+            visible = {str(item["id"]) for item in await self.departments()}
+            if not call_department_id or call_department_id not in visible:
+                return None
+        return safe
+
+    async def _call_transcript_payload(self, call_id: str, transcript_format: str) -> dict[str, Any]:
+        return await self._get(f"/calls/{call_id}/transcript", format=transcript_format)
+
+    @staticmethod
     def _criteria(row: dict[str, Any]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         for category in sorted(row.get("categories") or [], key=lambda item: item.get("sort_order", 0)):
@@ -529,11 +679,13 @@ class AnalyticsAdapter:
         department_id: str | None = None,
         employee_id: str | None = None,
         scenario_id: str | None = None,
+        max_calls: int | None = None,
     ) -> tuple[list[dict[str, Any]], int, bool]:
+        cap = min(max_calls or self.settings.analytics_max_calls, self.settings.analytics_max_calls)
         rows: list[dict[str, Any]] = []
         page = 1
         total = 0
-        while len(rows) < self.settings.analytics_max_calls:
+        while len(rows) < cap:
             payload = await self._get(
                 "/calls",
                 department_id=department_id,
@@ -546,14 +698,12 @@ class AnalyticsAdapter:
             )
             total = int(payload.get("total") or 0)
             rows.extend(payload.get("items") or [])
-            if len(rows) >= self.settings.analytics_max_calls and (
-                page < int(payload.get("pages") or 1) or len(rows) > self.settings.analytics_max_calls
-            ):
-                return rows[: self.settings.analytics_max_calls], total, False
+            if len(rows) >= cap and (page < int(payload.get("pages") or 1) or len(rows) > cap):
+                return rows[:cap], total, False
             if page >= int(payload.get("pages") or 1):
                 return rows, total, True
             page += 1
-        return rows[: self.settings.analytics_max_calls], total, False
+        return rows[:cap], total, False
 
     async def dispatch(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         routes = {
@@ -566,6 +716,8 @@ class AnalyticsAdapter:
             "/mcp-read/employees": self.list_employees,
             "/mcp-read/compare-employees": self.compare_employees,
             "/mcp-read/call-statistics": self.get_call_statistics,
+            "/mcp-read/call-transcripts": self.list_call_transcripts,
+            "/mcp-read/search-call-transcripts": self.search_call_transcripts,
             "/mcp-read/plan-fact-statistics": self.get_plan_fact_statistics,
             "/mcp-read/client-statistics": self.get_client_statistics,
             "/mcp-read/crm-statistics": self.get_crm_statistics,
@@ -584,6 +736,9 @@ class AnalyticsAdapter:
         if path.startswith("/mcp-read/scenario-criteria/"):
             params["scenario_id"] = path.rsplit("/", 1)[-1]
             return await self.get_scenario_criteria(**params)
+        if path.startswith("/mcp-read/call-transcript/"):
+            params["call_id"] = path.rsplit("/", 1)[-1]
+            return await self.get_call_transcript(**params)
         handler = routes.get(path)
         if not handler:
             raise ValueError("Unknown read-only analytics route")
@@ -609,6 +764,10 @@ class AnalyticsAdapter:
             },
             {"domain": "employees", "metrics": ["card", "strengths", "growth_areas", "focus", "mentoring"]},
             {"domain": "plans", "metrics": ["total", "inbound", "outbound", "new", "regular", "daily"]},
+            {
+                "domain": "transcripts",
+                "metrics": ["call_catalog", "full_text", "speaker_segments", "full_text_search"],
+            },
             {
                 "domain": "scenarios",
                 "metrics": ["catalog", "criteria", "scenario_performance", "criterion_performance"],
@@ -641,6 +800,18 @@ class AnalyticsAdapter:
                         "use_for": "employee comparison, optionally guarded by department",
                     },
                     {"tool": "get_call_statistics", "use_for": "call volume, quality and daily trend"},
+                    {
+                        "tool": "list_call_transcripts",
+                        "use_for": "ACL-scoped call catalog with transcript availability and previews",
+                    },
+                    {
+                        "tool": "get_call_transcript",
+                        "use_for": "full raw, diarized or speaker-segment transcript of one accessible call",
+                    },
+                    {
+                        "tool": "search_call_transcripts",
+                        "use_for": "full-text search across transcripts of ACL-scoped calls",
+                    },
                     {"tool": "get_plan_fact_statistics", "use_for": "employee and department call plan/fact"},
                     {"tool": "get_client_statistics", "use_for": "client/contact/repeat/no-answer metrics"},
                     {"tool": "get_crm_statistics", "use_for": "latest Bitrix snapshots only"},
@@ -675,13 +846,13 @@ class AnalyticsAdapter:
                 "completeness_contract": {
                     "employees": "source_total/source_complete distinguish full population from configured cap",
                     "calls": "source_calls/source_calls_total and partial identify truncation",
+                    "transcript_search": "scanned_calls/source_calls_total and source_complete identify bounded search",
                     "mentoring": "active 5 and completed 10 tasks per employee; always a bounded window",
                     "crm": "latest snapshot per employee only; requested historical dates are never mislabeled",
                     "historical_scenarios": "available only when the connected OKK role exposes them",
                 },
                 "explicit_exclusions": [
                     "audio",
-                    "transcripts",
                     "raw_prompts",
                     "prompt_runtime",
                     "raw_reasoning",
@@ -1017,6 +1188,348 @@ class AnalyticsAdapter:
             data,
             status="ok" if data else "no_data",
             scope={**self.department_scope(department_row), "employee_ids": effective},
+            period=bounds,
+            omitted=omitted,
+        )
+
+    async def _resolve_transcript_scope(
+        self,
+        *,
+        department_id: Any = None,
+        department_ref: Any = None,
+        employee_id: Any = None,
+        scenario_id: Any = None,
+    ) -> tuple[
+        dict[str, Any] | None,
+        dict[str, Any] | None,
+        dict[str, Any] | None,
+        bool,
+    ]:
+        department_row, employee_row, invalid = await self.resolve_entity_scope(
+            department_id=department_id,
+            department_ref=department_ref,
+            employee_id=employee_id,
+        )
+        if invalid:
+            return department_row, employee_row, None, True
+        scenario_row = None
+        if scenario_id:
+            department = str(department_row["id"]) if department_row else None
+            scenarios, _ = await self.scenarios(department, include_inactive=True)
+            scenario_row = next(
+                (row for row in scenarios if str(row.get("id")) == str(scenario_id)),
+                None,
+            )
+            if scenario_row is None:
+                return department_row, employee_row, None, True
+            scenario_department_id = str(scenario_row.get("department_id") or "")
+            if department_row is None:
+                department_row = next(
+                    (row for row in await self.departments() if str(row.get("id")) == scenario_department_id),
+                    None,
+                )
+                if department_row is None:
+                    return None, employee_row, None, True
+            if employee_row and str(employee_row.get("department_id")) != scenario_department_id:
+                return department_row, employee_row, None, True
+        return department_row, employee_row, scenario_row, False
+
+    async def list_call_transcripts(
+        self,
+        period: str = "month",
+        department_id: Any = None,
+        department_ref: Any = None,
+        employee_id: Any = None,
+        scenario_id: Any = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        transcript_format: str = "diarized",
+        preview_chars: int = 300,
+        page: int = 1,
+        page_size: int = 25,
+        **_: Any,
+    ) -> dict[str, Any]:
+        bounds = _period_bounds(period, start_date, end_date)
+        department_row, employee_row, scenario_row, invalid = await self._resolve_transcript_scope(
+            department_id=department_id,
+            department_ref=department_ref,
+            employee_id=employee_id,
+            scenario_id=scenario_id,
+        )
+        if invalid:
+            return await self.envelope(
+                {"reason": "requested_scope_not_available"},
+                status="not_available",
+                period=bounds,
+            )
+        department = str(department_row["id"]) if department_row else None
+        employee = str(employee_row["id"]) if employee_row else None
+        scenario = str(scenario_row.get("id")) if scenario_row else None
+        payload = await self._get(
+            "/calls",
+            department_id=department,
+            employee_id=employee,
+            scenario_id=scenario,
+            date_from=bounds[0],
+            date_to=bounds[1],
+            page=page,
+            page_size=page_size,
+        )
+
+        async def load(row: dict[str, Any]) -> dict[str, Any] | None:
+            call = await self._visible_call(
+                row,
+                department_id=department,
+                employee_id=employee,
+            )
+            if not call:
+                return None
+            try:
+                transcript = await self._bounded(
+                    lambda: self._call_transcript_payload(call["id"], transcript_format)
+                )
+            except OKKNotAvailable:
+                return None
+            if transcript_format == "segments":
+                segments = self._safe_segments(transcript.get("segments"))
+                preview = segments[: min(len(segments), 5)] if preview_chars else []
+                available = bool(segments)
+                transcript_size = len(segments)
+            else:
+                text = transcript.get("transcript")
+                text = text if isinstance(text, str) else ""
+                preview = text[:preview_chars] if preview_chars else ""
+                available = bool(text.strip())
+                transcript_size = len(text)
+            return {
+                "call": call,
+                "transcript_format": transcript_format,
+                "transcript_available": available,
+                "transcript_size": transcript_size,
+                "preview": preview,
+                "preview_truncated": bool(available and transcript_size > len(preview)),
+            }
+
+        loaded = await asyncio.gather(*(load(row) for row in payload.get("items") or []))
+        items = [row for row in loaded if row is not None]
+        omitted = len(loaded) - len(items)
+        data = {
+            "items": items,
+            "total_calls": int(payload.get("total") or 0),
+            "page": int(payload.get("page") or page),
+            "page_size": int(payload.get("page_size") or page_size),
+            "pages": int(payload.get("pages") or 0),
+            "returned_calls": len(items),
+            "transcripts_available": sum(1 for row in items if row.get("transcript_available")),
+        }
+        return await self.envelope(
+            data,
+            status="ok" if items else "no_data",
+            scope={
+                **self.department_scope(department_row),
+                "employee_id": employee,
+                "scenario_id": scenario,
+                "transcript_format": transcript_format,
+            },
+            period=bounds,
+            omitted=omitted,
+        )
+
+    async def get_call_transcript(
+        self,
+        call_id: str,
+        transcript_format: str = "diarized",
+        max_chars: int = 120000,
+        max_segments: int = 2000,
+        department_id: Any = None,
+        department_ref: Any = None,
+        employee_id: Any = None,
+        **_: Any,
+    ) -> dict[str, Any]:
+        department_row, employee_row, invalid = await self.resolve_entity_scope(
+            department_id=department_id,
+            department_ref=department_ref,
+            employee_id=employee_id,
+        )
+        if invalid:
+            return await self.envelope({"reason": "requested_scope_not_available"}, status="not_available")
+        department = str(department_row["id"]) if department_row else None
+        employee = str(employee_row["id"]) if employee_row else None
+        try:
+            raw_call = await self._get(f"/calls/{call_id}")
+        except OKKNotAvailable:
+            return await self.envelope({}, status="not_available")
+        call = await self._visible_call(
+            raw_call,
+            department_id=department,
+            employee_id=employee,
+        )
+        if not call:
+            return await self.envelope({}, status="not_available")
+        if department_row is None:
+            call_department = ((call.get("employee") or {}).get("department") or {}).get("id")
+            department_row = next(
+                (row for row in await self.departments() if str(row.get("id")) == str(call_department or "")),
+                None,
+            )
+        effective_employee = employee or call.get("employee_id")
+        try:
+            payload = await self._call_transcript_payload(call_id, transcript_format)
+        except OKKNotAvailable:
+            return await self.envelope({}, status="not_available")
+        if transcript_format == "segments":
+            source = self._safe_segments(payload.get("segments"))
+            returned = source[:max_segments]
+            truncated = len(returned) < len(source)
+            transcript_data: dict[str, Any] = {
+                "segments": returned,
+                "total_segments": len(source),
+                "returned_segments": len(returned),
+            }
+            available = bool(source)
+        else:
+            source_text = payload.get("transcript")
+            source_text = source_text if isinstance(source_text, str) else ""
+            returned_text = source_text[:max_chars]
+            truncated = len(returned_text) < len(source_text)
+            transcript_data = {
+                "transcript": returned_text,
+                "total_chars": len(source_text),
+                "returned_chars": len(returned_text),
+            }
+            available = bool(source_text.strip())
+        data = {
+            "call": call,
+            "transcript_format": transcript_format,
+            "transcript_available": available,
+            "truncated": truncated,
+            **transcript_data,
+        }
+        return await self.envelope(
+            data,
+            status="partial" if truncated else ("ok" if available else "no_data"),
+            scope={
+                **self.department_scope(department_row),
+                "employee_id": effective_employee,
+                "call_id": call_id,
+                "transcript_format": transcript_format,
+            },
+        )
+
+    async def search_call_transcripts(
+        self,
+        query: str,
+        period: str = "month",
+        department_id: Any = None,
+        department_ref: Any = None,
+        employee_id: Any = None,
+        scenario_id: Any = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        match_mode: str = "phrase",
+        context_chars: int = 240,
+        limit: int = 25,
+        **_: Any,
+    ) -> dict[str, Any]:
+        query = query.strip()
+        if len(query) < 2:
+            raise ValueError("query must contain at least two non-whitespace characters")
+        bounds = _period_bounds(period, start_date, end_date)
+        department_row, employee_row, scenario_row, invalid = await self._resolve_transcript_scope(
+            department_id=department_id,
+            department_ref=department_ref,
+            employee_id=employee_id,
+            scenario_id=scenario_id,
+        )
+        if invalid:
+            return await self.envelope(
+                {"reason": "requested_scope_not_available"},
+                status="not_available",
+                period=bounds,
+            )
+        department = str(department_row["id"]) if department_row else None
+        employee = str(employee_row["id"]) if employee_row else None
+        scenario = str(scenario_row.get("id")) if scenario_row else None
+        calls, total, calls_complete = await self.calls(
+            start=bounds[0],
+            end=bounds[1],
+            department_id=department,
+            employee_id=employee,
+            scenario_id=scenario,
+            max_calls=self.settings.transcript_search_max_calls,
+        )
+        visible_calls: list[dict[str, Any]] = []
+        omitted = 0
+        for row in calls:
+            call = await self._visible_call(
+                row,
+                department_id=department,
+                employee_id=employee,
+            )
+            if call:
+                visible_calls.append(call)
+            else:
+                omitted += 1
+
+        async def search(call: dict[str, Any]) -> dict[str, Any] | None:
+            try:
+                payload = await self._bounded(lambda: self._call_transcript_payload(call["id"], "diarized"))
+            except OKKNotAvailable:
+                return None
+            transcript = payload.get("transcript")
+            if not isinstance(transcript, str) or not transcript.strip():
+                return None
+            positions = _match_positions(transcript, query, match_mode)
+            if not positions:
+                return None
+            return {
+                "call": call,
+                "match_count": len(positions),
+                "excerpts": _match_excerpts(
+                    transcript,
+                    positions,
+                    context_chars=context_chars,
+                ),
+                "transcript_chars": len(transcript),
+            }
+
+        matches: list[dict[str, Any]] = []
+        scanned = 0
+        batch_size = self.settings.analytics_parallel_requests
+        for start in range(0, len(visible_calls), batch_size):
+            batch = visible_calls[start : start + batch_size]
+            batch_matches = await asyncio.gather(*(search(call) for call in batch))
+            scanned += len(batch)
+            matches.extend(row for row in batch_matches if row is not None)
+            if len(matches) >= limit:
+                break
+        result_complete = len(matches) <= limit and scanned == len(visible_calls)
+        matches = matches[:limit]
+        source_complete = calls_complete and scanned == len(visible_calls)
+        data = {
+            "items": matches,
+            "query": query,
+            "match_mode": match_mode,
+            "returned_matches": len(matches),
+            "scanned_calls": scanned,
+            "candidate_calls_loaded": len(visible_calls),
+            "source_calls_total": total,
+            "source_complete": source_complete,
+            "result_complete": result_complete,
+            "search_call_cap": self.settings.transcript_search_max_calls,
+            "result_limit": limit,
+        }
+        return await self.envelope(
+            data,
+            status=(
+                "partial" if not source_complete or not result_complete else ("ok" if matches else "no_data")
+            ),
+            scope={
+                **self.department_scope(department_row),
+                "employee_id": employee,
+                "scenario_id": scenario,
+                "transcript_format": "diarized",
+            },
             period=bounds,
             omitted=omitted,
         )

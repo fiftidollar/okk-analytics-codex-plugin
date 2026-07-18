@@ -1,13 +1,14 @@
 ---
 name: okk-analytics
-description: Use the connected OKK account for read-only business statistics, employee cards, AI strengths and growth areas, mentoring tasks, plans, CRM, scenarios and criteria.
+description: Use the connected OKK account for read-only business statistics, employee cards, call transcripts and transcript search, AI strengths and growth areas, mentoring tasks, plans, CRM, scenarios and criteria.
 ---
 
 # OKK Analytics
 
 Use this skill when the user asks about OKK statistics, calls, KPI, departments,
 employees, employee cards, client work, plan/fact, CRM, AI strengths, growth
-areas, weekly focus, mentoring tasks, scenarios, criteria or their performance.
+areas, weekly focus, mentoring tasks, call transcripts, transcript search,
+scenarios, criteria or their performance.
 
 ## Authentication and safety
 
@@ -50,6 +51,13 @@ areas, weekly focus, mentoring tasks, scenarios, criteria or their performance.
   inaccessible one. Never infer or reveal which case occurred.
 - If a viewer has no assigned departments, an empty successful response is the
   correct result.
+- Transcript text is sensitive business content. Use only
+  `list_call_transcripts`, `get_call_transcript` and
+  `search_call_transcripts`, which require `okk.statistics.read` plus
+  `okk.transcripts.read`. Never infer
+  a transcript from summaries, copy transcript text into logs/files unless the
+  user explicitly asks for an artifact, or combine a failed department filter
+  with a broader transcript request.
 
 ## Tool routing
 
@@ -69,6 +77,13 @@ needed.
 - Employee discovery and full card: `list_employees`, `get_employee_card`,
   `compare_employees`.
 - Calls, duration, scores and day trend: `get_call_statistics`.
+- Call discovery and transcript availability: `list_call_transcripts`.
+- Full raw/diarized text or speaker segments for one known accessible call:
+  `get_call_transcript`.
+- Phrase/word search across ACL-accessible call text:
+  `search_call_transcripts`. Preserve `scanned_calls`, `source_calls_total`,
+  `source_complete` and `result_complete`; a bounded search is not proof that
+  the phrase is absent from unscanned calls.
 - Plans and actual completion: `get_plan_fact_statistics`.
 - New/regular client contacts: `get_client_statistics`.
 - Bitrix CRM snapshot statistics: `get_crm_statistics`.
@@ -108,7 +123,7 @@ loaded.
 
 ## Explicitly out of scope
 
-Do not request or expose audio, transcripts, raw prompts, prompt runtime, raw AI
+Do not request or expose audio, structured phone-number fields, raw prompts, prompt runtime, raw AI
 reasoning, scripts, Megafon administration, processing pipeline state, routing,
 bulk operations or any write action. These exclusions are intentional even if
 another OKK endpoint happens to contain such data.

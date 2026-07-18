@@ -11,6 +11,10 @@ The gateway stores encrypted OKK access/refresh sessions and hashed OAuth
 codes/tokens so the connection can remain authenticated. Read-only business
 responses, employee names, KPI values, AI strengths/growth observations and
 mentoring data are processed in memory and are not persisted by the gateway.
+When the user invokes a dedicated transcript tool, the gateway also processes
+the text of ACL-accessible calls in memory and returns it to the connected MCP
+client/model. Transcript text can contain personal or confidential speech; it
+is never stored in the gateway database, cache or operational logs.
 
 Operational logs contain a request ID, pseudonymous actor hash, normalized tool
 name, filter-presence/count flags, timing, result status, resolved department

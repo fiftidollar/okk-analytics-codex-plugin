@@ -20,6 +20,7 @@ from okk_mcp.config import Settings
 from okk_mcp.main import app
 from okk_mcp.platform_client import OKKAuthenticationError
 from okk_mcp.security import (
+    DEFAULT_SCOPES,
     redirect_origin,
     token_hash,
     validate_redirect_uri,
@@ -85,11 +86,33 @@ def test_redirect_origin_is_csp_safe_and_keeps_the_exact_port(uri, origin):
 
 
 def test_scopes_are_allowlisted_and_canonicalized():
-    assert validate_scopes("okk.scenarios.read okk.statistics.read") == (
-        "okk.scenarios.read okk.statistics.read"
+    assert validate_scopes("okk.transcripts.read okk.scenarios.read okk.statistics.read") == (
+        "okk.scenarios.read okk.statistics.read okk.transcripts.read"
     )
     with pytest.raises(ValueError):
         validate_scopes("okk.statistics.write")
+    assert validate_scopes(None) == ("okk.scenarios.read okk.statistics.read okk.transcripts.read")
+    assert "okk.transcripts.read" in DEFAULT_SCOPES
+
+
+def test_login_consent_names_transcripts_only_when_that_scope_is_requested():
+    settings = Settings()
+    common = {
+        "settings": settings,
+        "client_name": "Test client",
+        "signed_request": "signed",
+        "csrf_token": "csrf",
+        "redirect_uri": "http://127.0.0.1:3210/callback",
+    }
+
+    without_scope = oauth._render_login(scope="okk.statistics.read", **common).body.decode()
+    with_scope = oauth._render_login(
+        scope="okk.statistics.read okk.transcripts.read",
+        **common,
+    ).body.decode()
+
+    assert "транскрипции доступных звонков" not in without_scope
+    assert "транскрипции доступных звонков" in with_scope
 
 
 def test_mcp_has_exact_typed_read_only_tool_inventory():
@@ -108,6 +131,9 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
         "get_employee_card",
         "compare_employees",
         "get_call_statistics",
+        "list_call_transcripts",
+        "get_call_transcript",
+        "search_call_transcripts",
         "get_plan_fact_statistics",
         "get_client_statistics",
         "get_crm_statistics",
@@ -139,6 +165,9 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
         "get_employee_card",
         "compare_employees",
         "get_call_statistics",
+        "list_call_transcripts",
+        "get_call_transcript",
+        "search_call_transcripts",
         "get_plan_fact_statistics",
         "get_client_statistics",
         "get_crm_statistics",
@@ -161,6 +190,16 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
     access_tool = next(tool for tool in tools if tool.name == "get_access_context")
     assert "подтверждает подключение ОКК" in access_tool.description
     assert "OKK подключён" in access_tool.description
+    transcript_tools = {
+        tool.name: set(tool.meta["securitySchemes"][0]["scopes"])
+        for tool in tools
+        if "transcript" in tool.name
+    }
+    assert transcript_tools == {
+        "list_call_transcripts": {"okk.statistics.read", "okk.transcripts.read"},
+        "get_call_transcript": {"okk.statistics.read", "okk.transcripts.read"},
+        "search_call_transcripts": {"okk.statistics.read", "okk.transcripts.read"},
+    }
 
 
 def test_mcp_transport_allows_only_the_configured_public_origin():
@@ -195,7 +234,9 @@ def test_metadata_and_mcp_auth_challenge_are_discoverable():
         )
     assert authorization.status_code == 200
     assert authorization.json()["code_challenge_methods_supported"] == ["S256"]
+    assert "okk.transcripts.read" in authorization.json()["scopes_supported"]
     assert protected.json()["resource"].endswith("/mcp")
+    assert "okk.transcripts.read" in protected.json()["scopes_supported"]
     assert challenge.status_code == 401
     assert "resource_metadata=" in challenge.headers["www-authenticate"]
 
@@ -355,6 +396,7 @@ def test_login_form_csp_allows_only_self_and_registered_callback_origin(
         signed_request="signed-request",
         csrf_token="csrf-token",
         redirect_uri=redirect_uri,
+        scope="okk.statistics.read",
     )
 
     policy = response.headers["content-security-policy"]

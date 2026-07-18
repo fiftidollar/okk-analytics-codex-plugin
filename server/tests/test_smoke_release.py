@@ -20,6 +20,14 @@ def _tool(name: str) -> dict:
         "name": name,
         "annotations": {"readOnlyHint": True, "destructiveHint": False},
         "inputSchema": {"type": "object", "properties": properties},
+        "_meta": {
+            "securitySchemes": [
+                {
+                    "type": "oauth2",
+                    "scopes": ["okk.transcripts.read"] if "transcript" in name else ["okk.statistics.read"],
+                }
+            ]
+        },
     }
 
 
@@ -37,6 +45,12 @@ def test_release_smoke_requires_exact_safe_inventory():
     ].pop("department_ref")
     with pytest.raises(RuntimeError):
         validate_tool_inventory({"result": {"tools": missing_named_filter}})
+    missing_transcript_scope = [_tool(name) for name in EXPECTED_TOOLS]
+    next(tool for tool in missing_transcript_scope if tool["name"] == "get_call_transcript")["_meta"][
+        "securitySchemes"
+    ][0]["scopes"] = ["okk.statistics.read"]
+    with pytest.raises(RuntimeError):
+        validate_tool_inventory({"result": {"tools": missing_transcript_scope}})
 
 
 def test_release_smoke_requires_a_definitive_connection_confirmation():

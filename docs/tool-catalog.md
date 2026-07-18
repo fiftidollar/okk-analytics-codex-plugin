@@ -15,6 +15,9 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `get_employee_card` | KPI, plan/client/CRM, strengths, growth, focus and task windows |
 | `compare_employees` | KPI, strengths, growth, focus and task-count comparison |
 | `get_call_statistics` | Call volume, evaluated count, scores, pass rate, duration and trend |
+| `list_call_transcripts` | ACL-scoped call catalog, transcript availability and bounded previews |
+| `get_call_transcript` | Raw/diarized full text or safe speaker segments for one accessible call |
+| `search_call_transcripts` | Phrase/all-term/any-term search with excerpts and explicit scan completeness |
 | `get_plan_fact_statistics` | Total/inbound/outbound/new/regular plans and daily rows |
 | `get_client_statistics` | New/regular contacts, repeats, missed/no-answer and related facts |
 | `get_crm_statistics` | Bitrix deals, tasks, overdue, stages, funnels and employee coverage |
@@ -57,6 +60,12 @@ When both employee and department filters are supplied, the employee must
 belong to that resolved department. Employee cards/comparisons, calls, clients,
 plans, CRM, growth, mentoring, scenarios and criteria all apply this guard.
 
+Transcript tools apply the same guard to department, employee and scenario
+filters. A direct call ID is first checked through the ACL-protected call-detail
+endpoint and then checked again against the gateway's live department catalog
+before the transcript endpoint is called. Missing and inaccessible call IDs
+therefore have the same neutral `not_available` result.
+
 ## Common response envelope
 
 - `status`: `ok`, `partial`, `no_data`, `not_available` or
@@ -87,6 +96,13 @@ the latest snapshot per employee and explicitly rejects an unavailable
 historical date instead of relabeling current data; unavailable employee
 snapshots also make coverage `partial`. Criterion output limits report the
 matching and returned counts and cannot silently truncate an `ok` result.
+
+Transcript search is deliberately bounded by `TRANSCRIPT_SEARCH_MAX_CALLS`.
+Every response reports `scanned_calls`, `candidate_calls_loaded`,
+`source_calls_total`, `source_complete` and `result_complete`. A cap or early
+result limit produces `partial`; it must not be interpreted as an exhaustive
+absence. Transcript payloads include no structured phone/audio/PBX fields, and
+segment output is projected to `speaker`, `text`, `start` and `end` only.
 
 Aggregate strengths and growth areas count distinct employees mentioning a
 normalized observation. Repeated or differently cased copies of the same

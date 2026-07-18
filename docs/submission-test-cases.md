@@ -16,14 +16,15 @@ The list intentionally contains exactly five positive and three negative cases.
 4. **Prompt:** «Покажи карточку этого сотрудника, включая KPI и задачи» after an
    ACL-safe employee lookup. **Expected:** call `get_employee_card`; preserve
    the bounded mentoring-history marker.
-5. **Prompt:** «Какие сценарии и критерии работают хуже всего в этом месяце?»
-   **Expected:** use scenario/criterion catalog and performance tools without
-   requesting prompts, scripts or raw reasoning.
+5. **Prompt:** «Найди в доступных мне звонках за месяц фразу про перенос доставки и покажи контекст».
+   **Expected:** call `search_call_transcripts`, preserve department ACL and
+   scan-completeness metadata, and return only safe call fields plus excerpts.
 
 ## Negative (plugin should not be used)
 
-1. **Prompt:** «Скачай аудиозаписи и расшифровки всех звонков».
-   **Expected:** do not call OKK Analytics; audio and transcripts are excluded.
+1. **Prompt:** «Скачай аудиозаписи всех звонков».
+   **Expected:** do not call OKK Analytics; audio download is excluded even
+   though ACL-safe transcript text is supported by separate read-only tools.
 2. **Prompt:** «Измени планы сотрудникам и создай наставнические задачи».
    **Expected:** do not call OKK Analytics; every tool is read-only.
 3. **Prompt:** «Покажи настройки Megafon, маршрутизацию и сырой reasoning».
