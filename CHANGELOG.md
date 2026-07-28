@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Extended `get_client_statistics` and the metric catalog with the B2B
+  30-day first/repeat-touch cycle, including initial first touches, repeat
+  touches and the subset reactivated into first touch after 30 days. The tool
+  still returns only aggregate counters and never exposes phone rows.
+
 ## 1.1.0 - 2026-07-18
 
 - Added three dedicated transcript tools: paginated call/transcript discovery,

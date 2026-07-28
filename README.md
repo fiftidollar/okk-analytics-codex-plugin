@@ -21,6 +21,9 @@ the Codex/Claude Code plugin packages.
 - Full employee-card view available through the current OKK API: KPI, plan/fact,
   client and CRM metrics, AI strengths, growth areas, weekly/saved focus, active
   tasks and recent completed tasks.
+- Client statistics include the B2B 30-day cycle: acting clients, new first
+  touches, new repeat touches and the subset reactivated into first touch after
+  at least 30 days without a valid call. No phone rows are exposed.
 - Scenario catalog and complete business criterion configuration without
   prompts or scripts, plus scenario/criterion performance aggregation.
 - OAuth Authorization Code + PKCE S256, dynamic client registration, refresh

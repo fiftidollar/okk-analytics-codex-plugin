@@ -538,7 +538,11 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Статистика клиентов",
-        description="Максимальная статистика новых/регулярных клиентов, эффективных контактов, повторов, недозвонов и пропущенных.",
+        description=(
+            "Максимальная статистика новых/действующих клиентов, эффективных контактов, "
+            "недозвонов и пропущенных, а для B2B — первых/повторных касаний и возвратов "
+            "в первое касание после 30 дней."
+        ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,

@@ -19,7 +19,7 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `get_call_transcript` | Raw/diarized full text or safe speaker segments for one accessible call |
 | `search_call_transcripts` | Phrase/all-term/any-term search with excerpts and explicit scan completeness |
 | `get_plan_fact_statistics` | Total/inbound/outbound/new/regular plans and daily rows |
-| `get_client_statistics` | New/regular contacts, repeats, missed/no-answer and related facts |
+| `get_client_statistics` | New/regular contacts, missed/no-answer, plus B2B first/repeat touches and returns after 30 days |
 | `get_crm_statistics` | Bitrix deals, tasks, overdue, stages, funnels and employee coverage |
 | `get_growth_insights` | Employee and aggregate AI strengths/growth areas without raw reasoning |
 | `get_mentoring_statistics` | Active/recent completed task window, status/overdue/completion stats |

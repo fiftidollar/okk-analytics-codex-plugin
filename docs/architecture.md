@@ -50,6 +50,12 @@ The published deployment is production-only: the upstream base URL is
 6. Every analytics call uses only an upstream GET route. Results pass through an
    explicit safe projection before MCP serialization.
 
+`get_client_statistics` projects the platform summary counters for the B2B
+30-day touch cycle. Existing, new-first and new-repeat call counts are
+mutually exclusive; the reactivated-after-30-days counter is a documented
+subset of first touches. The gateway does not recompute chronology and does not
+receive or serialize the underlying phone rows.
+
 On the first OKK request in a new task, the bundled skill calls
 `get_access_context`. A successful call returns `authenticated=true`, the role
 and visible departments, after which Codex explicitly says `OKK подключён`.

@@ -85,7 +85,11 @@ needed.
   `source_complete` and `result_complete`; a bounded search is not proof that
   the phrase is absent from unscanned calls.
 - Plans and actual completion: `get_plan_fact_statistics`.
-- New/regular client contacts: `get_client_statistics`.
+- New/regular client contacts and the B2B 30-day first/repeat-touch cycle:
+  `get_client_statistics`. Treat `new_client_reactivated_first_touch_calls_total`
+  as a subset of first touches, not an additional category. The mutually
+  exclusive B2B call categories are existing, new first touch and new repeat
+  touch; exactly 30 elapsed days already starts a new first-touch cycle.
 - Bitrix CRM snapshot statistics: `get_crm_statistics`.
 - AI strengths and growth observations: `get_growth_insights`.
 - Mentoring task history and completion statistics:

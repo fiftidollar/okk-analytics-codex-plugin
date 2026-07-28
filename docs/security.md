@@ -39,6 +39,9 @@
 Safe projections exclude email, password/PBX fields, structured phone numbers,
 audio URLs, raw prompts, prompt runtime, raw reasoning, scripts, Megafon,
 routing and pipeline state. Nothing from an analytics response is persisted.
+The B2B touch-cycle extension follows the same rule: the client-statistics tool
+may expose aggregate counts and the fixed reset-window metadata, but never a
+phone, per-number transition row or hidden manager/client identity.
 
 Transcript content is a narrowly scoped exception. Only the three dedicated
 tools may serialize it, and all require both `okk.transcripts.read` and the

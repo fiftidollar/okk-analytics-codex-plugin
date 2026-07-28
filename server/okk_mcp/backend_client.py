@@ -760,7 +760,17 @@ class AnalyticsAdapter:
             {"domain": "overview", "metrics": ["calls", "quality", "duration", "rankings", "trends"]},
             {
                 "domain": "clients",
-                "metrics": ["new", "regular", "contacts", "repeats", "missed", "no_answer"],
+                "metrics": [
+                    "new",
+                    "regular",
+                    "contacts",
+                    "repeats",
+                    "missed",
+                    "no_answer",
+                    "b2b_first_touch",
+                    "b2b_repeat_touch",
+                    "b2b_reactivated_after_30_days",
+                ],
             },
             {"domain": "employees", "metrics": ["card", "strengths", "growth_areas", "focus", "mentoring"]},
             {"domain": "plans", "metrics": ["total", "inbound", "outbound", "new", "regular", "daily"]},
@@ -813,7 +823,13 @@ class AnalyticsAdapter:
                         "use_for": "full-text search across transcripts of ACL-scoped calls",
                     },
                     {"tool": "get_plan_fact_statistics", "use_for": "employee and department call plan/fact"},
-                    {"tool": "get_client_statistics", "use_for": "client/contact/repeat/no-answer metrics"},
+                    {
+                        "tool": "get_client_statistics",
+                        "use_for": (
+                            "client/contact/repeat/no-answer metrics and the B2B 30-day "
+                            "first/repeat-touch cycle"
+                        ),
+                    },
                     {"tool": "get_crm_statistics", "use_for": "latest Bitrix snapshots only"},
                     {"tool": "get_growth_insights", "use_for": "aggregated AI strengths and growth areas"},
                     {"tool": "get_mentoring_statistics", "use_for": "bounded mentoring-task window"},

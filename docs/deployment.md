@@ -71,6 +71,9 @@ public OKK login API and does not mint OKK tokens.
    excerpt fields, while structured phone, audio, PBX/external IDs and internal
    processing fields remain absent. Test raw, diarized and segment formats,
    search caps, result limits and a call ID outside the viewer ACL.
+   For `get_client_statistics` on B2B, also require the reset window `30`, the
+   first/repeat counters and the reactivated-first subset; assert that no phone
+   or per-number transition row is present.
 10. Validate refresh rotation, reuse revocation, logout/revoke and concurrent
     refresh behavior. Upgrade an account holding a pre-transcript token and
     prove that refresh cannot silently add `okk.transcripts.read`; after a fresh

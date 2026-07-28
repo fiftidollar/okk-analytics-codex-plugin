@@ -104,6 +104,11 @@ async def test_statistics_catalog_routes_transcripts_without_listing_them_as_exc
         "get_call_transcript",
         "search_call_transcripts",
     }.issubset(routes)
+    assert {
+        "b2b_first_touch",
+        "b2b_repeat_touch",
+        "b2b_reactivated_after_30_days",
+    }.issubset(domains["clients"])
     assert "transcripts" not in result["data"]["explicit_exclusions"]
 
 
@@ -118,6 +123,43 @@ async def test_empty_viewer_acl_is_a_valid_empty_scope_without_data_queries():
         "departments": [],
     }
     assert platform.calls == []
+
+
+@pytest.mark.anyio
+async def test_client_statistics_exposes_b2b_touch_cycle_without_phone_rows():
+    department_id = str(uuid4())
+    responses = {
+        "/departments": [
+            {"id": department_id, "name": "B2B Продажи", "code": "b2b"}
+        ],
+        "/dashboard/summary": {
+            "client_metrics_available": True,
+            "client_touch_metrics_applicable": True,
+            "new_client_touch_reset_days": 30,
+            "existing_client_calls_total": 8,
+            "new_client_first_touch_calls_total": 5,
+            "new_client_repeat_touch_calls_total": 7,
+            "new_client_initial_first_touch_calls_total": 3,
+            "new_client_reactivated_first_touch_calls_total": 2,
+            "quality_score": 91,
+            "counterparty_phone_normalized": "79990000000",
+        },
+    }
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses=responses,
+    )
+
+    result = await adapter(platform).get_client_statistics(department_ref="b2b")
+
+    assert result["status"] == "ok"
+    assert result["effective_scope"]["department_code"] == "b2b"
+    assert result["data"]["new_client_first_touch_calls_total"] == 5
+    assert result["data"]["new_client_repeat_touch_calls_total"] == 7
+    assert result["data"]["new_client_reactivated_first_touch_calls_total"] == 2
+    assert result["data"]["new_client_touch_reset_days"] == 30
+    assert "quality_score" not in result["data"]
+    assert "counterparty_phone_normalized" not in result["data"]
 
 
 @pytest.mark.anyio
