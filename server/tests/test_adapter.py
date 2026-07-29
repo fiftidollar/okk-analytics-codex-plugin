@@ -129,9 +129,7 @@ async def test_empty_viewer_acl_is_a_valid_empty_scope_without_data_queries():
 async def test_client_statistics_exposes_b2b_touch_cycle_without_phone_rows():
     department_id = str(uuid4())
     responses = {
-        "/departments": [
-            {"id": department_id, "name": "B2B Продажи", "code": "b2b"}
-        ],
+        "/departments": [{"id": department_id, "name": "B2B Продажи", "code": "b2b"}],
         "/dashboard/summary": {
             "client_metrics_available": True,
             "client_touch_metrics_applicable": True,
@@ -143,6 +141,9 @@ async def test_client_statistics_exposes_b2b_touch_cycle_without_phone_rows():
             "new_client_reactivated_first_touch_calls_total": 2,
             "quality_score": 91,
             "counterparty_phone_normalized": "79990000000",
+            "client_phone": "+79990000001",
+            "new_client_phone": "+79990000002",
+            "outbound_contact_phone": "+79990000003",
         },
     }
     platform = FakePlatform(
@@ -160,6 +161,9 @@ async def test_client_statistics_exposes_b2b_touch_cycle_without_phone_rows():
     assert result["data"]["new_client_touch_reset_days"] == 30
     assert "quality_score" not in result["data"]
     assert "counterparty_phone_normalized" not in result["data"]
+    assert "client_phone" not in result["data"]
+    assert "new_client_phone" not in result["data"]
+    assert "outbound_contact_phone" not in result["data"]
 
 
 @pytest.mark.anyio

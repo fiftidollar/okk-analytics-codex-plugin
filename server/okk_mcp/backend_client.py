@@ -34,6 +34,48 @@ UUID_IN_PATH = re.compile(
     r"/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
     flags=re.IGNORECASE,
 )
+CLIENT_STATISTICS_FIELDS = frozenset(
+    {
+        "inbound",
+        "outbound",
+        "missed",
+        "no_answer",
+        "inbound_calls",
+        "outbound_calls",
+        "calls_inbound",
+        "calls_outbound",
+        "calls_missed",
+        "calls_no_answer",
+        "calls_inbound_effective",
+        "calls_outbound_effective",
+        "outbound_new_total",
+        "outbound_new_effective",
+        "outbound_regular_total",
+        "outbound_regular_effective",
+        "successful_new_total",
+        "successful_new_30s_total",
+        "new_client_contacts_total",
+        "new_client_repeat_calls_total",
+        "new_client_other_calls_total",
+        "new_client_calls_total",
+        "existing_client_calls_total",
+        "new_client_first_touch_calls_total",
+        "new_client_repeat_touch_calls_total",
+        "new_client_initial_first_touch_calls_total",
+        "new_client_reactivated_first_touch_calls_total",
+        "new_client_touch_reset_days",
+        "client_touch_metrics_applicable",
+        "inbound_new_total",
+        "no_answer_new_total",
+        "missed_new_total",
+        "client_metrics_available",
+        "client_metrics_state",
+        "client_metrics_missing_months",
+        "client_metrics_hint",
+        "calls_by_day_new",
+        "calls_by_day_regular",
+    }
+)
 
 
 class BackendUnavailable(RuntimeError):
@@ -1691,26 +1733,8 @@ class AnalyticsAdapter:
                 start_date=bounds[0],
                 end_date=bounds[1],
             )
-        keys = [
-            key
-            for key in source
-            if any(
-                marker in key.lower()
-                for marker in (
-                    "client",
-                    "new_",
-                    "regular",
-                    "missed",
-                    "no_answer",
-                    "outbound",
-                    "inbound",
-                    "contact",
-                    "repeat",
-                )
-            )
-        ]
         return await self.envelope(
-            {key: source[key] for key in keys},
+            {key: value for key, value in source.items() if key in CLIENT_STATISTICS_FIELDS},
             scope={**self.department_scope(department_row), "employee_id": employee},
             period=bounds,
         )
