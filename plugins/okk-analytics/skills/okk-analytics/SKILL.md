@@ -89,7 +89,9 @@ needed.
   `get_client_statistics`. Treat `new_client_reactivated_first_touch_calls_total`
   as a subset of first touches, not an additional category. The mutually
   exclusive B2B call categories are existing, new first touch and new repeat
-  touch; exactly 30 elapsed days already starts a new first-touch cycle.
+  touch. The call after any first touch is repeat even after a 30-day gap;
+  exactly 30 elapsed days starts a new first-touch cycle only when the previous
+  state was repeat.
 - Bitrix CRM snapshot statistics: `get_crm_statistics`.
 - AI strengths and growth observations: `get_growth_insights`.
 - Mentoring task history and completion statistics:

@@ -53,8 +53,9 @@ The published deployment is production-only: the upstream base URL is
 `get_client_statistics` projects the platform summary counters for the B2B
 30-day touch cycle. Existing, new-first and new-repeat call counts are
 mutually exclusive; the reactivated-after-30-days counter is a documented
-subset of first touches. The gateway does not recompute chronology and does not
-receive or serialize the underlying phone rows.
+subset of first touches and contains only resets from the previous repeat-touch
+state. The gateway does not recompute chronology and does not receive or
+serialize the underlying phone rows.
 
 On the first OKK request in a new task, the bundled skill calls
 `get_access_context`. A successful call returns `authenticated=true`, the role

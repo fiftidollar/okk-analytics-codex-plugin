@@ -4,8 +4,10 @@
 
 - Extended `get_client_statistics` and the metric catalog with the B2B
   30-day first/repeat-touch cycle, including initial first touches, repeat
-  touches and the subset reactivated into first touch after 30 days. The tool
-  still returns only aggregate counters and never exposes phone rows.
+  touches and the subset reactivated from repeat into first touch after 30
+  days. A first touch must transition to repeat before the reset becomes
+  eligible. The tool still returns only aggregate counters and never exposes
+  phone rows.
 
 ## 1.1.0 - 2026-07-18
 
