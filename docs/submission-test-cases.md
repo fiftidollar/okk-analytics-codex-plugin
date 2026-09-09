@@ -6,7 +6,8 @@ The list intentionally contains exactly five positive and three negative cases.
 
 1. **Prompt:** «Покажи сотрудников отдела B2B и их оценки за текущий месяц».
    **Expected:** call `get_department_statistics` with `department_ref="B2B"`;
-   report rows only if `effective_scope` resolves to B2B.
+   report rows only if `effective_scope` resolves to B2B and name only people
+   from that response's authoritative `employee_roster_grounding`.
 2. **Prompt:** «Какие сильные стороны и зоны роста у сотрудников ORD?»
    **Expected:** call `get_growth_insights` with `department_ref="ORD"` and
    preserve completeness metadata.

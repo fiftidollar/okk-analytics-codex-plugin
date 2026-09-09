@@ -231,7 +231,7 @@
       "user_prompt": "Покажи сотрудников отдела B2B и их оценки за текущий месяц.",
       "file_attachment_urls": null,
       "tools_triggered": "get_department_statistics",
-      "expected_output": "Returns rows only if B2B resolves to one visible department; otherwise returns not_available and names only visible departments.",
+      "expected_output": "Returns rows only if B2B resolves to one visible department; every employee ID and name must come from the response's authoritative live employee roster, otherwise returns not_available and names only visible departments.",
       "expected_output_url": null
     },
     {

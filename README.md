@@ -46,6 +46,10 @@ the Codex/Claude Code plugin packages.
   appear without a plugin release.
 - Exact department selection by visible UUID, code or name. A failed named
   department never falls back to an unfiltered employee population.
+- An authoritative live employee roster in every employee-bearing department
+  response. Dashboard/ranking/plan rows are cross-checked by employee ID,
+  foreign rows are removed, and any supplied name is normalized to the current
+  OKK employee-directory name before the model sees it.
 - Redacted operational tool traces with request ID, timing, applied department
   code, result status and completeness markers; raw business payloads, names,
   IDs and credentials are never logged.
@@ -163,6 +167,13 @@ itself. Public ChatGPT Web and Codex discovery starts only after the
 skills-plus-MCP submission is reviewed and explicitly published in the
 universal Plugins Directory. Published skill content is a reviewed snapshot;
 changing `SKILL.md` therefore requires a new plugin version and review.
+
+Release `1.2.2` adds server-enforced employee roster grounding. Users must
+refresh/update the installed plugin and start a new chat so the client loads
+the new output schema and skill snapshot. A custom developer MCP connection is
+cached separately from the marketplace package; reconnect or recreate that
+connection after the gateway rollout if its tool list still shows fewer than
+27 tools or lacks `department_ref` on department-scoped tools.
 
 ## Install in Claude Code
 

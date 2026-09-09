@@ -70,6 +70,12 @@ public OKK login API and does not mint OKK tokens.
    one-department ORD viewer, request B2B and assert `not_available`, zero
    employee/statistics calls after resolution, and an `access_context` that
    names only ORD.
+   For every employee-bearing department response, require an authoritative
+   `employee_roster_grounding` whose department equals `effective_scope`.
+   Assert every ranking/trend/plan row has a canonical ID/name from that
+   allowlist. Inject one foreign ID and one conflicting name in the adapter
+   regression: the former must be absent, the latter must be normalized, and
+   the result must be `partial` with non-zero diagnostic counters.
 9. Exercise all 27 tools. For the 21 non-transcript tools, search saved JSON
    for forbidden fields/values: password, phone, audio, transcript, prompt,
    reasoning, script, Megafon, routing and pipeline. For the six transcript

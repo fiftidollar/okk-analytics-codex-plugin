@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 1.2.2 - 2026-09-09
+
+- Replaced the provisional red mark with the production OKK identity: a dark
+  graphite tile, readable gold `OKK` monogram, quality seal and mint checkmark.
+- Grounded every named employee in department reports against the live OKK
+  employee directory. Foreign IDs are dropped, conflicting names are replaced
+  by the canonical directory value, and the response exposes the exact
+  authoritative ID/name allowlist plus completeness counters.
+- Hardened filtered overview, employee-directory and plan/fact results with the
+  same roster contract, and added an authenticated release-smoke assertion that
+  rejects any employee row outside the resolved department.
+- Strengthened both the MCP-native instructions and bundled skill so a model
+  must rebuild a disputed report from live tools instead of correcting names
+  from memory or earlier conversation text.
+
 ## 1.2.1 - 2026-09-09
 
 - Bound the bundled `skills/okk-analytics` workflow to the registered ChatGPT

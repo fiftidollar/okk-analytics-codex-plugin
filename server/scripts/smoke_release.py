@@ -118,6 +118,61 @@ def validate_connection_confirmation(payload: dict[str, Any]) -> None:
         raise RuntimeError("Access context did not return the private-supervisor section state")
 
 
+def validate_department_employee_grounding(payload: dict[str, Any]) -> None:
+    structured = payload.get("result", {}).get("structuredContent") or {}
+    if structured.get("status") not in {"ok", "partial"}:
+        raise RuntimeError("Department report did not return an inspectable result")
+    scope = structured.get("effective_scope") or {}
+    grounding = structured.get("employee_roster_grounding") or {}
+    if grounding.get("source") != "live_okk_employee_directory":
+        raise RuntimeError("Department report has no live employee-directory grounding")
+    if grounding.get("authoritative") is not True:
+        raise RuntimeError("Department employee roster is not authoritative")
+    if not isinstance(grounding.get("source_complete"), bool):
+        raise RuntimeError("Department employee roster has no completeness marker")
+    for field in ("department_id", "department_code", "department_name"):
+        if grounding.get(field) != scope.get(field):
+            raise RuntimeError(f"Employee roster {field} does not match effective scope")
+
+    employee_ids = grounding.get("employee_ids")
+    employee_names = grounding.get("employee_names")
+    if not isinstance(employee_ids, list) or not isinstance(employee_names, list):
+        raise RuntimeError("Department employee roster has no typed ID/name allowlist")
+    if grounding.get("employee_count") != len(employee_ids) or len(employee_ids) != len(employee_names):
+        raise RuntimeError("Department employee roster counts do not match")
+    if len(set(employee_ids)) != len(employee_ids):
+        raise RuntimeError("Department employee roster contains duplicate IDs")
+    roster_names = dict(zip(employee_ids, employee_names, strict=True))
+
+    data = structured.get("data") or {}
+    authoritative = data.get("authoritative_employee_roster") or {}
+    items = authoritative.get("items") or []
+    if authoritative.get("employee_count") != len(items):
+        raise RuntimeError("Authoritative department roster payload has an invalid count")
+    for item in items:
+        employee_id = str(item.get("id") or "")
+        if roster_names.get(employee_id) != item.get("full_name"):
+            raise RuntimeError("Authoritative department roster item conflicts with grounding")
+        if str(item.get("department_id") or "") != str(scope.get("department_id") or ""):
+            raise RuntimeError("Authoritative department roster contains another department")
+
+    employee_sources = [
+        data.get("employee_ranking") or [],
+        (data.get("complete_employee_ranking") or {}).get("employees") or [],
+        (data.get("department_and_employee_trends") or {}).get("employee_trends") or [],
+        (data.get("plan_fact") or {}).get("employees") or [],
+    ]
+    for rows in employee_sources:
+        for row in rows:
+            employee_id = str(
+                row.get("canonical_employee_id") or row.get("employee_id") or row.get("id") or ""
+            )
+            if employee_id not in roster_names:
+                raise RuntimeError("Department report contains an employee outside its live roster")
+            if row.get("canonical_employee_name") != roster_names[employee_id]:
+                raise RuntimeError("Department report contains an ungrounded employee name")
+
+
 def validate_oauth_metadata(
     authorization_metadata: dict[str, Any],
     resource_metadata: dict[str, Any],
@@ -230,6 +285,34 @@ async def run(base_url: str, token: str | None) -> dict[str, Any]:
             if structured.get("data") != {"reason": "department_not_in_access_scope"}:
                 raise RuntimeError("Unknown named department returned business data")
             report["named_department_fail_closed"] = inaccessible_payload
+            departments = (
+                access_payload.get("result", {})
+                .get("structuredContent", {})
+                .get("data", {})
+                .get("departments", [])
+            )
+            if departments:
+                first_department = departments[0]
+                department_ref = (
+                    first_department.get("code") or first_department.get("name") or first_department.get("id")
+                )
+                department_report = await client.post(
+                    mcp_url,
+                    headers=authenticated,
+                    json=_rpc(
+                        "tools/call",
+                        {
+                            "name": "get_department_statistics",
+                            "arguments": {"department_ref": department_ref, "period": "month"},
+                        },
+                        5,
+                    ),
+                )
+                department_report.raise_for_status()
+                validate_department_employee_grounding(department_report.json())
+                report["department_employee_grounding"] = "ok"
+            else:
+                report["department_employee_grounding"] = "skipped: account has no departments"
         else:
             report["authenticated_checks"] = "skipped: set OKK_MCP_SMOKE_ACCESS_TOKEN"
     return report

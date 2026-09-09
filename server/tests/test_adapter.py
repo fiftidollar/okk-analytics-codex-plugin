@@ -779,11 +779,140 @@ async def test_department_card_by_name_returns_complete_department_sources_only(
 
     assert result["status"] == "ok"
     assert result["effective_scope"]["department_id"] == b2b_id
-    assert result["data"]["complete_employee_ranking"]["employees"] == [{"id": employee_id}]
-    assert result["data"]["department_and_employee_trends"]["employee_trends"] == [{"id": employee_id}]
+    assert result["data"]["complete_employee_ranking"]["employees"][0]["id"] == employee_id
+    assert result["data"]["department_and_employee_trends"]["employee_trends"][0]["id"] == employee_id
+    assert result["employee_roster_grounding"] == {
+        "source": "live_okk_employee_directory",
+        "authoritative": True,
+        "department_id": b2b_id,
+        "department_code": "b2b",
+        "department_name": "B2B",
+        "employee_count": 1,
+        "employee_ids": [employee_id],
+        "employee_names": ["B2B Employee"],
+        "source_complete": True,
+        "excluded_source_records": 0,
+        "normalized_source_records": 0,
+        "usage_rule": (
+            "Use only these employee IDs and names in this response; never invent, "
+            "autocorrect, transliterate, substitute or infer another person."
+        ),
+    }
+    assert result["data"]["authoritative_employee_roster"]["items"] == [
+        {
+            "id": employee_id,
+            "full_name": "B2B Employee",
+            "department_id": b2b_id,
+            "department": {"id": b2b_id, "name": "B2B", "code": "b2b"},
+            "position": None,
+            "is_active": True,
+            "focus_text": None,
+            "created_at": None,
+            "updated_at": None,
+        }
+    ]
     for path, _params in platform.calls:
         if path.startswith("/departments/"):
             assert b2b_id in path
+
+
+@pytest.mark.anyio
+async def test_department_report_drops_foreign_people_and_canonicalizes_every_name():
+    ord_id, b2b_id = str(uuid4()), str(uuid4())
+    ord_employee_id, foreign_employee_id = str(uuid4()), str(uuid4())
+    ord_employee = {
+        "id": ord_employee_id,
+        "full_name": "Иван ОРД",
+        "department_id": ord_id,
+        "department": {"id": ord_id, "name": "Подменённый отдел", "code": "wrong"},
+    }
+    foreign_employee = {
+        "id": foreign_employee_id,
+        "full_name": "Левый Сотрудник",
+        "department_id": b2b_id,
+        "department": {"id": b2b_id, "name": "B2B", "code": "b2b"},
+    }
+    mixed_rows = [
+        {"employee_id": ord_employee_id, "employee_name": "Выдуманное Имя", "calls": 3},
+        {"employee_id": foreign_employee_id, "employee_name": "Левый Сотрудник", "calls": 99},
+    ]
+    platform = FakePlatform(
+        role="admin",
+        responses={
+            "/departments": [
+                {"id": ord_id, "name": "Отдел региональных продаж", "code": "ord"},
+                {"id": b2b_id, "name": "B2B", "code": "b2b"},
+            ],
+            "/dashboard/summary": {"calls": 3},
+            "/dashboard/calls-trend": [],
+            "/dashboard/top-employees": mixed_rows,
+            f"/departments/{ord_id}/summary": {"department_id": ord_id, "calls": 3},
+            f"/departments/{ord_id}/ranking": {"employees": mixed_rows},
+            f"/departments/{ord_id}/trends": {"employee_trends": mixed_rows},
+            "/employees": {"items": [ord_employee, foreign_employee], "total": 2, "pages": 1},
+            "/plans/summary": mixed_rows,
+        },
+    )
+
+    result = await adapter(platform).get_department_statistics(department_ref="ord", period="today")
+
+    assert result["status"] == "partial"
+    assert result["effective_scope"]["department_code"] == "ord"
+    grounding = result["employee_roster_grounding"]
+    assert grounding["employee_ids"] == [ord_employee_id]
+    assert grounding["employee_names"] == ["Иван ОРД"]
+    assert grounding["source_complete"] is False
+    assert grounding["excluded_source_records"] >= 4
+    assert grounding["normalized_source_records"] >= 3
+    assert result["data"]["authoritative_employee_roster"]["items"][0]["department"] == {
+        "id": ord_id,
+        "name": "Отдел региональных продаж",
+        "code": "ord",
+    }
+    serialized = str(result)
+    assert "Левый Сотрудник" not in serialized
+    assert "Выдуманное Имя" not in serialized
+    assert serialized.count("Иван ОРД") >= 4
+
+
+@pytest.mark.anyio
+async def test_department_employee_directory_fails_closed_when_upstream_ignores_filter():
+    ord_id, b2b_id = str(uuid4()), str(uuid4())
+    ord_employee_id, foreign_employee_id = str(uuid4()), str(uuid4())
+    platform = FakePlatform(
+        role="admin",
+        responses={
+            "/departments": [
+                {"id": ord_id, "name": "ОРД", "code": "ord"},
+                {"id": b2b_id, "name": "B2B", "code": "b2b"},
+            ],
+            "/employees": {
+                "items": [
+                    {
+                        "id": ord_employee_id,
+                        "full_name": "Сотрудник ОРД",
+                        "department_id": ord_id,
+                    },
+                    {
+                        "id": foreign_employee_id,
+                        "full_name": "Сотрудник B2B",
+                        "department_id": b2b_id,
+                    },
+                ],
+                "total": 2,
+                "pages": 1,
+            },
+        },
+    )
+
+    result = await adapter(platform).list_employees(department_ref="ord")
+
+    assert result["status"] == "partial"
+    assert [row["id"] for row in result["data"]["items"]] == [ord_employee_id]
+    assert result["employee_roster_grounding"]["employee_names"] == ["Сотрудник ОРД"]
+    assert result["employee_roster_grounding"]["excluded_source_records"] == 1
+    assert result["employee_roster_grounding"]["source_complete"] is False
+    assert "Сотрудник B2B" not in str(result)
 
 
 @pytest.mark.anyio

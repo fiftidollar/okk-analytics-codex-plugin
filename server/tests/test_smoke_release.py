@@ -7,6 +7,7 @@ from scripts.smoke_release import (
     EXPECTED_TOOLS,
     SUPERVISOR_SCOPED_TOOLS,
     validate_connection_confirmation,
+    validate_department_employee_grounding,
     validate_oauth_metadata,
     validate_tool_inventory,
 )
@@ -147,3 +148,74 @@ def test_release_smoke_requires_portable_identity_metadata():
                 invalid_resource,
                 base_url=base_url,
             )
+
+
+def test_release_smoke_requires_department_names_to_match_live_roster():
+    department_id = "department-1"
+    employee_id = "employee-1"
+    structured = {
+        "status": "ok",
+        "effective_scope": {
+            "department_id": department_id,
+            "department_code": "ord",
+            "department_name": "ОРД",
+        },
+        "employee_roster_grounding": {
+            "source": "live_okk_employee_directory",
+            "authoritative": True,
+            "department_id": department_id,
+            "department_code": "ord",
+            "department_name": "ОРД",
+            "employee_count": 1,
+            "employee_ids": [employee_id],
+            "employee_names": ["Сотрудник ОРД"],
+            "source_complete": True,
+        },
+        "data": {
+            "authoritative_employee_roster": {
+                "employee_count": 1,
+                "items": [
+                    {
+                        "id": employee_id,
+                        "full_name": "Сотрудник ОРД",
+                        "department_id": department_id,
+                    }
+                ],
+            },
+            "employee_ranking": [
+                {
+                    "employee_id": employee_id,
+                    "canonical_employee_id": employee_id,
+                    "canonical_employee_name": "Сотрудник ОРД",
+                }
+            ],
+            "complete_employee_ranking": {"employees": []},
+            "department_and_employee_trends": {"employee_trends": []},
+            "plan_fact": {"employees": []},
+        },
+    }
+    payload = {"result": {"structuredContent": structured}}
+
+    validate_department_employee_grounding(payload)
+
+    foreign = {"result": {"structuredContent": {**structured, "data": dict(structured["data"])}}}
+    foreign["result"]["structuredContent"]["data"]["employee_ranking"] = [
+        {
+            "employee_id": "foreign-employee",
+            "canonical_employee_id": "foreign-employee",
+            "canonical_employee_name": "Левый Сотрудник",
+        }
+    ]
+    with pytest.raises(RuntimeError, match="outside its live roster"):
+        validate_department_employee_grounding(foreign)
+
+    wrong_name = {"result": {"structuredContent": {**structured, "data": dict(structured["data"])}}}
+    wrong_name["result"]["structuredContent"]["data"]["employee_ranking"] = [
+        {
+            "employee_id": employee_id,
+            "canonical_employee_id": employee_id,
+            "canonical_employee_name": "Выдуманное Имя",
+        }
+    ]
+    with pytest.raises(RuntimeError, match="ungrounded employee name"):
+        validate_department_employee_grounding(wrong_name)

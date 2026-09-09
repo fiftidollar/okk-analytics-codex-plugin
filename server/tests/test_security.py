@@ -246,6 +246,9 @@ def test_mcp_instructions_route_named_people_without_plugin_skill_support():
     assert "use only the matching section's tools" in instructions
     assert "Never treat a supervisor as a department employee" in instructions
     assert "never hardcode names, emails or grants" in instructions
+    assert "employee_roster_grounding.employee_ids/employee_names" in instructions
+    assert "exclusive authoritative roster" in instructions
+    assert "including from conversation memory" in instructions
 
 
 def test_mcp_transport_allows_only_the_configured_public_origin():

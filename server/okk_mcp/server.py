@@ -52,6 +52,21 @@ class PeriodRange(BaseModel):
     end: str
 
 
+class EmployeeRosterGrounding(BaseModel):
+    source: Literal["live_okk_employee_directory"]
+    authoritative: bool
+    department_id: str | None = None
+    department_code: str | None = None
+    department_name: str | None = None
+    employee_count: int
+    employee_ids: list[str] = Field(default_factory=list)
+    employee_names: list[str] = Field(default_factory=list)
+    source_complete: bool
+    excluded_source_records: int = 0
+    normalized_source_records: int = 0
+    usage_rule: str
+
+
 class AnalyticsEnvelope(BaseModel):
     status: Literal["ok", "partial", "no_data", "not_available", "temporarily_unavailable"]
     access_context: AccessContext | None = None
@@ -59,6 +74,7 @@ class AnalyticsEnvelope(BaseModel):
     period: PeriodRange | None = None
     omitted_filters_count: int = 0
     request_id: str | None = None
+    employee_roster_grounding: EmployeeRosterGrounding | None = None
     data: dict[str, Any] | list[dict[str, Any]] = Field(default_factory=dict)
 
 
@@ -131,6 +147,12 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             "department's employees. If status is not_available, state that the requested "
             "department is outside the connected account's visible scope and name only the "
             "departments present in access_context. "
+            "For every department report that names employees, use get_department_statistics "
+            "and treat employee_roster_grounding.employee_ids/employee_names as the exclusive "
+            "authoritative roster for that response. Never introduce, autocorrect, transliterate "
+            "or infer a person outside that roster, including from conversation memory. If the "
+            "grounding is absent or source_complete=false, call list_employees with the exact same "
+            "department_ref before naming people and disclose incomplete coverage. "
             "The private Supervisors section is separate from departments and is discovered "
             "only through list_supervisors. When the user names a person without identifying "
             "their section, search both list_employees and list_supervisors, then use only the "
@@ -185,7 +207,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Сводная статистика",
-        description="Максимальная общая сводка: звонки, качество, клиенты, отделы, рейтинг и дневные тренды. Для названия или кода отдела обязательно передайте department_ref; не оставляйте фильтр пустым.",
+        description="Максимальная общая сводка: звонки, качество, клиенты, отделы, рейтинг и дневные тренды. Для названия или кода отдела обязательно передайте department_ref; не оставляйте фильтр пустым. В отфильтрованной сводке называйте только сотрудников из employee_roster_grounding.",
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,
@@ -225,7 +247,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Статистика отдела",
-        description="Полная карточка одного доступного отдела: KPI, план/факт, рейтинг сотрудников и дневные тренды. При запросе пользователя по названию или коду используйте department_ref; недоступный отдел возвращает not_available без данных другого отдела.",
+        description="Полная карточка одного доступного отдела: KPI, план/факт, рейтинг сотрудников и дневные тренды. При запросе пользователя по названию или коду используйте department_ref; недоступный отдел возвращает not_available без данных другого отдела. В отчёте разрешено называть только сотрудников из employee_roster_grounding.employee_names: это авторитетный живой состав отдела, а все upstream-строки вне него отфильтрованы.",
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,
@@ -281,7 +303,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Список сотрудников",
-        description="Ищет сотрудников только в доступных отделах без раскрытия email, телефона, PBX и учётных данных. Если пользователь назвал отдел, передайте его точное имя или код в department_ref; не выполняйте общий поиск вместо фильтрованного.",
+        description="Ищет сотрудников только в доступных отделах без раскрытия email, телефона, PBX и учётных данных. Если пользователь назвал отдел, передайте его точное имя или код в department_ref; не выполняйте общий поиск вместо фильтрованного. employee_roster_grounding.employee_names является единственным допустимым списком фамилий для ответа модели.",
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,
@@ -651,7 +673,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Статистика план/факт",
-        description="Возвращает дневные планы и план/факт по общим, входящим, исходящим, новым и регулярным звонкам.",
+        description="Возвращает дневные планы и план/факт по общим, входящим, исходящим, новым и регулярным звонкам. Имена в ответе канонизированы по employee_roster_grounding; не добавляйте людей вне этого списка.",
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,

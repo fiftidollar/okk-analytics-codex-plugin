@@ -7,11 +7,11 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 |---|---|
 | `get_access_context` | Authenticated connection proof, current role and visible departments |
 | `get_statistics_catalog` | Metric domains and explicit exclusions |
-| `get_overview_statistics` | Overall KPI, clients, department rollup, ranking and trend |
+| `get_overview_statistics` | Overall KPI, clients, department rollup, ranking and trend; a department-filtered employee ranking is grounded to the live roster |
 | `list_departments` | Visible departments and KPI settings |
-| `get_department_statistics` | One department's KPI, plan/fact, employees and trend |
+| `get_department_statistics` | One department's KPI, plan/fact, employees and trend with an authoritative live employee roster |
 | `compare_departments` | Visible department metrics and trends |
-| `list_employees` | Safe employee directory without credentials or phone fields |
+| `list_employees` | Safe employee directory without credentials or phone fields; locally rechecked against live department membership |
 | `list_supervisors` | Live explicit-grant catalog for the private `Руководители` section |
 | `get_supervisor_call_statistics` | Basic call volume, duration, direction and day trend for one accessible transcription-only supervisor |
 | `get_employee_card` | KPI, plan/client/CRM, strengths, growth, focus and task windows |
@@ -103,7 +103,19 @@ therefore have the same neutral `not_available` result.
 - `omitted_filters_count`: number of inaccessible mixed-list filters, without
   echoing their IDs.
 - `request_id`: correlation ID for the gateway's redacted operational trace.
+- `employee_roster_grounding`: for employee-bearing department responses, the
+  exclusive live employee ID/name allowlist, its exact department, source
+  completeness, and counts of rejected or normalized upstream rows.
 - `data`: the business payload.
+
+`get_department_statistics` also returns
+`data.authoritative_employee_roster.items`. Every employee-bearing subsource
+(`employee_ranking`, complete ranking, employee trends and plan/fact rows) is
+intersected with those IDs. The gateway adds `canonical_employee_id` and
+`canonical_employee_name` to each surviving metric row and overwrites a
+conflicting supplied name with the live directory value. A rejected or
+normalized source row makes the response `partial`; it can never reappear in a
+model-generated report as a plausible employee.
 
 `get_access_context` is the canonical post-login check. Because the tool can be
 called only with a valid MCP OAuth token and revalidates `/auth/me`, its

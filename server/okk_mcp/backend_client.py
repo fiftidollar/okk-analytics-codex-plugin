@@ -381,6 +381,7 @@ class AnalyticsAdapter:
         scope: dict[str, Any] | None = None,
         period: tuple[date, date] | None = None,
         omitted: int = 0,
+        employee_roster_grounding: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
             "status": status,
@@ -388,8 +389,84 @@ class AnalyticsAdapter:
             "effective_scope": scope or {},
             "period": {"start": period[0].isoformat(), "end": period[1].isoformat()} if period else None,
             "omitted_filters_count": omitted,
+            "employee_roster_grounding": employee_roster_grounding,
             "data": data,
         }
+
+    @classmethod
+    def employee_roster_grounding(
+        cls,
+        department: dict[str, Any] | None,
+        employees: list[dict[str, Any]],
+        *,
+        source_complete: bool,
+        excluded_source_records: int = 0,
+        normalized_source_records: int = 0,
+    ) -> dict[str, Any]:
+        roster = [row for row in employees if row.get("id") and row.get("full_name")]
+        scope = cls.department_scope(department)
+        return {
+            "source": "live_okk_employee_directory",
+            "authoritative": True,
+            **scope,
+            "employee_count": len(roster),
+            "employee_ids": [str(row["id"]) for row in roster],
+            "employee_names": [str(row["full_name"]) for row in roster],
+            "source_complete": source_complete,
+            "excluded_source_records": excluded_source_records,
+            "normalized_source_records": normalized_source_records,
+            "usage_rule": (
+                "Use only these employee IDs and names in this response; never invent, "
+                "autocorrect, transliterate, substitute or infer another person."
+            ),
+        }
+
+    @staticmethod
+    def _ground_employee_rows(
+        rows: Any,
+        employees: list[dict[str, Any]],
+        *id_fields: str,
+    ) -> tuple[list[dict[str, Any]], int, int]:
+        """Keep only live roster IDs and replace every supplied name with the directory value."""
+        roster = {str(row["id"]): row for row in employees if row.get("id")}
+        kept: list[dict[str, Any]] = []
+        excluded = 0
+        normalized = 0
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                excluded += 1
+                continue
+            nested = row.get("employee") if isinstance(row.get("employee"), dict) else {}
+            employee_id = next(
+                (str(row[field]) for field in id_fields if row.get(field)),
+                str(nested.get("id") or ""),
+            )
+            employee = roster.get(employee_id)
+            if not employee:
+                excluded += 1
+                continue
+
+            canonical = dict(row)
+            canonical_name = employee.get("full_name")
+            changed = False
+            for field in ("full_name", "employee_name"):
+                if field in canonical and canonical.get(field) != canonical_name:
+                    canonical[field] = canonical_name
+                    changed = True
+            if nested:
+                canonical_nested = dict(nested)
+                if canonical_nested.get("id") != employee_id:
+                    canonical_nested["id"] = employee_id
+                    changed = True
+                if canonical_nested.get("full_name") != canonical_name:
+                    canonical_nested["full_name"] = canonical_name
+                    changed = True
+                canonical["employee"] = canonical_nested
+            canonical["canonical_employee_id"] = employee_id
+            canonical["canonical_employee_name"] = canonical_name
+            normalized += int(changed)
+            kept.append(canonical)
+        return kept, excluded, normalized
 
     @staticmethod
     def _safe_department(row: dict[str, Any]) -> dict[str, Any]:
@@ -410,10 +487,13 @@ class AnalyticsAdapter:
     @staticmethod
     def _safe_employee(row: dict[str, Any]) -> dict[str, Any]:
         department = row.get("department")
+        department_id = row.get("department_id") or (
+            department.get("id") if isinstance(department, dict) else None
+        )
         return {
             "id": str(row.get("id")),
             "full_name": row.get("full_name"),
-            "department_id": str(row.get("department_id")) if row.get("department_id") else None,
+            "department_id": str(department_id) if department_id else None,
             "department": {
                 "id": str(department.get("id")),
                 "name": department.get("name"),
@@ -664,14 +744,16 @@ class AnalyticsAdapter:
         department_id: str | None = None,
         search: str | None = None,
         include_inactive: bool = False,
-    ) -> tuple[list[dict[str, Any]], bool, int]:
-        visible_departments = {str(row["id"]) for row in await self.departments()}
+    ) -> tuple[list[dict[str, Any]], bool, int, int]:
+        visible_departments = {str(row["id"]): row for row in await self.departments()}
         if department_id and department_id not in visible_departments:
-            return [], False, 0
+            return [], False, 0, 0
         context = await self.context()
         if not context.is_admin and not context.department_ids:
-            return [], True, 0
+            return [], True, 0, 0
         rows: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        excluded = 0
         page = 1
         total = 0
         while len(rows) < self.settings.analytics_max_employees:
@@ -684,24 +766,60 @@ class AnalyticsAdapter:
                 page_size=100,
             )
             total = int(payload.get("total") or 0)
-            rows.extend(self._safe_employee(item) for item in payload.get("items") or [])
+            for item in payload.get("items") or []:
+                safe = self._safe_employee(item)
+                employee_id = safe.get("id")
+                employee_department_id = safe.get("department_id")
+                if (
+                    not item.get("id")
+                    or not isinstance(safe.get("full_name"), str)
+                    or not safe["full_name"].strip()
+                    or employee_id in seen_ids
+                    or employee_department_id not in visible_departments
+                    or (department_id and employee_department_id != department_id)
+                ):
+                    excluded += 1
+                    continue
+                seen_ids.add(employee_id)
+                visible_department = visible_departments[employee_department_id]
+                safe["department"] = {
+                    "id": employee_department_id,
+                    "name": visible_department.get("name"),
+                    "code": visible_department.get("code"),
+                }
+                rows.append(safe)
             if len(rows) >= self.settings.analytics_max_employees and (
                 page < int(payload.get("pages") or 1) or len(rows) > self.settings.analytics_max_employees
             ):
-                return rows[: self.settings.analytics_max_employees], False, total or len(rows)
+                return rows[: self.settings.analytics_max_employees], False, total or len(rows), excluded
             if page >= int(payload.get("pages") or 1):
-                return rows, True, total or len(rows)
+                return rows, True, total or len(rows), excluded
             page += 1
-        return rows[: self.settings.analytics_max_employees], False, total or len(rows)
+        return rows[: self.settings.analytics_max_employees], False, total or len(rows), excluded
 
     async def employee(self, employee_id: str) -> dict[str, Any] | None:
         try:
-            row = self._safe_employee(await self._get(f"/employees/{employee_id}"))
+            raw = await self._get(f"/employees/{employee_id}")
+            row = self._safe_employee(raw)
         except OKKNotAvailable:
             return None
-        visible_departments = {str(item["id"]) for item in await self.departments()}
-        if row.get("department_id") not in visible_departments:
+        if (
+            not raw.get("id")
+            or row.get("id") != str(employee_id)
+            or not isinstance(row.get("full_name"), str)
+            or not row["full_name"].strip()
+        ):
             return None
+        visible_departments = {str(item["id"]): item for item in await self.departments()}
+        department_id = row.get("department_id")
+        if department_id not in visible_departments:
+            return None
+        visible_department = visible_departments[department_id]
+        row["department"] = {
+            "id": department_id,
+            "name": visible_department.get("name"),
+            "code": visible_department.get("code"),
+        }
         return row
 
     async def scoped_employee(
@@ -1052,10 +1170,28 @@ class AnalyticsAdapter:
             self._get("/dashboard/top-employees", department_id=department, limit=top_limit, **common),
             self._get("/dashboard/by-department", **common),
         )
+        grounding = None
+        excluded_source_records = 0
+        normalized_source_records = 0
+        roster_complete = True
         if department:
             departments = [
                 row for row in departments if str(row.get("department_id") or row.get("id")) == department
             ]
+        if department and ranking:
+            roster, roster_complete, _, roster_excluded = await self.employees(
+                department_id=department, include_inactive=False
+            )
+            ranking, removed, normalized = self._ground_employee_rows(ranking, roster, "employee_id", "id")
+            excluded_source_records = roster_excluded + removed
+            normalized_source_records = normalized
+            grounding = self.employee_roster_grounding(
+                department_row,
+                roster,
+                source_complete=roster_complete and not roster_excluded,
+                excluded_source_records=excluded_source_records,
+                normalized_source_records=normalized_source_records,
+            )
         return await self.envelope(
             {
                 "summary": summary,
@@ -1063,8 +1199,15 @@ class AnalyticsAdapter:
                 "employee_ranking": ranking,
                 "departments": departments,
             },
+            status=(
+                "partial"
+                if department
+                and (not roster_complete or excluded_source_records or normalized_source_records)
+                else "ok"
+            ),
             scope=self.department_scope(department_row),
             period=bounds,
+            employee_roster_grounding=grounding,
         )
 
     async def list_departments(self, **_: Any) -> dict[str, Any]:
@@ -1095,6 +1238,7 @@ class AnalyticsAdapter:
             department_summary,
             department_ranking,
             department_trends,
+            roster_result,
         ) = await asyncio.gather(
             self._get("/dashboard/summary", department_id=resolved_id, **common),
             self._get("/dashboard/calls-trend", department_id=resolved_id, **common),
@@ -1116,9 +1260,42 @@ class AnalyticsAdapter:
                 start_date=bounds[0],
                 end_date=bounds[1],
             ),
+            self.employees(department_id=resolved_id, include_inactive=False),
         )
+        roster, roster_complete, roster_source_total, roster_excluded = roster_result
+
+        employees, removed_top, normalized_top = self._ground_employee_rows(
+            employees, roster, "employee_id", "id"
+        )
+        department_ranking = dict(department_ranking or {})
+        (
+            department_ranking["employees"],
+            removed_ranking,
+            normalized_ranking,
+        ) = self._ground_employee_rows(department_ranking.get("employees"), roster, "employee_id", "id")
+        department_trends = dict(department_trends or {})
+        (
+            department_trends["employee_trends"],
+            removed_trends,
+            normalized_trends,
+        ) = self._ground_employee_rows(department_trends.get("employee_trends"), roster, "employee_id", "id")
         plan = await self.get_plan_fact_statistics(
             start_date=bounds[0], end_date=bounds[1], department_id=resolved_id
+        )
+        plan_data = dict(plan.get("data") or {})
+        plan_data["employees"], removed_plan, normalized_plan = self._ground_employee_rows(
+            plan_data.get("employees"), roster, "employee_id", "id"
+        )
+        excluded_source_records = (
+            roster_excluded + removed_top + removed_ranking + removed_trends + removed_plan
+        )
+        normalized_source_records = normalized_top + normalized_ranking + normalized_trends + normalized_plan
+        grounding = self.employee_roster_grounding(
+            department_row,
+            roster,
+            source_complete=roster_complete and not roster_excluded,
+            excluded_source_records=excluded_source_records,
+            normalized_source_records=normalized_source_records,
         )
         return await self.envelope(
             {
@@ -1129,12 +1306,26 @@ class AnalyticsAdapter:
                 "department_summary": department_summary,
                 "complete_employee_ranking": department_ranking,
                 "department_and_employee_trends": department_trends,
-                "plan_fact": plan["data"],
+                "plan_fact": plan_data,
                 "plan_fact_status": plan["status"],
+                "authoritative_employee_roster": {
+                    "items": roster,
+                    "employee_count": len(roster),
+                    "source_total": roster_source_total,
+                    "source_complete": roster_complete and not roster_excluded,
+                },
             },
-            status="partial" if plan["status"] == "partial" else "ok",
+            status=(
+                "partial"
+                if plan["status"] == "partial"
+                or not roster_complete
+                or excluded_source_records
+                or normalized_source_records
+                else "ok"
+            ),
             scope=self.department_scope(department_row),
             period=bounds,
+            employee_roster_grounding=grounding,
         )
 
     async def compare_departments(
@@ -1205,7 +1396,7 @@ class AnalyticsAdapter:
         if selector_supplied and not department_row:
             return await self.unavailable_department()
         department = str(department_row["id"]) if department_row else None
-        rows, complete, source_total = await self.employees(
+        rows, complete, source_total, excluded = await self.employees(
             department_id=department, search=search, include_inactive=include_inactive
         )
         start = (page - 1) * page_size
@@ -1221,8 +1412,14 @@ class AnalyticsAdapter:
         }
         return await self.envelope(
             data,
-            status="partial" if rows and not complete else ("ok" if rows else "no_data"),
+            status=("partial" if rows and (not complete or excluded) else ("ok" if rows else "no_data")),
             scope=self.department_scope(department_row),
+            employee_roster_grounding=self.employee_roster_grounding(
+                department_row,
+                rows,
+                source_complete=complete and not excluded,
+                excluded_source_records=excluded,
+            ),
         )
 
     @staticmethod
@@ -2077,9 +2274,9 @@ class AnalyticsAdapter:
         employee = str(employee_row["id"]) if employee_row else None
         department = str(department_row["id"]) if department_row else None
         if employee_row:
-            visible_employees, complete = [employee_row], True
+            visible_employees, complete, roster_excluded = [employee_row], True, 0
         else:
-            visible_employees, complete, _ = await self.employees(
+            visible_employees, complete, _, roster_excluded = await self.employees(
                 department_id=department, include_inactive=False
             )
         department_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -2087,12 +2284,21 @@ class AnalyticsAdapter:
             if row.get("department_id"):
                 department_groups[row["department_id"]].append(row)
         summaries: list[dict[str, Any]] = []
+        removed_source_records = 0
+        normalized_source_records = 0
         for department_key in department_groups:
             rows = await self._get(
                 "/plans/summary", start_date=start, end_date=end, department_id=department_key
             )
-            allowed = {item["id"] for item in department_groups[department_key]}
-            summaries.extend(row for row in rows if str(row.get("employee_id")) in allowed)
+            grounded, removed, normalized = self._ground_employee_rows(
+                rows,
+                department_groups[department_key],
+                "employee_id",
+                "id",
+            )
+            removed_source_records += removed
+            normalized_source_records += normalized
+            summaries.extend(grounded)
         if employee:
             summaries = [row for row in summaries if str(row.get("employee_id")) == employee]
         totals: dict[str, float] = defaultdict(float)
@@ -2105,11 +2311,23 @@ class AnalyticsAdapter:
                 "plan_outbound_regular",
             ):
                 totals[key] += _number(row.get(key))
+        excluded_source_records = roster_excluded + removed_source_records
         return await self.envelope(
             {"totals": dict(totals), "employees": summaries},
-            status="partial" if summaries and not complete else ("ok" if summaries else "no_data"),
+            status=(
+                "partial"
+                if summaries and (not complete or excluded_source_records or normalized_source_records)
+                else ("ok" if summaries else "no_data")
+            ),
             scope={**self.department_scope(department_row), "employee_id": employee},
             period=(start, end),
+            employee_roster_grounding=self.employee_roster_grounding(
+                department_row,
+                visible_employees,
+                source_complete=complete and not roster_excluded,
+                excluded_source_records=excluded_source_records,
+                normalized_source_records=normalized_source_records,
+            ),
         )
 
     async def get_client_statistics(
@@ -2173,7 +2391,7 @@ class AnalyticsAdapter:
         if employee_row:
             employees, complete, source_total = [employee_row], True, 1
         else:
-            employees, complete, source_total = await self.employees(
+            employees, complete, source_total, _ = await self.employees(
                 department_id=department, include_inactive=False
             )
 
@@ -2269,7 +2487,7 @@ class AnalyticsAdapter:
         if employee_row:
             employees, complete = [employee_row], True
         else:
-            employees, complete, _ = await self.employees(department_id=department, include_inactive=False)
+            employees, complete, _, _ = await self.employees(department_id=department, include_inactive=False)
 
         async def load(row: dict[str, Any]) -> dict[str, Any]:
             page = await self._bounded(lambda: self._page_data(row["id"], *bounds))
@@ -2339,7 +2557,7 @@ class AnalyticsAdapter:
         if employee_row:
             employees, complete = [employee_row], True
         else:
-            employees, complete, _ = await self.employees(department_id=department, include_inactive=True)
+            employees, complete, _, _ = await self.employees(department_id=department, include_inactive=True)
 
         async def load(row: dict[str, Any]) -> list[dict[str, Any]]:
             data = await self._bounded(lambda: self._page_data(row["id"], *bounds))

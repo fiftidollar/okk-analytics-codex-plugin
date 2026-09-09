@@ -1,6 +1,6 @@
 {
   "name": "okk-analytics",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Read-only OKK analytics, supervisors and ACL-safe call transcripts with native account OAuth.",
   "author": {
     "name": "Alpes",

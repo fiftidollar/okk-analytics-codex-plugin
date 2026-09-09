@@ -19,7 +19,7 @@ def test_plugin_and_marketplace_point_to_the_standalone_package():
     portable_mcp = json.loads((plugin / "mcp.json").read_text(encoding="utf-8"))
     apps = json.loads((plugin / ".app.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "okk-analytics"
-    assert manifest["version"] == "1.2.1"
+    assert manifest["version"] == "1.2.2"
     assert "mcpServers" not in manifest
     assert manifest["apps"] == "./.app.json"
     assert portable["$schema"].endswith("/plugin.schema.json")
@@ -82,7 +82,7 @@ def test_claude_code_marketplace_reuses_the_shared_skill_and_standard_http_mcp()
     assert marketplace["owner"] == {"name": "Alpes"}
     assert marketplace["plugins"][0]["name"] == "okk-analytics"
     assert marketplace["plugins"][0]["source"] == "./plugins/okk-analytics"
-    assert marketplace["plugins"][0]["version"] == manifest["version"] == "1.2.1"
+    assert marketplace["plugins"][0]["version"] == manifest["version"] == "1.2.2"
     assert manifest["name"] == "okk-analytics"
     assert manifest["skills"] == "./skills/"
     assert mcp == {

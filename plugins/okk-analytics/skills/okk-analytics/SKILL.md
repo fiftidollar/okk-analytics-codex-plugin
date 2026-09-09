@@ -49,6 +49,18 @@ supervisors/руководители, scenarios, criteria or their performance.
 - Verify that `effective_scope.department_code` or
   `effective_scope.department_name` matches the requested department before
   describing any employee or KPI as belonging to it.
+- Whenever an answer or report names department employees, treat
+  `employee_roster_grounding.employee_ids` and `employee_names` as an exclusive
+  live allowlist for that response. Names from memory, examples, earlier chat
+  turns, uploaded templates or general knowledge are never valid OKK evidence.
+- Require `employee_roster_grounding.authoritative=true` and verify that its
+  department matches `effective_scope`. If the grounding is absent or
+  `source_complete=false`, call `list_employees` with the exact same
+  `department_ref` before naming anyone and state that the roster may be
+  incomplete. Never fill gaps with plausible people.
+- If `excluded_source_records` or `normalized_source_records` is non-zero,
+  mention that conflicting upstream rows were safely omitted or normalized;
+  do not restore their names from another source.
 - If a named department returns `not_available`, stop. Say that it is not
   available to the connected OKK account and mention only departments listed
   in `access_context`. Do not retry the same question without the department
@@ -95,8 +107,17 @@ For a request such as "employees of <department name> and their scores", match
 the name against the current live department catalog, then call
 `get_department_statistics(department_ref="<exact current name or code>")`
 first. It returns the full department ranking and KPI sources in one ACL-safe
-response. Use `list_employees` only when a directory/search result is also
-needed.
+response. Build every employee row in the answer only from the authoritative
+roster returned in that same response. Use `list_employees` only when a
+directory/search result is also needed or the roster grounding is incomplete.
+
+For any department report, including an open-ended request such as "сделай
+отчёт по ОРД", do not use an unfiltered overview or compose names from several
+tool responses. Resolve the department, call its exact department card and
+keep each metric attached to the employee ID in the live roster. If the user
+says that a name is wrong, do not attempt a conversational correction: call
+`get_access_context`, then `list_employees` for the exact department again and
+rebuild the report only from the newly returned IDs and names.
 
 - Company/overall KPI, ranking and trends: `get_overview_statistics`.
 - Department discovery and comparison: `list_departments`,

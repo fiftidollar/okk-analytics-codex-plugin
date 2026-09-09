@@ -33,6 +33,12 @@
   treated as an absent filter.
 - When employee and department filters are combined, a cross-department
   mismatch returns `not_available` before statistics endpoints are called.
+- Department employee directories are intersected again with the live visible
+  department catalog even if the upstream `/employees` route claims it applied
+  the filter. Department dashboards, rankings, trends and plan/fact rows are
+  then intersected by ID with that canonical roster. Foreign rows are dropped;
+  conflicting employee names are replaced by the employee-directory value and
+  counted in `employee_roster_grounding`.
 - Mixed ID filters: accessible rows plus only an omitted count.
 - Deactivation/role/department changes take effect on the next MCP request via
   `/auth/me`.
@@ -62,6 +68,11 @@ or transcript payloads in operational traces.
 Operational observability is deliberately metadata-only. Structured traces
 record filter presence/counts, timing, status and safe completeness markers,
 but never raw selectors, UUIDs, names or response payloads.
+
+The grounding allowlist is returned to the requesting MCP client as business
+data but is never copied into gateway logs. Its purpose is both enforcement and
+model guidance: a department report may name only people whose IDs appear in
+that response's live roster.
 
 Criterion aggregation currently has to read the existing OKK call-detail
 response because the platform does not yet expose a criteria-only endpoint. The
