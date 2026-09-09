@@ -171,6 +171,17 @@ downstream `/calls` request. A pre-`1.1.0` token cannot gain
 the complete account/ACL matrix; accounts outside the available smoke inventory
 are an explicit coverage item, not a reason to weaken live ACL checks.
 
+The `1.2.2` production rollout on `2026-09-09` deployed commit `337002b` and
+added server-enforced employee-roster grounding. Health reported `1.2.2`; the
+unauthenticated release smoke passed, and an authenticated `ord` department
+read returned one complete authoritative roster with 14 active employees,
+zero excluded or normalized source records, 184 evaluated calls and an 81.3
+average score. A separate strict-read-only query executed inside the production
+backend container returned the same department UUID, the same 14 employee
+UUID/name pairs, the same per-employee averages and the same summary values.
+A real ChatGPT Web run through the published OKK Analytics integration then
+rendered exactly those 14 names and scores, with no foreign or invented person.
+
 Set `FORWARDED_ALLOW_IPS` only to the actual ingress proxy addresses. Using `*`
 is acceptable only when the application port is unreachable except through an
 ingress that overwrites client-IP headers; otherwise login IP throttling can be

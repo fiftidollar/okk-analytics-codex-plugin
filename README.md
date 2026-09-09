@@ -240,12 +240,15 @@ well-known route returns only that token.
 
 This is a live production plugin, not a test-stand connector. Its public MCP URL
 is `https://okk-mcp.akfixdev.ru/mcp`, and its upstream is the production OKK API
-above. Release `1.2.0` is live from runtime commit `f30f9d6` with 27 read-only
+above. Release `1.2.2` is live from runtime commit `337002b` with 27 read-only
 tools, including the ACL-safe private Supervisors catalog and its dedicated
 call/transcript tools. On `2026-09-09`, the production Compose completed
-successfully; health reported `1.2.0`, OAuth and protected-resource metadata
+successfully; health reported `1.2.2`, OAuth and protected-resource metadata
 were available, unauthenticated MCP returned the expected `401`, and the full
 authenticated release smoke passed under an account with three departments
 and three explicitly granted supervisors. An unknown named department returned
-neutral `not_available`. Existing pre-`1.1.0` sessions must re-authorize before
+neutral `not_available`. Department reports are now grounded to the complete
+live employee roster: production DB, MCP output and a real ChatGPT Web report
+matched on all 14 ORD employee UUID/name pairs and their monthly averages, with
+zero foreign records. Existing pre-`1.1.0` sessions must re-authorize before
 calling transcript tools.
