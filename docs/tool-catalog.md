@@ -12,12 +12,17 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `get_department_statistics` | One department's KPI, plan/fact, employees and trend |
 | `compare_departments` | Visible department metrics and trends |
 | `list_employees` | Safe employee directory without credentials or phone fields |
+| `list_supervisors` | Live explicit-grant catalog for the private `Руководители` section |
+| `get_supervisor_call_statistics` | Basic call volume, duration, direction and day trend for one accessible transcription-only supervisor |
 | `get_employee_card` | KPI, plan/client/CRM, strengths, growth, focus and task windows |
 | `compare_employees` | KPI, strengths, growth, focus and task-count comparison |
 | `get_call_statistics` | Call volume, evaluated count, scores, pass rate, duration and trend |
 | `list_call_transcripts` | ACL-scoped call catalog, transcript availability and bounded previews |
 | `get_call_transcript` | Raw/diarized full text or safe speaker segments for one accessible call |
 | `search_call_transcripts` | Phrase/all-term/any-term search with excerpts and explicit scan completeness |
+| `list_supervisor_call_transcripts` | Private-supervisor call catalog, transcript availability and bounded previews |
+| `get_supervisor_call_transcript` | Raw/diarized text or safe speaker segments for one call belonging to an accessible supervisor |
+| `search_supervisor_call_transcripts` | Bounded phrase/term search across one accessible supervisor's transcripts |
 | `get_plan_fact_statistics` | Total/inbound/outbound/new/regular plans and daily rows |
 | `get_client_statistics` | New/regular contacts, missed/no-answer, plus B2B first/repeat touches and returns from repeat to first after 30 days |
 | `get_crm_statistics` | Bitrix deals, tasks, overdue, stages, funnels and employee coverage |
@@ -60,6 +65,28 @@ When both employee and department filters are supplied, the employee must
 belong to that resolved department. Employee cards/comparisons, calls, clients,
 plans, CRM, growth, mentoring, scenarios and criteria all apply this guard.
 
+## Private Supervisors contract
+
+`Руководители` is a separate personal-access section, not a department and not
+an admin-wide dataset. `list_supervisors` reads the live upstream
+`/employees/restricted` catalog and safely projects only ID, name, position and
+active state. No name, email or UUID is hardcoded in the gateway.
+
+When a user names a person without saying which section they belong to, the
+bundled skill searches both `list_employees` and `list_supervisors`. It proceeds
+only after one unambiguous visible match. Ordinary employee tools never accept
+a supervisor as a substitute, and supervisor tools validate their UUID against
+the private catalog before any `/calls` request. An inaccessible or removed
+grant returns neutral `not_available` without looking up calls.
+
+Supervisor rows are transcription-only. `get_supervisor_call_statistics`
+returns call counts, loaded duration/direction/day aggregates and explicit
+source completeness. Quality scores, scenarios, client/CRM data, growth areas
+and mentoring tasks are intentionally unavailable rather than reported as
+zero. The three supervisor transcript tools mirror the normal transcript
+formats and completeness contract without merging supervisors into department
+results.
+
 Transcript tools apply the same guard to department, employee and scenario
 filters. A direct call ID is first checked through the ACL-protected call-detail
 endpoint and then checked again against the gateway's live department catalog
@@ -84,6 +111,10 @@ called only with a valid MCP OAuth token and revalidates `/auth/me`, its
 task Codex must call it first and explicitly tell the user `OKK подключён`, then
 show only the role and departments returned by that call. A browser redirect
 alone is not treated as proof.
+
+Its `data.available_sections.supervisors` field reports only whether the
+private section is available and its visible row count. Names are returned only
+when `list_supervisors` is called.
 
 `no_data` means the scope is accessible but has no matching observations.
 `not_available` means the requested scope/entity cannot be supplied. Neither

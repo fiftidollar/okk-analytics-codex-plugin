@@ -16,7 +16,7 @@ def test_plugin_and_marketplace_point_to_the_standalone_package():
     marketplace = json.loads((ROOT / ".agents/plugins/marketplace.json").read_text(encoding="utf-8"))
     mcp = json.loads((plugin / ".mcp.codex.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "okk-analytics"
-    assert manifest["version"] == "1.1.0"
+    assert manifest["version"] == "1.2.0"
     assert manifest["mcpServers"] == "./.mcp.codex.json"
     assert manifest["repository"].endswith("/okk-analytics-codex-plugin")
     assert manifest["license"] == "MIT"
@@ -51,7 +51,7 @@ def test_claude_code_marketplace_reuses_the_shared_skill_and_standard_http_mcp()
     assert marketplace["owner"] == {"name": "Alpes"}
     assert marketplace["plugins"][0]["name"] == "okk-analytics"
     assert marketplace["plugins"][0]["source"] == "./plugins/okk-analytics"
-    assert marketplace["plugins"][0]["version"] == manifest["version"] == "1.1.0"
+    assert marketplace["plugins"][0]["version"] == manifest["version"] == "1.2.0"
     assert manifest["name"] == "okk-analytics"
     assert manifest["skills"] == "./skills/"
     assert mcp == {
@@ -94,7 +94,7 @@ def test_published_connector_is_wired_for_production_not_test_stand():
     assert settings.api_base_url == "https://okk-backend.akfixdev.ru/api/v1"
 
 
-def test_skill_forbids_credentials_writes_and_routes_transcripts_to_dedicated_tools():
+def test_skill_forbids_credentials_writes_and_routes_people_and_transcripts_to_dedicated_tools():
     skill = (ROOT / "plugins/okk-analytics/skills/okk-analytics/SKILL.md").read_text(encoding="utf-8").lower()
     for required in (
         "never ask",
@@ -117,6 +117,13 @@ def test_skill_forbids_credentials_writes_and_routes_transcripts_to_dedicated_to
         "list_call_transcripts",
         "get_call_transcript",
         "search_call_transcripts",
+        "list_supervisors",
+        "get_supervisor_call_statistics",
+        "list_supervisor_call_transcripts",
+        "get_supervisor_call_transcript",
+        "search_supervisor_call_transcripts",
+        "transcription_only",
+        "never hardcode",
     ):
         assert required in skill
 

@@ -5,6 +5,7 @@ import pytest
 from scripts.smoke_release import (
     DEPARTMENT_SCOPED_TOOLS,
     EXPECTED_TOOLS,
+    SUPERVISOR_SCOPED_TOOLS,
     validate_connection_confirmation,
     validate_tool_inventory,
 )
@@ -16,6 +17,8 @@ def _tool(name: str) -> dict:
         properties["department_ref"] = {"type": ["string", "null"]}
     if name == "compare_departments":
         properties["department_refs"] = {"type": ["array", "null"]}
+    if name in SUPERVISOR_SCOPED_TOOLS:
+        properties["supervisor_id"] = {"type": "string"}
     return {
         "name": name,
         "annotations": {"readOnlyHint": True, "destructiveHint": False},
@@ -51,6 +54,12 @@ def test_release_smoke_requires_exact_safe_inventory():
     ][0]["scopes"] = ["okk.statistics.read"]
     with pytest.raises(RuntimeError):
         validate_tool_inventory({"result": {"tools": missing_transcript_scope}})
+    missing_supervisor_id = [_tool(name) for name in EXPECTED_TOOLS]
+    next(tool for tool in missing_supervisor_id if tool["name"] == "get_supervisor_call_statistics")[
+        "inputSchema"
+    ]["properties"].pop("supervisor_id")
+    with pytest.raises(RuntimeError):
+        validate_tool_inventory({"result": {"tools": missing_supervisor_id}})
 
 
 def test_release_smoke_requires_a_definitive_connection_confirmation():
@@ -64,6 +73,7 @@ def test_release_smoke_requires_a_definitive_connection_confirmation():
                     "confirmation_message": "OKK подключён. Авторизация подтверждена.",
                     "role": "viewer",
                     "departments": [],
+                    "available_sections": {"supervisors": {"available": False, "employee_count": 0}},
                 },
             }
         }
@@ -87,3 +97,17 @@ def test_release_smoke_requires_a_definitive_connection_confirmation():
         }
         with pytest.raises(RuntimeError):
             validate_connection_confirmation(invalid)
+
+    missing_section = {
+        "result": {
+            "structuredContent": {
+                "status": "ok",
+                "data": {
+                    **payload["result"]["structuredContent"]["data"],
+                    "available_sections": {},
+                },
+            }
+        }
+    }
+    with pytest.raises(RuntimeError):
+        validate_connection_confirmation(missing_section)

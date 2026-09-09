@@ -1,6 +1,6 @@
 ---
 name: okk-analytics
-description: Use the connected OKK account for read-only business statistics, employee cards, call transcripts and transcript search, AI strengths and growth areas, mentoring tasks, plans, CRM, scenarios and criteria.
+description: Use the connected OKK account for read-only business statistics, employee and private-supervisor discovery, call transcripts and transcript search, AI strengths and growth areas, mentoring tasks, plans, CRM, scenarios and criteria.
 ---
 
 # OKK Analytics
@@ -8,7 +8,7 @@ description: Use the connected OKK account for read-only business statistics, em
 Use this skill when the user asks about OKK statistics, calls, KPI, departments,
 employees, employee cards, client work, plan/fact, CRM, AI strengths, growth
 areas, weekly focus, mentoring tasks, call transcripts, transcript search,
-scenarios, criteria or their performance.
+supervisors/руководители, scenarios, criteria or their performance.
 
 ## Authentication and safety
 
@@ -33,6 +33,12 @@ scenarios, criteria or their performance.
   not as a fixed list bundled with the plugin. Never rely on remembered example
   names or codes. A newly added or renamed department must work without a
   plugin update as soon as it appears in the connected account's live access.
+- Treat `get_access_context.data.available_sections.supervisors` as the live
+  indication that this account has a private `Руководители` section. This
+  section is not a department and is not implied by the `admin` role. Its
+  membership comes only from `list_supervisors`, which calls the current OKK
+  restricted-employee ACL. Never hardcode a supervisor name, email, UUID or
+  grant in the skill or model response.
 - Match the user's wording to that live catalog. If it does not identify
   exactly one visible department, show the applicable visible choices and ask
   the user to select one; never guess or silently choose the first department.
@@ -51,9 +57,11 @@ scenarios, criteria or their performance.
   inaccessible one. Never infer or reveal which case occurred.
 - If a viewer has no assigned departments, an empty successful response is the
   correct result.
-- Transcript text is sensitive business content. Use only
-  `list_call_transcripts`, `get_call_transcript` and
-  `search_call_transcripts`, which require `okk.statistics.read` plus
+- Transcript text is sensitive business content. For ordinary department
+  employees use only `list_call_transcripts`, `get_call_transcript` and
+  `search_call_transcripts`; for the private Supervisors section use only
+  `list_supervisor_call_transcripts`, `get_supervisor_call_transcript` and
+  `search_supervisor_call_transcripts`. All require `okk.statistics.read` plus
   `okk.transcripts.read`. Never infer
   a transcript from summaries, copy transcript text into logs/files unless the
   user explicitly asks for an artifact, or combine a failed department filter
@@ -63,6 +71,25 @@ scenarios, criteria or their performance.
 
 Always start a task's first OKK request with `get_access_context`. Use
 `get_statistics_catalog` next when the available metrics are unclear.
+
+When the user names a person but does not explicitly identify their OKK
+section, resolve the person dynamically:
+
+1. Call `list_employees(search="<name>")` and
+   `list_supervisors(search="<name>")`.
+2. If exactly one catalog contains one unambiguous match, keep that entity type
+   for the rest of the request.
+3. If both catalogs match, or either returns multiple plausible people, show
+   only the visible candidates and ask the user to choose.
+4. If neither catalog matches, return `not_available`/no visible match. Never
+   retry by dropping the name or by substituting an employee from another
+   department.
+
+An ordinary employee and a private supervisor are different data contracts.
+Never send a supervisor UUID to employee-card, department, scenario, CRM,
+client, growth or mentoring tools. Private supervisors are
+`transcription_only`: only their directory, basic call volume/duration and
+transcripts exist in this plugin; absence of quality scores is not a zero.
 
 For a request such as "employees of <department name> and their scores", match
 the name against the current live department catalog, then call
@@ -76,6 +103,16 @@ needed.
   `get_department_statistics`, `compare_departments`.
 - Employee discovery and full card: `list_employees`, `get_employee_card`,
   `compare_employees`.
+- Private Supervisors discovery: `list_supervisors`. Its result is already
+  restricted to individual upstream grants and must not be merged into a
+  department employee list.
+- Private supervisor call volume/duration: `get_supervisor_call_statistics`.
+- Private supervisor call/transcript discovery:
+  `list_supervisor_call_transcripts`.
+- One private supervisor transcript: `get_supervisor_call_transcript`.
+- Phrase/word search for one private supervisor:
+  `search_supervisor_call_transcripts`; preserve the same source/result
+  completeness markers used by ordinary transcript search.
 - Calls, duration, scores and day trend: `get_call_statistics`.
 - Call discovery and transcript availability: `list_call_transcripts`.
 - Full raw/diarized text or speaker segments for one known accessible call:

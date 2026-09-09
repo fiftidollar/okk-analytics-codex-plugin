@@ -10,13 +10,13 @@
     {
       "name": "okk-analytics",
       "source": "./plugins/okk-analytics",
-      "description": "Read-only OKK statistics, employee insights, scenarios, criteria and ACL-safe call transcripts.",
-      "version": "1.1.0",
+      "description": "Read-only OKK statistics, private supervisors, employee insights and ACL-safe call transcripts.",
+      "version": "1.2.0",
       "author": {
         "name": "Alpes"
       },
       "category": "data-analytics",
-      "tags": ["okk", "analytics", "transcripts", "read-only", "mcp"]
+      "tags": ["okk", "analytics", "supervisors", "transcripts", "read-only", "mcp"]
     }
   ]
 }

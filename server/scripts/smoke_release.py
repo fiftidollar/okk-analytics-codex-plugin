@@ -19,12 +19,17 @@ EXPECTED_TOOLS = [
     "get_department_statistics",
     "compare_departments",
     "list_employees",
+    "list_supervisors",
+    "get_supervisor_call_statistics",
     "get_employee_card",
     "compare_employees",
     "get_call_statistics",
     "list_call_transcripts",
     "get_call_transcript",
     "search_call_transcripts",
+    "list_supervisor_call_transcripts",
+    "get_supervisor_call_transcript",
+    "search_supervisor_call_transcripts",
     "get_plan_fact_statistics",
     "get_client_statistics",
     "get_crm_statistics",
@@ -55,6 +60,12 @@ DEPARTMENT_SCOPED_TOOLS = {
     "get_scenario_performance",
     "get_criterion_performance",
 }
+SUPERVISOR_SCOPED_TOOLS = {
+    "get_supervisor_call_statistics",
+    "list_supervisor_call_transcripts",
+    "get_supervisor_call_transcript",
+    "search_supervisor_call_transcripts",
+}
 
 
 def _rpc(method: str, params: dict[str, Any], request_id: int) -> dict[str, Any]:
@@ -77,6 +88,8 @@ def validate_tool_inventory(payload: dict[str, Any]) -> None:
             raise RuntimeError(f"Tool cannot resolve a named department: {tool.get('name')}")
         if tool.get("name") == "compare_departments" and "department_refs" not in properties:
             raise RuntimeError("compare_departments cannot resolve named departments")
+        if tool.get("name") in SUPERVISOR_SCOPED_TOOLS and "supervisor_id" not in properties:
+            raise RuntimeError(f"Tool does not require a supervisor identity: {tool.get('name')}")
         if "transcript" in str(tool.get("name")):
             schemes = (tool.get("_meta") or tool.get("meta") or {}).get("securitySchemes") or []
             scopes = set(schemes[0].get("scopes") or []) if schemes else set()
@@ -97,6 +110,11 @@ def validate_connection_confirmation(payload: dict[str, Any]) -> None:
         raise RuntimeError("Access context did not return the connected account role")
     if not isinstance(data.get("departments"), list):
         raise RuntimeError("Access context did not return the visible department list")
+    supervisors = (data.get("available_sections") or {}).get("supervisors") or {}
+    if not isinstance(supervisors.get("available"), bool) or not isinstance(
+        supervisors.get("employee_count"), int
+    ):
+        raise RuntimeError("Access context did not return the private-supervisor section state")
 
 
 async def run(base_url: str, token: str | None) -> dict[str, Any]:

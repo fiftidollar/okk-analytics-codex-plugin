@@ -16,9 +16,11 @@ The list intentionally contains exactly five positive and three negative cases.
 4. **Prompt:** «Покажи карточку этого сотрудника, включая KPI и задачи» after an
    ACL-safe employee lookup. **Expected:** call `get_employee_card`; preserve
    the bounded mentoring-history marker.
-5. **Prompt:** «Найди в доступных мне звонках за месяц фразу про перенос доставки и покажи контекст».
-   **Expected:** call `search_call_transcripts`, preserve department ACL and
-   scan-completeness metadata, and return only safe call fields plus excerpts.
+5. **Prompt:** «Найди в звонках руководителя Воробьёва за месяц фразу про перенос доставки и покажи контекст».
+   **Expected:** search both person catalogs, resolve him only through
+   `list_supervisors`, then call `search_supervisor_call_transcripts`; preserve
+   private ACL and scan-completeness metadata and never substitute a department
+   employee with a similar name.
 
 ## Negative (plugin should not be used)
 

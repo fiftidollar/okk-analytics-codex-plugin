@@ -1,10 +1,10 @@
 # Terms of service
 
-Last updated: 2026-07-18.
+Last updated: 2026-09-09.
 
 OKK Analytics is a read-only community integration for authorized OKK users.
 You must use an account that you are permitted to access and must not attempt to
-circumvent OKK role or department restrictions.
+circumvent OKK role, department or explicit private-supervisor restrictions.
 
 The integration exposes only the information available through the connected
 account. Dedicated transcript tools can read and search text only for calls

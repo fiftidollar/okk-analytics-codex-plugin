@@ -19,6 +19,9 @@
 
 - Admin: all departments returned by the live account.
 - Viewer: only live `department_ids` and entities underneath them.
+- Private supervisors: only rows returned by the live
+  `/employees/restricted` endpoint for this exact user. Admin is not a bypass;
+  explicit upstream grants are required.
 - The gateway intersects `/departments` with the viewer's revalidated live
   `department_ids` as defense in depth even though the upstream route is also
   ACL-aware.
@@ -33,6 +36,10 @@
 - Mixed ID filters: accessible rows plus only an omitted count.
 - Deactivation/role/department changes take effect on the next MCP request via
   `/auth/me`.
+- Supervisor grant changes take effect on the next supervisor request. A
+  supervisor UUID is checked against the private catalog before `/calls` is
+  queried, and a department-less direct call requires the same match before its
+  transcript is fetched.
 
 ## Data minimization
 
@@ -43,11 +50,12 @@ The B2B touch-cycle extension follows the same rule: the client-statistics tool
 may expose aggregate counts and the fixed reset-window metadata, but never a
 phone, per-number transition row or hidden manager/client identity.
 
-Transcript content is a narrowly scoped exception. Only the three dedicated
-tools may serialize it, and all require both `okk.transcripts.read` and the
-statistics scope. The gateway first applies the normal
-upstream call ACL, then validates the call's employee/department against the
-fresh live catalog. It returns no phone/audio/external-call fields, never
+Transcript content is a narrowly scoped exception. Only the six dedicated
+ordinary/supervisor transcript tools may serialize it, and all require both
+`okk.transcripts.read` and the statistics scope. The gateway first applies the
+normal upstream call ACL, then validates the call's employee/department against
+the fresh live department or restricted-supervisor catalog. It returns no
+phone/audio/external-call fields, never
 persists or caches transcript bodies, and never includes search text, excerpts
 or transcript payloads in operational traces.
 

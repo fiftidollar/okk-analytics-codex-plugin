@@ -128,12 +128,17 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
         "get_department_statistics",
         "compare_departments",
         "list_employees",
+        "list_supervisors",
+        "get_supervisor_call_statistics",
         "get_employee_card",
         "compare_employees",
         "get_call_statistics",
         "list_call_transcripts",
         "get_call_transcript",
         "search_call_transcripts",
+        "list_supervisor_call_transcripts",
+        "get_supervisor_call_transcript",
+        "search_supervisor_call_transcripts",
         "get_plan_fact_statistics",
         "get_client_statistics",
         "get_crm_statistics",
@@ -187,6 +192,16 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
         tool for tool in tools if tool.name == "compare_departments"
     ).inputSchema
     assert "department_refs" in compare_departments_schema["properties"]
+    supervisor_scoped = {
+        "get_supervisor_call_statistics",
+        "list_supervisor_call_transcripts",
+        "get_supervisor_call_transcript",
+        "search_supervisor_call_transcripts",
+    }
+    for tool in tools:
+        if tool.name in supervisor_scoped:
+            assert "supervisor_id" in tool.inputSchema["required"]
+            assert "department_ref" not in tool.inputSchema["properties"]
     access_tool = next(tool for tool in tools if tool.name == "get_access_context")
     assert "подтверждает подключение ОКК" in access_tool.description
     assert "OKK подключён" in access_tool.description
@@ -199,7 +214,20 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
         "list_call_transcripts": {"okk.statistics.read", "okk.transcripts.read"},
         "get_call_transcript": {"okk.statistics.read", "okk.transcripts.read"},
         "search_call_transcripts": {"okk.statistics.read", "okk.transcripts.read"},
+        "list_supervisor_call_transcripts": {"okk.statistics.read", "okk.transcripts.read"},
+        "get_supervisor_call_transcript": {"okk.statistics.read", "okk.transcripts.read"},
+        "search_supervisor_call_transcripts": {"okk.statistics.read", "okk.transcripts.read"},
     }
+
+
+def test_mcp_instructions_route_named_people_without_plugin_skill_support():
+    mcp = create_mcp_server(Settings(), AsyncMock())
+    instructions = mcp.instructions or ""
+
+    assert "search both list_employees and list_supervisors" in instructions
+    assert "use only the matching section's tools" in instructions
+    assert "Never treat a supervisor as a department employee" in instructions
+    assert "never hardcode names, emails or grants" in instructions
 
 
 def test_mcp_transport_allows_only_the_configured_public_origin():

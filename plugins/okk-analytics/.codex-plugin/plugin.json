@@ -1,7 +1,7 @@
 {
   "name": "okk-analytics",
-  "version": "1.1.0",
-  "description": "Read-only OKK analytics and ACL-safe call transcripts with native account OAuth.",
+  "version": "1.2.0",
+  "description": "Read-only OKK analytics, supervisors and ACL-safe call transcripts with native account OAuth.",
   "author": {
     "name": "Alpes",
     "url": "https://github.com/fiftidollar"
@@ -9,12 +9,12 @@
   "homepage": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
   "repository": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
   "license": "MIT",
-  "keywords": ["okk", "analytics", "kpi", "employees", "transcripts", "read-only"],
+  "keywords": ["okk", "analytics", "kpi", "employees", "supervisors", "transcripts", "read-only"],
   "skills": "./skills/",
   "interface": {
     "displayName": "OKK Analytics",
-    "shortDescription": "Статистика и транскрипции ОКК — безопасно и только на чтение.",
-    "longDescription": "Подключает Codex к вашему аккаунту ОКК через OAuth: общая, отделовая и персональная статистика, клиентские и CRM-метрики, план/факт, AI-сильные стороны и зоны роста, наставнические задачи, сценарии, критерии, транскрипции доступных звонков и поиск по ним. Результаты всегда ограничены текущими правами пользователя.",
+    "shortDescription": "Статистика, руководители и транскрипции ОКК — только на чтение.",
+    "longDescription": "Подключает Codex к вашему аккаунту ОКК через OAuth: общая, отделовая и персональная статистика, персонально доступный раздел руководителей, клиентские и CRM-метрики, план/факт, AI-сильные стороны и зоны роста, наставнические задачи, сценарии, критерии, транскрипции доступных звонков и поиск по ним. Результаты всегда ограничены текущими правами пользователя.",
     "developerName": "Alpes",
     "category": "Data & Analytics",
     "websiteURL": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
@@ -25,6 +25,7 @@
       "Read-only analytics",
       "Native OKK OAuth",
       "Access-aware employee insights",
+      "Private supervisors section",
       "ACL-safe transcript search"
     ],
     "defaultPrompt": [

@@ -3,7 +3,8 @@
 Community plugin and standalone MCP gateway for read-only OKK analytics. A user
 connects their own OKK account with the normal email/password login page. Codex
 and Claude Code never receive the password, and every result is restricted by
-the account's current role and department ACL.
+the account's current role, department ACL and explicit private-supervisor
+grants.
 
 The account must have a working local OKK password. An account provisioned only
 through HR/SSO needs a local OKK password set by the normal account-management
@@ -15,9 +16,10 @@ the Codex/Claude Code plugin packages.
 
 ## Included
 
-- 22 strictly typed MCP tools for company, department, employee, call, client,
+- 27 strictly typed MCP tools for company, department, employee, call, client,
   plan/fact, CRM, growth, mentoring, scenario and criterion statistics, plus
-  ACL-safe transcript catalog, full transcript reading and full-text search.
+  an ACL-safe private Supervisors catalog, call metrics, transcript catalog,
+  full transcript reading and full-text search.
 - Full employee-card view available through the current OKK API: KPI, plan/fact,
   client and CRM metrics, AI strengths, growth areas, weekly/saved focus, active
   tasks and recent completed tasks.
@@ -39,6 +41,9 @@ the Codex/Claude Code plugin packages.
   `/mcp` OAuth flow.
 - Live `/auth/me` verification on every MCP request.
 - Admin/viewer/empty-ACL semantics and neutral inaccessible-ID responses.
+- A separate `Руководители` contract driven by live explicit OKK grants. An
+  admin without a grant receives an empty catalog; newly granted supervisors
+  appear without a plugin release.
 - Exact department selection by visible UUID, code or name. A failed named
   department never falls back to an unfiltered employee population.
 - Redacted operational tool traces with request ID, timing, applied department
@@ -57,7 +62,7 @@ operations and every write action.
 plugins/okk-analytics/   Shared skill plus Codex and Claude Code plugin manifests
 .agents/plugins/         Codex community marketplace manifest
 .claude-plugin/          Claude Code community marketplace manifest
-server/okk_mcp/          OAuth server, encrypted sessions and 22 MCP tools
+server/okk_mcp/          OAuth server, encrypted sessions and 27 MCP tools
 server/migrations/       Standalone PostgreSQL schema
 server/tests/            Security, ACL, projection and tool-contract tests
 docs/                    Architecture, tools, security and deployment runbooks
@@ -144,6 +149,11 @@ Release `1.1.0` adds the dedicated `okk.transcripts.read` scope. Users upgrading
 from an older authenticated version must run the fresh-login action once before
 the transcript tools can be used; refresh tokens intentionally cannot gain a
 scope that was not granted during their original authorization.
+
+Release `1.2.0` adds the private `Руководители` catalog and dedicated call and
+transcript tools. It uses the existing statistics/transcript scopes, so an
+already authenticated `1.1.0` connection needs only the plugin update and a
+new task; access continues to come from live OKK grants.
 
 ## Install in Claude Code
 

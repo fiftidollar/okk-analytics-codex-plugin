@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added five tools for the private `Руководители` section: live ACL-scoped
+  discovery, basic transcription-only call statistics, transcript listing,
+  one-call transcript reading and transcript search. Supervisor membership is
+  never compiled into the plugin and an admin role alone does not grant access.
+- Added model routing that resolves a named person across the ordinary employee
+  and private supervisor catalogs before choosing tools. Supervisor UUIDs are
+  never sent to KPI, scenario, CRM, client, growth or mentoring endpoints.
+- Hardened direct transcript reads for department-less calls: the gateway now
+  requires a match in the caller's live restricted-supervisor catalog before
+  fetching transcript text.
 - Extended `get_client_statistics` and the metric catalog with the B2B
   30-day first/repeat-touch cycle, including initial first touches, repeat
   touches and the subset reactivated from repeat into first touch after 30

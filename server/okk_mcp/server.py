@@ -130,6 +130,13 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             "department's employees. If status is not_available, state that the requested "
             "department is outside the connected account's visible scope and name only the "
             "departments present in access_context. "
+            "The private Supervisors section is separate from departments and is discovered "
+            "only through list_supervisors. When the user names a person without identifying "
+            "their section, search both list_employees and list_supervisors, then use only the "
+            "matching section's tools. Never treat a supervisor as a department employee or "
+            "claim KPI, scenario, CRM, client, growth or mentoring data for a transcription-only "
+            "supervisor. Supervisor access is determined only by the live OKK restricted catalog; "
+            "never hardcode names, emails or grants. "
             "Never ask the user for their OKK password in chat: authentication happens only "
             "on the OKK authorization page. Never infer hidden departments or entities from "
             "not_available/omitted results. Transcripts may be read only through the dedicated "
@@ -155,7 +162,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Проверка подключения и доступа ОКК",
-        description="Первый безопасный вызов после входа: успешный ответ технически подтверждает подключение ОКК и показывает роль и только доступные текущему аккаунту отделы. После успеха явно сообщите пользователю: «OKK подключён».",
+        description="Первый безопасный вызов после входа: успешный ответ технически подтверждает подключение ОКК, показывает роль, только доступные текущему аккаунту отделы и наличие персонального раздела «Руководители». После успеха явно сообщите пользователю: «OKK подключён».",
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,
@@ -300,6 +307,48 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             include_inactive=include_inactive,
             page=page,
             page_size=page_size,
+        )
+
+    @mcp.tool(
+        title="Доступные руководители",
+        description=(
+            "Возвращает персональный ACL-каталог раздела «Руководители». Раздел отделён от "
+            "обычных сотрудников и не зависит от роли admin: доступ задаётся индивидуальными "
+            "правами OKK. При поиске человека по имени проверяйте этот каталог отдельно."
+        ),
+        annotations=READ_ONLY,
+        meta=_security_meta(STAT_SCOPE),
+        structured_output=True,
+    )
+    async def list_supervisors(
+        search: str | None = Field(default=None, max_length=200),
+    ) -> AnalyticsEnvelope:
+        _require_scopes(STAT_SCOPE)
+        return await _read(client, "/mcp-read/supervisors", search=search)
+
+    @mcp.tool(
+        title="Статистика звонков руководителя",
+        description=(
+            "Возвращает только базовые read-only метрики звонков доступного руководителя: "
+            "объём, длительность, направления и дневной ряд. Для этого transcription-only "
+            "контура оценки, сценарии, клиенты, CRM и наставничество недоступны."
+        ),
+        annotations=READ_ONLY,
+        meta=_security_meta(STAT_SCOPE),
+        structured_output=True,
+    )
+    async def get_supervisor_call_statistics(
+        supervisor_id: UUID,
+        period: Period = "month",
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> AnalyticsEnvelope:
+        _require_scopes(STAT_SCOPE)
+        return await _read(
+            client,
+            "/mcp-read/supervisor-call-statistics",
+            supervisor_id=supervisor_id,
+            **_period_params(period, start_date, end_date),
         )
 
     @mcp.tool(
@@ -501,6 +550,98 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             department_ref=department_ref,
             employee_id=employee_id,
             scenario_id=scenario_id,
+            match_mode=match_mode,
+            context_chars=context_chars,
+            limit=limit,
+            **_period_params(period, start_date, end_date),
+        )
+
+    @mcp.tool(
+        title="Транскрипции звонков руководителя",
+        description=(
+            "Показывает звонки и превью транскрипций одного руководителя из персонально "
+            "доступного раздела «Руководители». Не используйте обычный каталог сотрудников "
+            "для этого контура; недоступный UUID возвращает нейтральный not_available."
+        ),
+        annotations=READ_ONLY,
+        meta=_security_meta(STAT_SCOPE, TRANSCRIPT_SCOPE),
+        structured_output=True,
+    )
+    async def list_supervisor_call_transcripts(
+        supervisor_id: UUID,
+        period: Period = "month",
+        start_date: str | None = None,
+        end_date: str | None = None,
+        transcript_format: TranscriptFormat = "diarized",
+        preview_chars: int = Field(default=300, ge=0, le=2000),
+        page: int = Field(default=1, ge=1),
+        page_size: int = Field(default=25, ge=1, le=100),
+    ) -> AnalyticsEnvelope:
+        _require_scopes(STAT_SCOPE, TRANSCRIPT_SCOPE)
+        return await _read(
+            client,
+            "/mcp-read/supervisor-call-transcripts",
+            supervisor_id=supervisor_id,
+            transcript_format=transcript_format,
+            preview_chars=preview_chars,
+            page=page,
+            page_size=page_size,
+            **_period_params(period, start_date, end_date),
+        )
+
+    @mcp.tool(
+        title="Полная транскрипция звонка руководителя",
+        description=(
+            "Читает raw/diarized текст или безопасные speaker-сегменты одного звонка, "
+            "одновременно проверяя доступ к руководителю и принадлежность звонка ему."
+        ),
+        annotations=READ_ONLY,
+        meta=_security_meta(STAT_SCOPE, TRANSCRIPT_SCOPE),
+        structured_output=True,
+    )
+    async def get_supervisor_call_transcript(
+        supervisor_id: UUID,
+        call_id: UUID,
+        transcript_format: TranscriptFormat = "diarized",
+        max_chars: int = Field(default=120000, ge=1000, le=500000),
+        max_segments: int = Field(default=2000, ge=1, le=10000),
+    ) -> AnalyticsEnvelope:
+        _require_scopes(STAT_SCOPE, TRANSCRIPT_SCOPE)
+        return await _read(
+            client,
+            f"/mcp-read/supervisor-call-transcript/{call_id}",
+            supervisor_id=supervisor_id,
+            transcript_format=transcript_format,
+            max_chars=max_chars,
+            max_segments=max_segments,
+        )
+
+    @mcp.tool(
+        title="Поиск по транскрипциям руководителя",
+        description=(
+            "Ищет фразу или слова только в транскрипциях одного персонально доступного "
+            "руководителя и явно сообщает полноту сканирования."
+        ),
+        annotations=READ_ONLY,
+        meta=_security_meta(STAT_SCOPE, TRANSCRIPT_SCOPE),
+        structured_output=True,
+    )
+    async def search_supervisor_call_transcripts(
+        supervisor_id: UUID,
+        query: str = Field(min_length=2, max_length=500),
+        period: Period = "month",
+        start_date: str | None = None,
+        end_date: str | None = None,
+        match_mode: TranscriptMatchMode = "phrase",
+        context_chars: int = Field(default=240, ge=40, le=2000),
+        limit: int = Field(default=25, ge=1, le=100),
+    ) -> AnalyticsEnvelope:
+        _require_scopes(STAT_SCOPE, TRANSCRIPT_SCOPE)
+        return await _read(
+            client,
+            "/mcp-read/search-supervisor-call-transcripts",
+            supervisor_id=supervisor_id,
+            query=query,
             match_mode=match_mode,
             context_chars=context_chars,
             limit=limit,

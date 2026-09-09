@@ -64,7 +64,8 @@ async def test_access_context_is_the_definitive_authenticated_connection_confirm
         role="viewer",
         department_ids=(department_id,),
         responses={
-            "/departments": [{"id": department_id, "name": "Отдел региональных продаж", "code": "ord"}]
+            "/departments": [{"id": department_id, "name": "Отдел региональных продаж", "code": "ord"}],
+            "/employees/restricted": [],
         },
     )
 
@@ -75,6 +76,7 @@ async def test_access_context_is_the_definitive_authenticated_connection_confirm
         "authenticated": True,
         "connection_status": "connected",
         "confirmation_message": "OKK подключён. Авторизация подтверждена.",
+        "available_sections": {"supervisors": {"available": False, "employee_count": 0}},
         "role": "viewer",
         "all_departments": False,
         "departments": [{"id": department_id, "name": "Отдел региональных продаж", "code": "ord"}],
@@ -84,7 +86,7 @@ async def test_access_context_is_the_definitive_authenticated_connection_confirm
         "all_departments": False,
         "departments": [{"id": department_id, "name": "Отдел региональных продаж", "code": "ord"}],
     }
-    assert platform.calls == [("/departments", [])]
+    assert platform.calls == [("/departments", []), ("/employees/restricted", [])]
 
 
 @pytest.mark.anyio
@@ -103,6 +105,21 @@ async def test_statistics_catalog_routes_transcripts_without_listing_them_as_exc
         "list_call_transcripts",
         "get_call_transcript",
         "search_call_transcripts",
+    }.issubset(routes)
+    assert domains["supervisors"] == [
+        "directory",
+        "call_volume",
+        "duration",
+        "call_catalog",
+        "transcripts",
+        "transcript_search",
+    ]
+    assert {
+        "list_supervisors",
+        "get_supervisor_call_statistics",
+        "list_supervisor_call_transcripts",
+        "get_supervisor_call_transcript",
+        "search_supervisor_call_transcripts",
     }.issubset(routes)
     assert {
         "b2b_first_touch",
@@ -123,6 +140,115 @@ async def test_empty_viewer_acl_is_a_valid_empty_scope_without_data_queries():
         "departments": [],
     }
     assert platform.calls == []
+
+
+@pytest.mark.anyio
+async def test_supervisor_catalog_uses_explicit_upstream_acl_and_safe_projection():
+    supervisor_id = str(uuid4())
+    platform = FakePlatform(
+        role="admin",
+        responses={
+            "/departments": [],
+            "/employees/restricted": [
+                {
+                    "id": supervisor_id,
+                    "full_name": "Закрытый Руководитель",
+                    "position": "Директор",
+                    "is_active": True,
+                    "email": "private@example.com",
+                    "phone": "+79990000000",
+                    "bitrix_id": "secret",
+                }
+            ],
+        },
+    )
+
+    result = await adapter(platform).list_supervisors(search="руководитель")
+
+    assert result["status"] == "ok"
+    assert result["data"] == {
+        "items": [
+            {
+                "id": supervisor_id,
+                "full_name": "Закрытый Руководитель",
+                "position": "Директор",
+                "is_active": True,
+                "section": "supervisors",
+            }
+        ],
+        "total": 1,
+    }
+    assert result["effective_scope"] == {"section": "supervisors"}
+    serialized = str(result)
+    assert "private@example.com" not in serialized
+    assert "+79990000000" not in serialized
+    assert "secret" not in serialized
+
+
+@pytest.mark.anyio
+async def test_inaccessible_supervisor_id_fails_closed_before_call_lookup():
+    platform = FakePlatform(role="admin", responses={"/departments": [], "/employees/restricted": []})
+
+    result = await adapter(platform).get_supervisor_call_statistics(str(uuid4()))
+
+    assert result["status"] == "not_available"
+    assert result["data"] == {}
+    assert platform.calls == [("/employees/restricted", []), ("/departments", [])]
+
+
+@pytest.mark.anyio
+async def test_supervisor_call_statistics_excludes_evaluation_client_phone_and_audio_data():
+    supervisor_id, call_id = str(uuid4()), str(uuid4())
+    platform = FakePlatform(
+        role="admin",
+        responses={
+            "/departments": [],
+            "/employees/restricted": [{"id": supervisor_id, "full_name": "Руководитель", "position": "CEO"}],
+            "/calls": {
+                "items": [
+                    {
+                        "id": call_id,
+                        "employee_id": supervisor_id,
+                        "direction": "outbound",
+                        "started_at": "2026-09-09T09:00:00Z",
+                        "duration": 120,
+                        "quality_score": 99,
+                        "call_summary": "private summary",
+                        "caller_number": "+79990000000",
+                        "audio_url": "https://secret.example/audio.mp3",
+                        "client": {"id": str(uuid4()), "name": "Secret Client"},
+                        "scenario": {"id": str(uuid4()), "name": "Secret Scenario"},
+                        "employee": {"id": supervisor_id, "full_name": "Руководитель"},
+                    }
+                ],
+                "total": 1,
+                "pages": 1,
+            },
+        },
+    )
+
+    result = await adapter(platform).get_supervisor_call_statistics(
+        supervisor_id,
+        period="custom",
+        start_date="2026-09-09",
+        end_date="2026-09-09",
+    )
+
+    assert result["status"] == "ok"
+    assert result["data"]["calls_total"] == 1
+    assert result["data"]["total_duration_seconds_loaded"] == 120
+    assert result["data"]["directions_loaded"] == {"outbound": 1}
+    assert result["data"]["evaluation_metrics_available"] is False
+    serialized = str(result)
+    for forbidden in (
+        "quality_score",
+        "private summary",
+        "+79990000000",
+        "audio.mp3",
+        "Secret Client",
+        "Secret Scenario",
+    ):
+        assert forbidden not in serialized
 
 
 @pytest.mark.anyio
@@ -1080,6 +1206,36 @@ def test_transcript_search_trace_never_logs_query_or_excerpt(caplog):
     assert "session-secret" not in trace
 
 
+def test_supervisor_trace_logs_only_filter_presence(caplog):
+    supervisor_id = str(uuid4())
+    client = BackendClient(Settings(), object())
+    with caplog.at_level("INFO", logger="okk_mcp.analytics_trace"):
+        client._trace(
+            request_id="request-supervisor",
+            subject="session-secret",
+            path="/mcp-read/search-supervisor-call-transcripts",
+            params={"supervisor_id": supervisor_id, "query": "private phrase"},
+            result={
+                "status": "ok",
+                "omitted_filters_count": 0,
+                "effective_scope": {
+                    "section": "supervisors",
+                    "supervisor_id": supervisor_id,
+                    "supervisor_name": "Private Name",
+                },
+                "data": {"items": [], "source_complete": True},
+            },
+            duration_ms=5,
+        )
+
+    trace = caplog.text
+    assert '"supervisor_filter":true' in trace
+    assert supervisor_id not in trace
+    assert "private phrase" not in trace
+    assert "Private Name" not in trace
+    assert "session-secret" not in trace
+
+
 @pytest.mark.anyio
 async def test_list_call_transcripts_is_acl_scoped_and_projects_no_phone_or_audio_fields():
     department_id, employee_id, scenario_id, call_id = (str(uuid4()) for _ in range(4))
@@ -1198,6 +1354,138 @@ async def test_get_call_transcript_returns_full_acl_visible_text_and_explicit_tr
     assert result["effective_scope"]["employee_id"] == employee_id
     assert "+79990000000" not in str(result)
     assert "secret-audio" not in str(result)
+
+
+@pytest.mark.anyio
+async def test_supervisor_transcript_tools_use_private_catalog_and_enforce_employee_match():
+    supervisor_id, other_supervisor_id = str(uuid4()), str(uuid4())
+    call_id = str(uuid4())
+    transcript = "Руководитель: согласовали следующий шаг с клиентом."
+    supervisor = {
+        "id": supervisor_id,
+        "full_name": "Доступный Руководитель",
+        "position": "Директор",
+    }
+    call = {
+        "id": call_id,
+        "employee_id": supervisor_id,
+        "direction": "outbound",
+        "started_at": "2026-09-09T09:00:00Z",
+        "duration": 90,
+        "caller_number": "+79990000000",
+        "audio_url": "https://secret.example/audio.mp3",
+        "employee": {"id": supervisor_id, "full_name": "Доступный Руководитель"},
+    }
+    platform = FakePlatform(
+        role="admin",
+        responses={
+            "/departments": [],
+            "/employees/restricted": [supervisor],
+            "/calls": {"items": [call], "total": 1, "page": 1, "page_size": 25, "pages": 1},
+            f"/calls/{call_id}": call,
+            f"/calls/{call_id}/transcript": {"transcript": transcript},
+        },
+    )
+    analytics = adapter(platform)
+
+    listed = await analytics.list_supervisor_call_transcripts(
+        supervisor_id,
+        period="custom",
+        start_date="2026-09-09",
+        end_date="2026-09-09",
+    )
+    loaded = await analytics.get_supervisor_call_transcript(supervisor_id=supervisor_id, call_id=call_id)
+    searched = await analytics.search_supervisor_call_transcripts(
+        "следующий шаг",
+        supervisor_id=supervisor_id,
+        period="custom",
+        start_date="2026-09-09",
+        end_date="2026-09-09",
+    )
+    mismatched = await analytics.get_supervisor_call_transcript(
+        supervisor_id=other_supervisor_id,
+        call_id=call_id,
+    )
+
+    assert listed["status"] == "ok"
+    assert listed["data"]["items"][0]["preview"] == transcript
+    assert loaded["status"] == "ok"
+    assert loaded["data"]["transcript"] == transcript
+    assert searched["status"] == "ok"
+    assert searched["data"]["returned_matches"] == 1
+    assert mismatched["status"] == "not_available"
+    serialized = str((listed, loaded, searched))
+    assert "+79990000000" not in serialized
+    assert "audio.mp3" not in serialized
+    call_query = dict(next(params for path, params in platform.calls if path == "/calls"))
+    assert call_query["employee_id"] == supervisor_id
+
+
+@pytest.mark.anyio
+async def test_supervisor_transcript_catalog_marks_omitted_rows_as_partial():
+    supervisor_id, visible_call_id, missing_call_id = str(uuid4()), str(uuid4()), str(uuid4())
+    supervisor = {"id": supervisor_id, "full_name": "Доступный Руководитель"}
+    calls = [
+        {"id": visible_call_id, "employee_id": supervisor_id, "employee": supervisor},
+        {"id": missing_call_id, "employee_id": supervisor_id, "employee": supervisor},
+    ]
+
+    def missing_transcript(_params):
+        raise OKKNotAvailable("transcript not available")
+
+    platform = FakePlatform(
+        role="admin",
+        responses={
+            "/departments": [],
+            "/employees/restricted": [supervisor],
+            "/calls": {"items": calls, "total": 2, "page": 1, "page_size": 25, "pages": 1},
+            f"/calls/{visible_call_id}/transcript": {"transcript": "Доступный текст"},
+            f"/calls/{missing_call_id}/transcript": missing_transcript,
+        },
+    )
+
+    result = await adapter(platform).list_supervisor_call_transcripts(supervisor_id)
+
+    assert result["status"] == "partial"
+    assert result["omitted_filters_count"] == 1
+    assert result["data"]["returned_calls"] == 1
+    assert result["data"]["total_calls"] == 2
+
+
+@pytest.mark.anyio
+async def test_generic_call_transcript_accepts_granted_supervisor_but_rejects_ungranted_one():
+    supervisor_id, call_id = str(uuid4()), str(uuid4())
+    call = {
+        "id": call_id,
+        "employee_id": supervisor_id,
+        "employee": {"id": supervisor_id, "full_name": "Руководитель"},
+    }
+    granted = FakePlatform(
+        role="viewer",
+        department_ids=(),
+        responses={
+            "/employees/restricted": [{"id": supervisor_id, "full_name": "Руководитель"}],
+            f"/calls/{call_id}": call,
+            f"/calls/{call_id}/transcript": {"transcript": "Текст"},
+        },
+    )
+    denied = FakePlatform(
+        role="admin",
+        responses={
+            "/departments": [],
+            "/employees/restricted": [],
+            f"/calls/{call_id}": call,
+        },
+    )
+
+    granted_result = await adapter(granted).get_call_transcript(call_id)
+    denied_result = await adapter(denied).get_call_transcript(call_id)
+
+    assert granted_result["status"] == "ok"
+    assert granted_result["effective_scope"]["employee_id"] == supervisor_id
+    assert granted_result["data"]["call"]["employee"]["section"] == "supervisors"
+    assert denied_result["status"] == "not_available"
+    assert not any(path.endswith("/transcript") for path, _params in denied.calls)
 
 
 @pytest.mark.anyio

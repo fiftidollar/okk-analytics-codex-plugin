@@ -263,6 +263,7 @@ class AnalyticsAdapter:
         self.settings = settings
         self._context = validated_context
         self._departments: list[dict[str, Any]] | None = None
+        self._restricted_supervisors: list[dict[str, Any]] | None = None
         self._semaphore = asyncio.Semaphore(settings.analytics_parallel_requests)
 
     async def _get(self, path: str, **params: Any) -> Any:
@@ -301,6 +302,34 @@ class AnalyticsAdapter:
                 for row in await self.departments()
             ],
         }
+
+    async def restricted_supervisors(self, search: str | None = None) -> list[dict[str, Any]]:
+        """Load the upstream ACL-scoped private supervisor catalog."""
+        if self._restricted_supervisors is None:
+            try:
+                rows = await self._get("/employees/restricted")
+            except OKKNotAvailable:
+                rows = []
+            self._restricted_supervisors = [
+                self._safe_restricted_supervisor(row) for row in rows if isinstance(row, dict)
+            ]
+        if not search or not search.strip():
+            return list(self._restricted_supervisors)
+        terms = _search_terms(search)
+        return [
+            row
+            for row in self._restricted_supervisors
+            if all(
+                term in _normalized_search_text(f"{row.get('full_name') or ''} {row.get('position') or ''}")
+                for term in terms
+            )
+        ]
+
+    async def restricted_supervisor(self, supervisor_id: str) -> dict[str, Any] | None:
+        return next(
+            (row for row in await self.restricted_supervisors() if str(row.get("id")) == str(supervisor_id)),
+            None,
+        )
 
     async def resolve_department(
         self,
@@ -397,6 +426,35 @@ class AnalyticsAdapter:
             "focus_text": row.get("focus_text"),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
+        }
+
+    @staticmethod
+    def _safe_restricted_supervisor(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": str(row.get("id")),
+            "full_name": row.get("full_name"),
+            "position": row.get("position"),
+            "is_active": bool(row.get("is_active", True)),
+            "section": "supervisors",
+        }
+
+    @staticmethod
+    def _safe_supervisor_call(row: dict[str, Any], supervisor: dict[str, Any]) -> dict[str, Any]:
+        """Project transcription-only supervisor calls without KPI/client fields."""
+        return {
+            "id": str(row.get("id")),
+            "employee_id": str(row.get("employee_id")) if row.get("employee_id") else None,
+            "direction": row.get("direction"),
+            "started_at": row.get("started_at"),
+            "ended_at": row.get("ended_at"),
+            "duration": row.get("duration"),
+            "call_status": row.get("call_status"),
+            "employee": {
+                "id": supervisor["id"],
+                "full_name": supervisor.get("full_name"),
+                "position": supervisor.get("position"),
+                "section": "supervisors",
+            },
         }
 
     @staticmethod
@@ -543,15 +601,12 @@ class AnalyticsAdapter:
         nested_department = nested_employee.get("department") or {}
         call_department_id = str(nested_department.get("id") or "")
         if not call_department_id and safe.get("employee_id"):
-            resolved_employee = await self.employee(str(safe["employee_id"]))
-            if resolved_employee:
-                call_department_id = str(resolved_employee.get("department_id") or "")
-                if not safe.get("employee"):
-                    safe["employee"] = {
-                        "id": resolved_employee["id"],
-                        "full_name": resolved_employee.get("full_name"),
-                        "department": resolved_employee.get("department"),
-                    }
+            supervisor = await self.restricted_supervisor(str(safe["employee_id"]))
+            if supervisor:
+                if department_id:
+                    return None
+                return self._safe_supervisor_call(row, supervisor)
+            return None
         if department_id and call_department_id != department_id:
             return None
         context = await self.context()
@@ -756,6 +811,10 @@ class AnalyticsAdapter:
             "/mcp-read/department-statistics": self.get_department_statistics,
             "/mcp-read/compare-departments": self.compare_departments,
             "/mcp-read/employees": self.list_employees,
+            "/mcp-read/supervisors": self.list_supervisors,
+            "/mcp-read/supervisor-call-statistics": self.get_supervisor_call_statistics,
+            "/mcp-read/supervisor-call-transcripts": self.list_supervisor_call_transcripts,
+            "/mcp-read/search-supervisor-call-transcripts": self.search_supervisor_call_transcripts,
             "/mcp-read/compare-employees": self.compare_employees,
             "/mcp-read/call-statistics": self.get_call_statistics,
             "/mcp-read/call-transcripts": self.list_call_transcripts,
@@ -781,6 +840,9 @@ class AnalyticsAdapter:
         if path.startswith("/mcp-read/call-transcript/"):
             params["call_id"] = path.rsplit("/", 1)[-1]
             return await self.get_call_transcript(**params)
+        if path.startswith("/mcp-read/supervisor-call-transcript/"):
+            params["call_id"] = path.rsplit("/", 1)[-1]
+            return await self.get_supervisor_call_transcript(**params)
         handler = routes.get(path)
         if not handler:
             raise ValueError("Unknown read-only analytics route")
@@ -788,11 +850,18 @@ class AnalyticsAdapter:
 
     async def get_access_context(self, **_: Any) -> dict[str, Any]:
         context = await self.access_context()
+        supervisors = await self.restricted_supervisors()
         return await self.envelope(
             {
                 "authenticated": True,
                 "connection_status": "connected",
                 "confirmation_message": "OKK подключён. Авторизация подтверждена.",
+                "available_sections": {
+                    "supervisors": {
+                        "available": bool(supervisors),
+                        "employee_count": len(supervisors),
+                    }
+                },
                 **context,
             }
         )
@@ -815,6 +884,17 @@ class AnalyticsAdapter:
                 ],
             },
             {"domain": "employees", "metrics": ["card", "strengths", "growth_areas", "focus", "mentoring"]},
+            {
+                "domain": "supervisors",
+                "metrics": [
+                    "directory",
+                    "call_volume",
+                    "duration",
+                    "call_catalog",
+                    "transcripts",
+                    "transcript_search",
+                ],
+            },
             {"domain": "plans", "metrics": ["total", "inbound", "outbound", "new", "regular", "daily"]},
             {
                 "domain": "transcripts",
@@ -846,6 +926,26 @@ class AnalyticsAdapter:
                         "use_for": "comparison of two or more visible departments",
                     },
                     {"tool": "list_employees", "use_for": "ACL-scoped employee directory"},
+                    {
+                        "tool": "list_supervisors",
+                        "use_for": "personal ACL-scoped Supervisors section; separate from departments",
+                    },
+                    {
+                        "tool": "get_supervisor_call_statistics",
+                        "use_for": "transcription-only supervisor call volume and duration",
+                    },
+                    {
+                        "tool": "list_supervisor_call_transcripts",
+                        "use_for": "supervisor call catalog and transcript previews",
+                    },
+                    {
+                        "tool": "get_supervisor_call_transcript",
+                        "use_for": "one accessible supervisor call transcript",
+                    },
+                    {
+                        "tool": "search_supervisor_call_transcripts",
+                        "use_for": "full-text search across accessible supervisor transcripts",
+                    },
                     {"tool": "get_employee_card", "use_for": "one employee KPI, insights, mentoring and CRM"},
                     {
                         "tool": "compare_employees",
@@ -1123,6 +1223,90 @@ class AnalyticsAdapter:
             data,
             status="partial" if rows and not complete else ("ok" if rows else "no_data"),
             scope=self.department_scope(department_row),
+        )
+
+    @staticmethod
+    def supervisor_scope(supervisor: dict[str, Any] | None = None) -> dict[str, Any]:
+        scope: dict[str, Any] = {"section": "supervisors"}
+        if supervisor:
+            scope.update(
+                {
+                    "supervisor_id": supervisor["id"],
+                    "supervisor_name": supervisor.get("full_name"),
+                }
+            )
+        return scope
+
+    async def list_supervisors(
+        self,
+        search: str | None = None,
+        **_: Any,
+    ) -> dict[str, Any]:
+        rows = await self.restricted_supervisors(search)
+        return await self.envelope(
+            {"items": rows, "total": len(rows)},
+            status="ok" if rows else "no_data",
+            scope=self.supervisor_scope(),
+        )
+
+    async def get_supervisor_call_statistics(
+        self,
+        supervisor_id: str,
+        period: str = "month",
+        start_date: str | None = None,
+        end_date: str | None = None,
+        **_: Any,
+    ) -> dict[str, Any]:
+        bounds = _period_bounds(period, start_date, end_date)
+        supervisor = await self.restricted_supervisor(supervisor_id)
+        if not supervisor:
+            return await self.envelope({}, status="not_available", period=bounds)
+        rows, source_total, source_complete = await self.calls(
+            start=bounds[0],
+            end=bounds[1],
+            employee_id=supervisor["id"],
+        )
+        visible: list[dict[str, Any]] = []
+        omitted = 0
+        for row in rows:
+            call = await self._visible_call(row, employee_id=supervisor["id"])
+            if call and ((call.get("employee") or {}).get("section") == "supervisors"):
+                visible.append(call)
+            else:
+                omitted += 1
+        direction_counts = Counter(str(row.get("direction") or "unknown") for row in visible)
+        calls_by_day: Counter[str] = Counter()
+        durations = []
+        for row in visible:
+            started_at = _aware_datetime(row.get("started_at"))
+            if started_at:
+                calls_by_day[started_at.date().isoformat()] += 1
+            duration = row.get("duration")
+            if isinstance(duration, int | float) and duration >= 0:
+                durations.append(float(duration))
+        complete = source_complete and omitted == 0
+        data = {
+            "supervisor": supervisor,
+            "calls_total": source_total,
+            "loaded_calls": len(visible),
+            "source_complete": complete,
+            "metrics_basis": "complete_population" if complete else "loaded_subset",
+            "total_duration_seconds_loaded": round(sum(durations), 2),
+            "average_duration_seconds_loaded": (
+                round(sum(durations) / len(durations), 2) if durations else None
+            ),
+            "directions_loaded": dict(sorted(direction_counts.items())),
+            "calls_by_day_loaded": [
+                {"date": day, "calls": count} for day, count in sorted(calls_by_day.items())
+            ],
+            "evaluation_metrics_available": False,
+        }
+        return await self.envelope(
+            data,
+            status="partial" if visible and not complete else ("ok" if visible else "no_data"),
+            scope=self.supervisor_scope(supervisor),
+            period=bounds,
+            omitted=omitted,
         )
 
     async def _page_data(self, employee_id: str, start: date, end: date) -> dict[str, Any]:
@@ -1588,6 +1772,236 @@ class AnalyticsAdapter:
                 "scenario_id": scenario,
                 "transcript_format": "diarized",
             },
+            period=bounds,
+            omitted=omitted,
+        )
+
+    async def list_supervisor_call_transcripts(
+        self,
+        supervisor_id: str,
+        period: str = "month",
+        start_date: str | None = None,
+        end_date: str | None = None,
+        transcript_format: str = "diarized",
+        preview_chars: int = 300,
+        page: int = 1,
+        page_size: int = 25,
+        **_: Any,
+    ) -> dict[str, Any]:
+        bounds = _period_bounds(period, start_date, end_date)
+        supervisor = await self.restricted_supervisor(supervisor_id)
+        if not supervisor:
+            return await self.envelope({}, status="not_available", period=bounds)
+        payload = await self._get(
+            "/calls",
+            employee_id=supervisor["id"],
+            date_from=bounds[0],
+            date_to=bounds[1],
+            page=page,
+            page_size=page_size,
+        )
+
+        async def load(row: dict[str, Any]) -> dict[str, Any] | None:
+            call = await self._visible_call(row, employee_id=supervisor["id"])
+            if not call or ((call.get("employee") or {}).get("section") != "supervisors"):
+                return None
+            try:
+                transcript = await self._bounded(
+                    lambda: self._call_transcript_payload(call["id"], transcript_format)
+                )
+            except OKKNotAvailable:
+                return None
+            if transcript_format == "segments":
+                segments = self._safe_segments(transcript.get("segments"))
+                preview = segments[: min(len(segments), 5)] if preview_chars else []
+                available = bool(segments)
+                transcript_size = len(segments)
+            else:
+                text = transcript.get("transcript")
+                text = text if isinstance(text, str) else ""
+                preview = text[:preview_chars] if preview_chars else ""
+                available = bool(text.strip())
+                transcript_size = len(text)
+            return {
+                "call": call,
+                "transcript_format": transcript_format,
+                "transcript_available": available,
+                "transcript_size": transcript_size,
+                "preview": preview,
+                "preview_truncated": bool(available and transcript_size > len(preview)),
+            }
+
+        loaded = await asyncio.gather(*(load(row) for row in payload.get("items") or []))
+        items = [row for row in loaded if row is not None]
+        omitted = len(loaded) - len(items)
+        data = {
+            "supervisor": supervisor,
+            "items": items,
+            "total_calls": int(payload.get("total") or 0),
+            "page": int(payload.get("page") or page),
+            "page_size": int(payload.get("page_size") or page_size),
+            "pages": int(payload.get("pages") or 0),
+            "returned_calls": len(items),
+            "transcripts_available": sum(1 for row in items if row.get("transcript_available")),
+        }
+        return await self.envelope(
+            data,
+            status="partial" if omitted else ("ok" if items else "no_data"),
+            scope={**self.supervisor_scope(supervisor), "transcript_format": transcript_format},
+            period=bounds,
+            omitted=omitted,
+        )
+
+    async def get_supervisor_call_transcript(
+        self,
+        call_id: str,
+        supervisor_id: str,
+        transcript_format: str = "diarized",
+        max_chars: int = 120000,
+        max_segments: int = 2000,
+        **_: Any,
+    ) -> dict[str, Any]:
+        supervisor = await self.restricted_supervisor(supervisor_id)
+        if not supervisor:
+            return await self.envelope({}, status="not_available")
+        try:
+            raw_call = await self._get(f"/calls/{call_id}")
+        except OKKNotAvailable:
+            return await self.envelope({}, status="not_available")
+        call = await self._visible_call(raw_call, employee_id=supervisor["id"])
+        if not call or ((call.get("employee") or {}).get("section") != "supervisors"):
+            return await self.envelope({}, status="not_available")
+        try:
+            payload = await self._call_transcript_payload(call_id, transcript_format)
+        except OKKNotAvailable:
+            return await self.envelope({}, status="not_available")
+        if transcript_format == "segments":
+            source = self._safe_segments(payload.get("segments"))
+            returned = source[:max_segments]
+            truncated = len(returned) < len(source)
+            transcript_data: dict[str, Any] = {
+                "segments": returned,
+                "total_segments": len(source),
+                "returned_segments": len(returned),
+            }
+            available = bool(source)
+        else:
+            source_text = payload.get("transcript")
+            source_text = source_text if isinstance(source_text, str) else ""
+            returned_text = source_text[:max_chars]
+            truncated = len(returned_text) < len(source_text)
+            transcript_data = {
+                "transcript": returned_text,
+                "total_chars": len(source_text),
+                "returned_chars": len(returned_text),
+            }
+            available = bool(source_text.strip())
+        return await self.envelope(
+            {
+                "supervisor": supervisor,
+                "call": call,
+                "transcript_format": transcript_format,
+                "transcript_available": available,
+                "truncated": truncated,
+                **transcript_data,
+            },
+            status="partial" if truncated else ("ok" if available else "no_data"),
+            scope={
+                **self.supervisor_scope(supervisor),
+                "call_id": call_id,
+                "transcript_format": transcript_format,
+            },
+        )
+
+    async def search_supervisor_call_transcripts(
+        self,
+        query: str,
+        supervisor_id: str,
+        period: str = "month",
+        start_date: str | None = None,
+        end_date: str | None = None,
+        match_mode: str = "phrase",
+        context_chars: int = 240,
+        limit: int = 25,
+        **_: Any,
+    ) -> dict[str, Any]:
+        query = query.strip()
+        if len(query) < 2:
+            raise ValueError("query must contain at least two non-whitespace characters")
+        bounds = _period_bounds(period, start_date, end_date)
+        supervisor = await self.restricted_supervisor(supervisor_id)
+        if not supervisor:
+            return await self.envelope({}, status="not_available", period=bounds)
+        calls, total, calls_complete = await self.calls(
+            start=bounds[0],
+            end=bounds[1],
+            employee_id=supervisor["id"],
+            max_calls=self.settings.transcript_search_max_calls,
+        )
+        visible_calls: list[dict[str, Any]] = []
+        omitted = 0
+        for row in calls:
+            call = await self._visible_call(row, employee_id=supervisor["id"])
+            if call and ((call.get("employee") or {}).get("section") == "supervisors"):
+                visible_calls.append(call)
+            else:
+                omitted += 1
+
+        async def search(call: dict[str, Any]) -> dict[str, Any] | None:
+            try:
+                payload = await self._bounded(lambda: self._call_transcript_payload(call["id"], "diarized"))
+            except OKKNotAvailable:
+                return None
+            transcript = payload.get("transcript")
+            if not isinstance(transcript, str) or not transcript.strip():
+                return None
+            positions = _match_positions(transcript, query, match_mode)
+            if not positions:
+                return None
+            return {
+                "call": call,
+                "match_count": len(positions),
+                "excerpts": _match_excerpts(
+                    transcript,
+                    positions,
+                    context_chars=context_chars,
+                ),
+                "transcript_chars": len(transcript),
+            }
+
+        matches: list[dict[str, Any]] = []
+        scanned = 0
+        batch_size = self.settings.analytics_parallel_requests
+        for start in range(0, len(visible_calls), batch_size):
+            batch = visible_calls[start : start + batch_size]
+            batch_matches = await asyncio.gather(*(search(call) for call in batch))
+            scanned += len(batch)
+            matches.extend(row for row in batch_matches if row is not None)
+            if len(matches) >= limit:
+                break
+        result_complete = len(matches) <= limit and scanned == len(visible_calls)
+        matches = matches[:limit]
+        source_complete = calls_complete and scanned == len(visible_calls)
+        data = {
+            "supervisor": supervisor,
+            "items": matches,
+            "query": query,
+            "match_mode": match_mode,
+            "returned_matches": len(matches),
+            "scanned_calls": scanned,
+            "candidate_calls_loaded": len(visible_calls),
+            "source_calls_total": total,
+            "source_complete": source_complete,
+            "result_complete": result_complete,
+            "search_call_cap": self.settings.transcript_search_max_calls,
+            "result_limit": limit,
+        }
+        return await self.envelope(
+            data,
+            status=(
+                "partial" if not source_complete or not result_complete else ("ok" if matches else "no_data")
+            ),
+            scope={**self.supervisor_scope(supervisor), "transcript_format": "diarized"},
             period=bounds,
             omitted=omitted,
         )
@@ -2419,6 +2833,7 @@ class BackendClient:
             "custom_date_range": bool(params.get("start_date") or params.get("end_date")),
             "department_filter": bool(params.get("department_id") or params.get("department_ref")),
             "employee_filter": bool(params.get("employee_id") or params.get("employee_ids")),
+            "supervisor_filter": bool(params.get("supervisor_id")),
             "scenario_filter_count": len(params.get("scenario_ids") or [])
             + int(bool(params.get("scenario_id"))),
             "criterion_filter_count": len(params.get("criterion_ids") or []),

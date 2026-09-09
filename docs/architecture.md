@@ -9,6 +9,7 @@ Codex MCP client
        -> existing OKK /api/v1 over HTTPS
             -> /auth/login, /auth/refresh, /auth/me
             -> existing read-only analytics GET endpoints
+            -> ACL-protected /employees/restricted
             -> ACL-protected /calls/{call_id}/transcript
 ```
 
@@ -50,6 +51,19 @@ The published deployment is production-only: the upstream base URL is
 6. Every analytics call uses only an upstream GET route. Results pass through an
    explicit safe projection before MCP serialization.
 
+The private `Руководители` section is not represented as an ordinary
+department. The gateway loads `/employees/restricted` inside each applicable
+MCP request; the upstream endpoint returns only rows explicitly granted to the
+connected user. The `admin` role does not bypass this catalog. Dedicated
+supervisor tools require the selected UUID to exist in that live result before
+calling `/calls`. A newly added, removed or re-granted supervisor therefore
+takes effect without a plugin release.
+
+Restricted supervisors are `transcription_only`. Their MCP projection contains
+identity, basic call volume/duration/direction and transcript data only. It does
+not expose or manufacture department membership, evaluation scores, scenarios,
+clients, CRM, AI growth observations or mentoring tasks.
+
 `get_client_statistics` projects the platform summary counters for the B2B
 30-day touch cycle. Existing, new-first and new-repeat call counts are
 mutually exclusive; the reactivated-after-30-days counter is a documented
@@ -88,7 +102,8 @@ accepted merely because each entity is individually accessible.
 Each completed or upstream-failed analytics call emits one structured JSON log
 event. It contains a request ID, pseudonymous actor hash, normalized tool path,
 filter-presence/count flags, period, duration, status, omitted count, resolved
-department code and completeness/count indicators. It never contains raw
+department code and completeness/count indicators. Supervisor tools add only a
+boolean `supervisor_filter` marker, never its UUID or name. It never contains raw
 request selectors, entity UUIDs, employee names, AI observations, response
 payloads, passwords or tokens. `ANALYTICS_TRACE_ENABLED=false` disables these
 events; responses themselves are never persisted by the gateway.

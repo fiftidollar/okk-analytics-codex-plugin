@@ -56,6 +56,8 @@ public OKK login API and does not mint OKK tokens.
    - viewer with one department;
    - viewer with several departments;
    - viewer with an empty ACL;
+   - an admin with explicit private-supervisor grants;
+   - an admin without private-supervisor grants;
    - deactivated user after an already issued MCP token.
 8. Check direct inaccessible IDs return neutral `not_available`, and mixed
    filters expose only `omitted_filters_count`.
@@ -64,9 +66,9 @@ public OKK login API and does not mint OKK tokens.
    one-department ORD viewer, request B2B and assert `not_available`, zero
    employee/statistics calls after resolution, and an `access_context` that
    names only ORD.
-9. Exercise all 22 tools. For the 19 non-transcript tools, search saved JSON
+9. Exercise all 27 tools. For the 21 non-transcript tools, search saved JSON
    for forbidden fields/values: password, phone, audio, transcript, prompt,
-   reasoning, script, Megafon, routing and pipeline. For the three transcript
+   reasoning, script, Megafon, routing and pipeline. For the six transcript
    tools, verify text appears only under their documented transcript/preview/
    excerpt fields, while structured phone, audio, PBX/external IDs and internal
    processing fields remain absent. Test raw, diarized and segment formats,
@@ -74,6 +76,11 @@ public OKK login API and does not mint OKK tokens.
    For `get_client_statistics` on B2B, also require the reset window `30`, the
    first/repeat counters and the reactivated-first subset from repeat state;
    assert that no phone or per-number transition row is present.
+   For the private-supervisor matrix, require the granted account to receive
+   only the live restricted catalog and dedicated call/transcript data. Require
+   the ungranted admin to receive an empty catalog and `not_available` for a
+   known supervisor UUID without any downstream `/calls` request. Confirm that
+   no supervisor is merged into `list_employees` or a department ranking.
 10. Validate refresh rotation, reuse revocation, logout/revoke and concurrent
     refresh behavior. Upgrade an account holding a pre-transcript token and
     prove that refresh cannot silently add `okk.transcripts.read`; after a fresh
@@ -134,15 +141,16 @@ $env:OKK_MCP_SMOKE_ACCESS_TOKEN = "..."
 python server/scripts/smoke_release.py --output artifacts/mcp-smoke.json
 ```
 
-The `1.1.0` live gate passed TLS/health, OAuth and protected-resource metadata,
-the unauthenticated MCP challenge, authenticated `/auth/me` revalidation for a
-one-department ORD viewer, and the runtime transcript catalog/routing contract.
-The 22-tool inventory and transcript behavior are also covered by the release
-test suite. The remaining live transcript-read smoke requires a freshly
-re-authorized account holding `okk.transcripts.read`; an older token cannot be
-upgraded through refresh by design. Before each release, repeat the complete
-account/ACL matrix; accounts outside the available smoke inventory are
-an explicit remaining coverage item, not a reason to weaken live ACL checks.
+The historical `1.1.0` live gate passed TLS/health, OAuth and
+protected-resource metadata, the unauthenticated MCP challenge, authenticated
+`/auth/me` revalidation for a one-department ORD viewer, and the 22-tool runtime
+transcript catalog/routing contract. The `1.2.0` release suite now requires the
+27-tool inventory plus the granted/ungranted private-supervisor matrix above.
+Live transcript-read smoke requires an account holding
+`okk.transcripts.read`; a pre-`1.1.0` token cannot be upgraded through refresh
+by design. Before each release, repeat the complete account/ACL matrix;
+accounts outside the available smoke inventory are an explicit remaining
+coverage item, not a reason to weaken live ACL checks.
 
 Set `FORWARDED_ALLOW_IPS` only to the actual ingress proxy addresses. Using `*`
 is acceptable only when the application port is unreachable except through an
