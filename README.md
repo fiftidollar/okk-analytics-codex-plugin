@@ -252,3 +252,9 @@ live employee roster: production DB, MCP output and a real ChatGPT Web report
 matched on all 14 ORD employee UUID/name pairs and their monthly averages, with
 zero foreign records. Existing pre-`1.1.0` sessions must re-authorize before
 calling transcript tools.
+# Reporting candidate
+
+1.2.3 is prepared locally with explicit metric definitions and nullable plan
+totals/coverage. Production verification and the remaining post-deploy browser
+gate are recorded in [deployment.md](docs/deployment.md). The verified live
+baseline is 1.2.2; repository/package state is not proof of client installation.

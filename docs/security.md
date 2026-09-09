@@ -1,5 +1,11 @@
 # Security contract
 
+Report interpretation rules supplement server-side ACL and roster enforcement;
+they do not guarantee arbitrary client-model prose. A successful browser example
+does not establish the cause of a previous hallucination or universal accuracy.
+Missing employee matches remain neutral; external uploads cannot establish OKK
+membership or replace unavailable OKK scores.
+
 ## Credentials and tokens
 
 - Codex never receives the OKK password.

@@ -1,5 +1,6 @@
 [tool.pytest.ini_options]
 testpaths = ["server/tests"]
+pythonpath = ["server"]
 addopts = "-q"
 
 [tool.ruff]

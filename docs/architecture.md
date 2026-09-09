@@ -1,5 +1,11 @@
 # Architecture
 
+The 1.2.3 candidate adds explicit department metric semantics and nullable plan
+totals with per-metric roster coverage. It introduces no new upstream endpoint,
+database access, paid model call, OAuth scope or tool. It retains the existing
+server roster filters and complete data fields. The current production baseline
+remains 1.2.2 until the candidate is explicitly approved and deployed.
+
 ```text
 Codex MCP client
   -> OAuth Authorization Code + PKCE
@@ -118,9 +124,10 @@ account plugins: `.mcp.json` contains the HTTPS MCP URL and an `oauth_resource`
 that exactly matches the server's protected-resource metadata. Marketplace
 policy is `ON_INSTALL`, so Codex starts OAuth while installing the plugin.
 
-Official directory plugins may also contain an OpenAI-issued `.app.json`
-connector ID. This community repository intentionally does not invent one;
-that file can be added only after the connector is registered with OpenAI.
+The package includes `.app.json` for the registered OpenAI connector, alongside
+the portable root `plugin.json`/`mcp.json`, legacy Codex manifest and Claude
+Code MCP declaration. A package file is not evidence that ChatGPT has loaded
+that skill or refreshed its connector metadata; verify the installed client.
 
 ## Claude Code plugin contract
 

@@ -154,3 +154,16 @@ observation inside one employee card do not inflate `employee_mentions`.
 The current OKK employee-page API returns at most five active and ten completed
 mentoring tasks per employee. Task tools therefore mark this window as
 `complete=false` and return `partial`; they never present it as full history.
+# Department reporting contract (1.2.3 candidate)
+
+`get_department_statistics.data.reporting_contract` supplies source policy,
+metric definitions and response rules alongside the existing full department
+payload. No tool or OAuth scope is added. `calls_total` is the successful-call
+population; `total_calls` is duration-qualified, while `calls_evaluated` requires
+an actual KPI score. Average duration does not require a score. Average quality
+must not be recomputed by averaging employee means.
+
+`get_plan_fact_statistics.data.totals` and the department `plan_fact` preserve
+null when no plan is set for a metric; assigned zero remains zero. `coverage`
+reports employees with/without a plan per metric, using the visible roster as
+the denominator. A sum with missing assignments is not a complete team target.

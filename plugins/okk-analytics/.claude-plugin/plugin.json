@@ -1,6 +1,6 @@
 {
   "name": "okk-analytics",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Read-only OKK analytics, private supervisors and call transcripts with native OAuth and live ACL discovery.",
   "author": {
     "name": "Alpes",

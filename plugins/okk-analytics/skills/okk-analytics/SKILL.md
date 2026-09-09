@@ -173,6 +173,17 @@ loaded.
 - Use `custom` only with both `start_date` and `end_date` in `YYYY-MM-DD`.
 - Preserve OKK metric names and canonical meanings. Do not recalculate KPI from
   unrelated counters in the model.
+- Use `data.reporting_contract.metric_definitions` for department report labels.
+  `calls_total` counts successful conversations, not every journal record;
+  `total_calls` counts successful conversations above the duration threshold.
+  Average duration uses that threshold population even when a score is absent.
+  Average quality uses evaluated calls; never average employee averages.
+- Plan totals preserve `null` for unset plans and `0` for assigned zero plans.
+  Check per-metric `coverage` before claiming a complete department plan.
+- After a disputed name, repeat the exact scoped lookup and state that no
+  matching accessible OKK record was found when appropriate. Do not offer
+  uploaded cards or spreadsheets as replacement evidence for OKK membership
+  or quality scores.
 - Explain partial availability metadata inline when it materially affects the
   answer; do not turn it into a separate data-quality report.
 - Distinguish `no_data` (the account can access the scope but no observations

@@ -780,6 +780,10 @@ async def test_department_card_by_name_returns_complete_department_sources_only(
     assert result["status"] == "ok"
     assert result["effective_scope"]["department_id"] == b2b_id
     assert result["data"]["complete_employee_ranking"]["employees"][0]["id"] == employee_id
+    assert "summary.calls_total" in result["data"]["reporting_contract"]["metric_definitions"]
+    assert result["data"]["plan_fact"]["totals"]["plan_total"] == 10
+    assert result["data"]["plan_fact"]["totals"]["plan_inbound"] is None
+    assert result["data"]["plan_fact"]["coverage"]["plan_inbound"]["employees_without_plan"] == 1
     assert result["data"]["department_and_employee_trends"]["employee_trends"][0]["id"] == employee_id
     assert result["employee_roster_grounding"] == {
         "source": "live_okk_employee_directory",

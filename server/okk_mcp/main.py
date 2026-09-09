@@ -41,7 +41,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="OKK Analytics MCP",
-    version="1.2.2",
+    version="1.2.3",
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
@@ -60,7 +60,7 @@ async def service_home():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "okk-analytics-mcp", "version": "1.2.2"}
+    return {"status": "ok", "service": "okk-analytics-mcp", "version": "1.2.3"}
 
 
 @app.get("/ready")

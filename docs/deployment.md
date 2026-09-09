@@ -1,5 +1,55 @@
 # Production deployment and release gate
 
+## 2026-09-09 reporting candidate and fresh baseline
+
+Production health was independently verified as 1.2.2. A fresh ChatGPT Web
+request initially required reconnecting OKK; after the normal reconnect,
+`get_access_context` confirmed an admin with three departments and three
+private supervisors. This proves current reconnection, not the cause of the
+original invented-employee complaint.
+
+Two browser requests were exercised: an open-ended ORD current-month report,
+then a B2B August 2026 report in the same chat. Live MCP and read-only production
+SQL matched every employee UUID/name, successful-call count and average score:
+ORD 14 employees / 278 successful / 184 evaluated; B2B 2 / 205 / 126. Mismatches
+were zero. Browser prose still called the successful population all employee
+calls and the duration-qualified average an evaluated-call average. Unset plan
+rows were null while MCP aggregate totals were fabricated zeroes.
+
+The 1.2.3 candidate fixes the plan representation and supplies explicit metric
+definitions in tool data plus matching MCP/skill guidance. Existing source
+fields and all 27 tools remain available. Local evidence is under ignored
+`artifacts/report-qa-2026-09-09/`; it includes browser screenshots/AX snapshots,
+MCP comparison data and the read-only DB verification script and result.
+The browser runs above tested production 1.2.2, not the unpublished candidate.
+The candidate passed 128 tests, Ruff, compilation, package/skill validation,
+Alembic offline SQL and replay of both saved live-source snapshots through the
+changed adapter plus grounding/report-semantics smoke validators. Replay
+preserved identities and metrics and returned null for unset plan totals.
+
+Two additional production browser cases passed: an unknown department produced
+no invented report, and B2B on 2020-01-01 returned unavailable scores while
+explicitly distinguishing the current roster from historical membership.
+All saved report screenshots were manually inspected. Public health, OAuth
+metadata and the unauthenticated challenge passed the release smoke; its
+authenticated protocol checks were skipped because no smoke token was supplied.
+Business-data evidence above came from authenticated connector calls. Console
+capture contains ChatGPT Russian-translation warnings; a complete network trace
+was not captured in this baseline session.
+
+For 1.2.3 release acceptance, run `validate_department_report_semantics` as part
+of authenticated smoke, then repeat both ordinary browser prompts, no-data,
+disputed-name and supervisor requests. Preserve screenshots, DOM, tool evidence
+and console/network observations. Require correct populations in the prose,
+null preservation, exact roster identity and no substituted people. A passing
+local suite alone does not close this post-deploy browser gate.
+
+Dokploy MCP deployment listing for Compose currently returned a validation error
+requiring applicationId, and SSH tools could not open their configured key.
+Direct DB and the local proxy were unavailable. The existing Dokploy browser
+terminal supplied read-only SQL evidence; no deploy/worker control or write SQL
+was performed. Diagnose these independently of report correctness.
+
 This runbook targets live production OKK. Do not point the published community
 plugin at the test-stand API.
 

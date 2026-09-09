@@ -173,6 +173,36 @@ def validate_department_employee_grounding(payload: dict[str, Any]) -> None:
                 raise RuntimeError("Department report contains an ungrounded employee name")
 
 
+def validate_department_report_semantics(payload: dict[str, Any]) -> None:
+    structured = payload.get("result", {}).get("structuredContent") or {}
+    data = structured.get("data") or {}
+    definitions = (data.get("reporting_contract") or {}).get("metric_definitions") or {}
+    for key in (
+        "summary.calls_total",
+        "summary.total_calls",
+        "summary.calls_evaluated",
+        "summary.avg_duration",
+        "summary.average_score",
+        "plan_fact.totals",
+    ):
+        if not isinstance(definitions.get(key), str) or not definitions[key]:
+            raise RuntimeError(f"Department report has no metric definition: {key}")
+    plan = data.get("plan_fact") or {}
+    rows = plan.get("employees") or []
+    expected = (structured.get("employee_roster_grounding") or {}).get("employee_count", 0)
+    for key in ("plan_total", "plan_outbound", "plan_inbound", "plan_outbound_new", "plan_outbound_regular"):
+        if key not in (plan.get("totals") or {}):
+            raise RuntimeError("Plan totals omit an availability value")
+        values = [row[key] for row in rows if row.get(key) is not None]
+        if plan["totals"][key] != (sum(values) if values else None):
+            raise RuntimeError("Plan totals replace unset values or disagree with source rows")
+        coverage = (plan.get("coverage") or {}).get(key) or {}
+        if coverage.get("employees_with_plan") != len(values) or coverage.get(
+            "employees_without_plan"
+        ) != expected - len(values):
+            raise RuntimeError("Plan coverage disagrees with the live roster")
+
+
 def validate_oauth_metadata(
     authorization_metadata: dict[str, Any],
     resource_metadata: dict[str, Any],
@@ -310,7 +340,9 @@ async def run(base_url: str, token: str | None) -> dict[str, Any]:
                 )
                 department_report.raise_for_status()
                 validate_department_employee_grounding(department_report.json())
+                validate_department_report_semantics(department_report.json())
                 report["department_employee_grounding"] = "ok"
+                report["department_report_semantics"] = "ok"
             else:
                 report["department_employee_grounding"] = "skipped: account has no departments"
         else:

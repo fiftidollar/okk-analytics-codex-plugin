@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 1.2.3 — candidate
+
+- Preserve unset plan totals as null and expose per-metric employee coverage;
+  explicitly assigned zero plans remain zero.
+- Return precise report metric definitions with department data, distinguishing
+  successful, duration-qualified and evaluated calls. Keep missing people and
+  scores unavailable after a fresh lookup instead of proposing external data
+  as replacement OKK evidence.
+- Add report-semantics release checks and plan regression cases. Pytest now
+  works from the repository root without a manual PYTHONPATH override.
 
 ## 1.2.2 - 2026-09-09
 

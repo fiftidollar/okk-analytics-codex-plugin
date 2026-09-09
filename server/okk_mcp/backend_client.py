@@ -27,6 +27,7 @@ from okk_mcp.platform_client import (
     OKKPlatformClient,
     OKKUnavailable,
 )
+from okk_mcp.reporting import aggregate_plan_totals, department_report_contract
 
 MSK = ZoneInfo("Europe/Moscow")
 LOGGER = logging.getLogger("okk_mcp.analytics_trace")
@@ -1300,6 +1301,7 @@ class AnalyticsAdapter:
         return await self.envelope(
             {
                 "department": department_row,
+                "reporting_contract": department_report_contract(),
                 "summary": summary,
                 "daily_trend": trend,
                 "employee_ranking": employees,
@@ -2301,19 +2303,10 @@ class AnalyticsAdapter:
             summaries.extend(grounded)
         if employee:
             summaries = [row for row in summaries if str(row.get("employee_id")) == employee]
-        totals: dict[str, float] = defaultdict(float)
-        for row in summaries:
-            for key in (
-                "plan_total",
-                "plan_outbound",
-                "plan_inbound",
-                "plan_outbound_new",
-                "plan_outbound_regular",
-            ):
-                totals[key] += _number(row.get(key))
+        plan_totals = aggregate_plan_totals(summaries, len(visible_employees))
         excluded_source_records = roster_excluded + removed_source_records
         return await self.envelope(
-            {"totals": dict(totals), "employees": summaries},
+            {**plan_totals, "employees": summaries},
             status=(
                 "partial"
                 if summaries and (not complete or excluded_source_records or normalized_source_records)
