@@ -141,16 +141,18 @@ $env:OKK_MCP_SMOKE_ACCESS_TOKEN = "..."
 python server/scripts/smoke_release.py --output artifacts/mcp-smoke.json
 ```
 
-The historical `1.1.0` live gate passed TLS/health, OAuth and
-protected-resource metadata, the unauthenticated MCP challenge, authenticated
-`/auth/me` revalidation for a one-department ORD viewer, and the 22-tool runtime
-transcript catalog/routing contract. The `1.2.0` release suite now requires the
-27-tool inventory plus the granted/ungranted private-supervisor matrix above.
-Live transcript-read smoke requires an account holding
-`okk.transcripts.read`; a pre-`1.1.0` token cannot be upgraded through refresh
-by design. Before each release, repeat the complete account/ACL matrix;
-accounts outside the available smoke inventory are an explicit remaining
-coverage item, not a reason to weaken live ACL checks.
+The historical `1.1.0` live gate passed the 22-tool transcript contract. The
+`1.2.0` production rollout on `2026-09-09` deployed commit `f30f9d6`; health
+reported `1.2.0`, OAuth metadata and the unauthenticated challenge passed, and
+an authenticated MCP release smoke returned the exact 27-tool inventory. The
+live account context returned role `admin`, three departments and three
+explicitly granted private supervisors; an unknown named department returned
+neutral `not_available`. The automated suite separately proves that an admin
+without a supervisor grant receives no supervisor data and triggers no
+downstream `/calls` request. A pre-`1.1.0` token cannot gain
+`okk.transcripts.read` through refresh by design. Before each release, repeat
+the complete account/ACL matrix; accounts outside the available smoke inventory
+are an explicit coverage item, not a reason to weaken live ACL checks.
 
 Set `FORWARDED_ALLOW_IPS` only to the actual ingress proxy addresses. Using `*`
 is acceptable only when the application port is unreachable except through an
