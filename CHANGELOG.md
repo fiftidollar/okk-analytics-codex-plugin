@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.3 — candidate
+## 1.2.3 — 2026-09-09
 
 - Preserve unset plan totals as null and expose per-metric employee coverage;
   explicitly assigned zero plans remain zero.

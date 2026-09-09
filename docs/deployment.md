@@ -1,5 +1,37 @@
 # Production deployment and release gate
 
+## 2026-09-09 release 1.2.3
+
+The user explicitly approved production release in the current task. Runtime
+commit `ce2d51d9fc9d83867f1517c09bf25ea5d4303a4e` was pushed to public main.
+After waiting and twice checking that the previous deployment was still latest,
+the documented Dokploy MCP `deploy_compose` fallback queued the deployment.
+Dokploy browser records show this exact commit done (5 seconds); the MCP
+container `11cf4e173e05` and the unchanged PostgreSQL/Redis containers are healthy.
+Public health reports 1.2.3. OAuth metadata and the unauthenticated challenge
+passed; authenticated ORD and B2B connector responses passed both release
+grounding and report-semantics validators. A standalone protocol smoke token
+was not available; authenticated evidence uses the installed connector.
+
+A fresh ChatGPT Web chat with OKK selected produced ORD September and B2B August
+reports with the verified roster, counts and scores. Both correctly distinguish
+successful, duration-qualified and evaluated calls, exclude missed/no-answer
+from successful totals, and explain that unset plans cannot yield completion
+percentages. Browser chat: `https://chatgpt.com/c/6aa17a50-3fb0-83ec-9288-904ba8f950b6`.
+Saved local evidence uses the `released-*` prefix under the artifact directory
+below. Baseline 1.2.2 findings remain historical evidence, not current status.
+
+Post-deploy adversarial checks also passed: B2B on 2020-01-01 retains unavailable
+scores and explains the current/historical roster distinction; an insistence
+that Ivanov Petr works in B2B triggers a fresh directory check and no invented
+person or score. The private-supervisor request returns exactly Vorobyev Evgeny,
+Donaeva Amina and Tetnev Artyom from the live restricted catalog, and explains
+that quality scoring is unavailable in this transcription-only section.
+All five saved post-deploy screenshots were manually opened and inspected;
+DOM evidence retains full reports. The captured post-deploy browser console
+is empty. Complete browser network tracing was not captured. The in-app browser
+is still unauthenticated, so browser evidence uses the existing Chrome profile.
+
 ## 2026-09-09 reporting candidate and fresh baseline
 
 Production health was independently verified as 1.2.2. A fresh ChatGPT Web

@@ -1,10 +1,10 @@
 # Architecture
 
-The 1.2.3 candidate adds explicit department metric semantics and nullable plan
+The 1.2.3 release adds explicit department metric semantics and nullable plan
 totals with per-metric roster coverage. It introduces no new upstream endpoint,
 database access, paid model call, OAuth scope or tool. It retains the existing
-server roster filters and complete data fields. The current production baseline
-remains 1.2.2 until the candidate is explicitly approved and deployed.
+server roster filters and complete data fields. Production is verified on 1.2.3
+at runtime commit ce2d51d after explicit user approval on 2026-09-09.
 
 ```text
 Codex MCP client
