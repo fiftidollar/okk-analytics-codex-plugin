@@ -2746,6 +2746,7 @@ class BackendClient:
             validated_context = AccountContext(
                 session_id=UUID(access_token.subject),
                 user_id=str(claims.get("okk_user_id") or ""),
+                email=str(claims.get("email") or ""),
                 role=str(claims.get("role") or ""),
                 department_ids=tuple(str(value) for value in claims.get("department_ids") or []),
                 access_token=str(upstream_access),

@@ -155,6 +155,15 @@ transcript tools. It uses the existing statistics/transcript scopes, so an
 already authenticated `1.1.0` connection needs only the plugin update and a
 new task; access continues to come from live OKK grants.
 
+Release `1.2.1` packages the registered ChatGPT MCP integration and the shared
+`OKK Analytics` skill as one installable plugin. The technical
+`plugin_asdk_app_...` URL remains a developer-mode MCP connection and is useful
+for testing tool metadata, but it is not the public universal listing by
+itself. Public ChatGPT Web and Codex discovery starts only after the
+skills-plus-MCP submission is reviewed and explicitly published in the
+universal Plugins Directory. Published skill content is a reviewed snapshot;
+changing `SKILL.md` therefore requires a new plugin version and review.
+
 ## Install in Claude Code
 
 Use a current Claude Code release, then add the same public repository as a
@@ -203,6 +212,18 @@ the OKK API. See
 [deployment](docs/deployment.md), [security](docs/security.md) and the complete
 [tool catalog](docs/tool-catalog.md). Public policies are in
 [PRIVACY.md](PRIVACY.md) and [TERMS.md](TERMS.md).
+
+## ChatGPT Web publication
+
+Create the release as **With MCP → Universal** with
+`https://okk-mcp.akfixdev.ru/mcp`, and upload the final
+`plugins/okk-analytics/skills/okk-analytics/` bundle to the same draft. The
+portal must scan all 27 tools and retain the exact five positive and three
+negative cases from `chatgpt-app-submission.json`. OAuth discovery advertises
+`openid` and `email`; `/userinfo` returns only the live account subject and
+verified email for workspace domain policy. Domain ownership is proved by
+setting the portal-issued `OPENAI_APPS_CHALLENGE_TOKEN` in Dokploy; the
+well-known route returns only that token.
 
 ## Production rollout status
 

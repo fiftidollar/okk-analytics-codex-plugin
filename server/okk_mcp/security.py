@@ -9,8 +9,16 @@ import ipaddress
 import secrets
 from urllib.parse import urlparse
 
-ALLOWED_SCOPES = frozenset({"okk.statistics.read", "okk.scenarios.read", "okk.transcripts.read"})
-DEFAULT_SCOPES = "okk.statistics.read okk.scenarios.read okk.transcripts.read"
+IDENTITY_SCOPES = frozenset({"openid", "email"})
+ALLOWED_SCOPES = frozenset(
+    {
+        *IDENTITY_SCOPES,
+        "okk.statistics.read",
+        "okk.scenarios.read",
+        "okk.transcripts.read",
+    }
+)
+DEFAULT_SCOPES = "email okk.scenarios.read okk.statistics.read okk.transcripts.read openid"
 
 
 def token_hash(raw: str) -> str:

@@ -71,6 +71,7 @@ READ_ONLY = ToolAnnotations(
 STAT_SCOPE = "okk.statistics.read"
 SCENARIO_SCOPE = "okk.scenarios.read"
 TRANSCRIPT_SCOPE = "okk.transcripts.read"
+IDENTITY_SCOPES = ("openid", "email")
 
 
 def _security_meta(*scopes: str) -> dict[str, Any]:
@@ -78,7 +79,7 @@ def _security_meta(*scopes: str) -> dict[str, Any]:
         "securitySchemes": [
             {
                 "type": "oauth2",
-                "scopes": list(scopes),
+                "scopes": [*IDENTITY_SCOPES, *scopes],
             }
         ]
     }

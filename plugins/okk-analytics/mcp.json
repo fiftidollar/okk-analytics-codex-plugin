@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "okk-analytics": {
+      "type": "streamable-http",
+      "url": "https://okk-mcp.akfixdev.ru/mcp"
+    }
+  }
+}

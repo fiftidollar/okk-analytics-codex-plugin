@@ -1,0 +1,45 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "okk-analytics",
+  "version": "1.2.1",
+  "description": "Read-only OKK analytics, supervisors and ACL-safe call transcripts with native account OAuth.",
+  "author": {
+    "name": "Alpes",
+    "url": "https://github.com/fiftidollar"
+  },
+  "homepage": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
+  "repository": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
+  "license": "MIT",
+  "keywords": ["okk", "analytics", "kpi", "employees", "supervisors", "transcripts", "read-only"],
+  "extensions": {
+    "com.openai": {
+      "apps": "./.app.json",
+      "interface": {
+        "displayName": "OKK Analytics",
+        "shortDescription": "Статистика, руководители и транскрипции ОКК — только на чтение.",
+        "longDescription": "Подключает Codex к вашему аккаунту ОКК через OAuth: общая, отделовая и персональная статистика, персонально доступный раздел руководителей, клиентские и CRM-метрики, план/факт, AI-сильные стороны и зоны роста, наставнические задачи, сценарии, критерии, транскрипции доступных звонков и поиск по ним. Результаты всегда ограничены текущими правами пользователя.",
+        "developerName": "Alpes",
+        "category": "Data & Analytics",
+        "websiteURL": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
+        "privacyPolicyURL": "https://github.com/fiftidollar/okk-analytics-codex-plugin/blob/main/PRIVACY.md",
+        "termsOfServiceURL": "https://github.com/fiftidollar/okk-analytics-codex-plugin/blob/main/TERMS.md",
+        "brandColor": "#DC3F4F",
+        "composerIcon": "./assets/okk-analytics.png",
+        "logo": "./assets/okk-analytics.png",
+        "logoDark": "./assets/okk-analytics.png",
+        "capabilities": [
+          "Read-only analytics",
+          "Native OKK OAuth",
+          "Access-aware employee insights",
+          "Private supervisors section",
+          "ACL-safe transcript search"
+        ],
+        "defaultPrompt": [
+          "Проверить подключение OKK и показать мой доступ.",
+          "Покажи доступные мне отделы и краткую статистику по каждому.",
+          "Покажи зоны роста, задачи и проблемные критерии."
+        ]
+      }
+    }
+  }
+}

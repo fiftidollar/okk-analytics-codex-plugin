@@ -1,7 +1,7 @@
 # Contributing
 
 1. Create a focused branch.
-2. Preserve the 19-tool read-only and ACL contracts.
+2. Preserve the 27-tool read-only and ACL contracts.
 3. Add regression tests for every projection, auth or access-control change.
 4. Run:
 

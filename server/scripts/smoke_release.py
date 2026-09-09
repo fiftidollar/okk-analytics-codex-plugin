@@ -66,6 +66,7 @@ SUPERVISOR_SCOPED_TOOLS = {
     "get_supervisor_call_transcript",
     "search_supervisor_call_transcripts",
 }
+IDENTITY_SCOPES = {"openid", "email"}
 
 
 def _rpc(method: str, params: dict[str, Any], request_id: int) -> dict[str, Any]:
@@ -117,6 +118,26 @@ def validate_connection_confirmation(payload: dict[str, Any]) -> None:
         raise RuntimeError("Access context did not return the private-supervisor section state")
 
 
+def validate_oauth_metadata(
+    authorization_metadata: dict[str, Any],
+    resource_metadata: dict[str, Any],
+    *,
+    base_url: str,
+) -> None:
+    if authorization_metadata.get("code_challenge_methods_supported") != ["S256"]:
+        raise RuntimeError("OAuth metadata does not require PKCE S256")
+    if authorization_metadata.get("userinfo_endpoint") != f"{base_url}/userinfo":
+        raise RuntimeError("OAuth metadata does not advertise the canonical UserInfo endpoint")
+    if resource_metadata.get("resource") != f"{base_url}/mcp":
+        raise RuntimeError("Protected resource metadata points to another MCP URL")
+    for metadata in (authorization_metadata, resource_metadata):
+        scopes = set(metadata.get("scopes_supported", []))
+        if not IDENTITY_SCOPES.issubset(scopes):
+            raise RuntimeError("OAuth metadata does not advertise openid and email scopes")
+        if "okk.transcripts.read" not in scopes:
+            raise RuntimeError("OAuth metadata does not advertise the transcript read scope")
+
+
 async def run(base_url: str, token: str | None) -> dict[str, Any]:
     base = base_url.rstrip("/")
     mcp_url = f"{base}/mcp"
@@ -135,13 +156,11 @@ async def run(base_url: str, token: str | None) -> dict[str, Any]:
         ):
             response.raise_for_status()
             report[name] = response.json()
-        if report["authorization_metadata"].get("code_challenge_methods_supported") != ["S256"]:
-            raise RuntimeError("OAuth metadata does not require PKCE S256")
-        if report["resource_metadata"].get("resource") != mcp_url:
-            raise RuntimeError("Protected resource metadata points to another MCP URL")
-        for metadata in (report["authorization_metadata"], report["resource_metadata"]):
-            if "okk.transcripts.read" not in metadata.get("scopes_supported", []):
-                raise RuntimeError("OAuth metadata does not advertise the transcript read scope")
+        validate_oauth_metadata(
+            report["authorization_metadata"],
+            report["resource_metadata"],
+            base_url=base,
+        )
 
         initialize = _rpc(
             "initialize",
@@ -161,6 +180,16 @@ async def run(base_url: str, token: str | None) -> dict[str, Any]:
 
         if token:
             authenticated = {**headers, "Authorization": f"Bearer {token}"}
+            userinfo = await client.get(f"{base}/userinfo", headers=authenticated)
+            userinfo.raise_for_status()
+            userinfo_payload = userinfo.json()
+            if (
+                not isinstance(userinfo_payload.get("sub"), str)
+                or not isinstance(userinfo_payload.get("email"), str)
+                or userinfo_payload.get("email_verified") is not True
+            ):
+                raise RuntimeError("OAuth UserInfo did not return verified account identity")
+            report["userinfo"] = "ok"
             initialized = await client.post(mcp_url, headers=authenticated, json=initialize)
             initialized.raise_for_status()
             report["initialize"] = initialized.json()

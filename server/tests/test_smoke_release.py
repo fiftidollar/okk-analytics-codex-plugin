@@ -7,6 +7,7 @@ from scripts.smoke_release import (
     EXPECTED_TOOLS,
     SUPERVISOR_SCOPED_TOOLS,
     validate_connection_confirmation,
+    validate_oauth_metadata,
     validate_tool_inventory,
 )
 
@@ -111,3 +112,38 @@ def test_release_smoke_requires_a_definitive_connection_confirmation():
     }
     with pytest.raises(RuntimeError):
         validate_connection_confirmation(missing_section)
+
+
+def test_release_smoke_requires_portable_identity_metadata():
+    base_url = "https://okk-mcp.example"
+    authorization_metadata = {
+        "code_challenge_methods_supported": ["S256"],
+        "userinfo_endpoint": f"{base_url}/userinfo",
+        "scopes_supported": ["openid", "email", "okk.transcripts.read"],
+    }
+    resource_metadata = {
+        "resource": f"{base_url}/mcp",
+        "scopes_supported": ["openid", "email", "okk.transcripts.read"],
+    }
+    validate_oauth_metadata(
+        authorization_metadata,
+        resource_metadata,
+        base_url=base_url,
+    )
+
+    for metadata, key, value in (
+        (authorization_metadata, "userinfo_endpoint", "https://wrong.example/userinfo"),
+        (resource_metadata, "resource", "https://wrong.example/mcp"),
+        (authorization_metadata, "scopes_supported", ["email", "okk.transcripts.read"]),
+        (resource_metadata, "scopes_supported", ["openid", "okk.transcripts.read"]),
+    ):
+        invalid_authorization = dict(authorization_metadata)
+        invalid_resource = dict(resource_metadata)
+        target = invalid_authorization if metadata is authorization_metadata else invalid_resource
+        target[key] = value
+        with pytest.raises(RuntimeError):
+            validate_oauth_metadata(
+                invalid_authorization,
+                invalid_resource,
+                base_url=base_url,
+            )

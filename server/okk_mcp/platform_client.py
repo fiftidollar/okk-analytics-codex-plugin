@@ -32,6 +32,7 @@ class OKKNotAvailable(LookupError):
 class AccountContext:
     session_id: UUID
     user_id: str
+    email: str
     role: str
     department_ids: tuple[str, ...]
     access_token: str
@@ -64,13 +65,14 @@ class OKKPlatformClient:
         raise OKKAuthenticationError("OKK did not issue a refresh session")
 
     @staticmethod
-    def _user_fields(payload: dict[str, Any]) -> tuple[str, str, list[str]]:
+    def _user_fields(payload: dict[str, Any]) -> tuple[str, str, str, list[str]]:
         user_id = str(payload.get("id") or "")
+        email = str(payload.get("email") or "").strip().lower()
         role = str(payload.get("role") or "")
         department_ids = [str(value) for value in payload.get("department_ids") or []]
-        if not user_id or role not in {"admin", "viewer"} or not payload.get("is_active", True):
+        if not user_id or not email or role not in {"admin", "viewer"} or not payload.get("is_active", True):
             raise OKKAuthenticationError("OKK account is inactive or has an unsupported role")
-        return user_id, role, department_ids
+        return user_id, email, role, department_ids
 
     async def authenticate(self, email: str, password: str) -> OkkAccountSession:
         """Exchange credentials directly with OKK; the password is never persisted."""
@@ -94,7 +96,7 @@ class OKKPlatformClient:
         if not access_token:
             raise OKKAuthenticationError("OKK did not issue an access session")
         refresh_token = self._refresh_cookie(response)
-        user_id, role, department_ids = self._user_fields(payload.get("user") or {})
+        user_id, _email, role, department_ids = self._user_fields(payload.get("user") or {})
         return OkkAccountSession(
             okk_user_id=user_id,
             encrypted_access_token=self.cipher.seal(access_token),
@@ -169,7 +171,7 @@ class OKKPlatformClient:
             else:
                 raise OKKAuthenticationError("OKK rejected the account session")
 
-            user_id, role, department_ids = self._user_fields(user)
+            user_id, email, role, department_ids = self._user_fields(user)
             if user_id != row.okk_user_id:
                 row.revoked_at = datetime.now(UTC)
                 await db.commit()
@@ -181,6 +183,7 @@ class OKKPlatformClient:
             return AccountContext(
                 session_id=row.id,
                 user_id=user_id,
+                email=email,
                 role=role,
                 department_ids=tuple(department_ids),
                 access_token=access_token,

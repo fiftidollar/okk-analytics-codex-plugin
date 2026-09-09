@@ -1,6 +1,6 @@
 {
   "name": "okk-analytics",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Read-only OKK analytics, supervisors and ACL-safe call transcripts with native account OAuth.",
   "author": {
     "name": "Alpes",
@@ -11,6 +11,7 @@
   "license": "MIT",
   "keywords": ["okk", "analytics", "kpi", "employees", "supervisors", "transcripts", "read-only"],
   "skills": "./skills/",
+  "apps": "./.app.json",
   "interface": {
     "displayName": "OKK Analytics",
     "shortDescription": "Статистика, руководители и транскрипции ОКК — только на чтение.",
@@ -21,6 +22,9 @@
     "privacyPolicyURL": "https://github.com/fiftidollar/okk-analytics-codex-plugin/blob/main/PRIVACY.md",
     "termsOfServiceURL": "https://github.com/fiftidollar/okk-analytics-codex-plugin/blob/main/TERMS.md",
     "brandColor": "#DC3F4F",
+    "composerIcon": "./assets/okk-analytics.png",
+    "logo": "./assets/okk-analytics.png",
+    "logoDark": "./assets/okk-analytics.png",
     "capabilities": [
       "Read-only analytics",
       "Native OKK OAuth",
@@ -33,6 +37,5 @@
       "Покажи доступные мне отделы и краткую статистику по каждому.",
       "Покажи зоны роста, задачи и проблемные критерии."
     ]
-  },
-  "mcpServers": "./.mcp.codex.json"
+  }
 }

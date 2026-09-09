@@ -15,14 +15,45 @@ def test_plugin_and_marketplace_point_to_the_standalone_package():
     manifest = json.loads((plugin / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
     marketplace = json.loads((ROOT / ".agents/plugins/marketplace.json").read_text(encoding="utf-8"))
     mcp = json.loads((plugin / ".mcp.codex.json").read_text(encoding="utf-8"))
+    portable = json.loads((plugin / "plugin.json").read_text(encoding="utf-8"))
+    portable_mcp = json.loads((plugin / "mcp.json").read_text(encoding="utf-8"))
+    apps = json.loads((plugin / ".app.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "okk-analytics"
-    assert manifest["version"] == "1.2.0"
-    assert manifest["mcpServers"] == "./.mcp.codex.json"
+    assert manifest["version"] == "1.2.1"
+    assert "mcpServers" not in manifest
+    assert manifest["apps"] == "./.app.json"
+    assert portable["$schema"].endswith("/plugin.schema.json")
+    assert portable["name"] == manifest["name"]
+    assert portable["version"] == manifest["version"]
+    assert portable["extensions"]["com.openai"]["apps"] == "./.app.json"
+    assert portable["extensions"]["com.openai"]["interface"] == manifest["interface"]
+    assert portable_mcp == {
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+        "mcpServers": {
+            "okk-analytics": {
+                "type": "streamable-http",
+                "url": "https://okk-mcp.akfixdev.ru/mcp",
+            }
+        },
+    }
+    assert apps == {
+        "apps": {
+            "okk-analytics": {
+                "id": "asdk_app_6a5b29fc5a3c8191ae74cde95f4fec9f",
+                "category": "Business analytics",
+            }
+        }
+    }
     assert manifest["repository"].endswith("/okk-analytics-codex-plugin")
     assert manifest["license"] == "MIT"
     assert manifest["interface"]["privacyPolicyURL"].endswith("/PRIVACY.md")
     assert manifest["interface"]["termsOfServiceURL"].endswith("/TERMS.md")
     assert len(manifest["interface"]["defaultPrompt"]) == 3
+    for key in ("composerIcon", "logo", "logoDark"):
+        asset = plugin / manifest["interface"][key]
+        assert asset.is_file()
+        assert asset.suffix == ".png"
+        assert asset.stat().st_size <= 10_000
     assert all(len(prompt) <= 128 for prompt in manifest["interface"]["defaultPrompt"])
     assert manifest["interface"]["defaultPrompt"][0] == ("Проверить подключение OKK и показать мой доступ.")
     assert manifest["interface"]["defaultPrompt"][1] == (
@@ -51,7 +82,7 @@ def test_claude_code_marketplace_reuses_the_shared_skill_and_standard_http_mcp()
     assert marketplace["owner"] == {"name": "Alpes"}
     assert marketplace["plugins"][0]["name"] == "okk-analytics"
     assert marketplace["plugins"][0]["source"] == "./plugins/okk-analytics"
-    assert marketplace["plugins"][0]["version"] == manifest["version"] == "1.2.0"
+    assert marketplace["plugins"][0]["version"] == manifest["version"] == "1.2.1"
     assert manifest["name"] == "okk-analytics"
     assert manifest["skills"] == "./skills/"
     assert mcp == {
@@ -133,3 +164,21 @@ def test_submission_matrix_has_exactly_five_positive_and_three_negative_cases():
     positive, negative = cases.split("## Negative", maxsplit=1)
     assert positive.count("**Prompt:**") == 5
     assert negative.count("**Prompt:**") == 3
+
+
+def test_chatgpt_submission_bundle_covers_every_tool_and_exact_test_counts():
+    submission = json.loads((ROOT / "chatgpt-app-submission.json").read_text(encoding="utf-8"))
+    assert submission["schema_version"] == 1
+    assert submission["app_info"]["display_name"] == "OKK Analytics"
+    assert len(submission["app_info"]["subtitle"]) <= 30
+    assert len(submission["tools"]) == 27
+    assert len(submission["test_cases"]) == 5
+    assert len(submission["negative_test_cases"]) == 3
+    for name, tool in submission["tools"].items():
+        assert name
+        assert tool["annotations"] == {
+            "readOnlyHint": True,
+            "openWorldHint": False,
+            "destructiveHint": False,
+        }
+        assert all(tool["justifications"].values())

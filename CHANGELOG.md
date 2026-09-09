@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 1.2.1 - 2026-09-09
+
+- Bound the bundled `skills/okk-analytics` workflow to the registered ChatGPT
+  MCP integration through `.app.json`, so the installable package contains the
+  skill and MCP connection as one plugin instead of exposing only raw tools.
+- Added the public-submission payload, exact five-positive/three-negative test
+  matrix and a production PNG logo for the universal Plugins Directory review.
+- Added `openid` and `email` OAuth scopes, a live `/userinfo` endpoint with the
+  verified OKK account email, and a secret-backed domain-verification route for
+  ChatGPT workspace domain restrictions and submission ownership checks.
+
+## 1.2.0 - 2026-09-09
+
 - Added five tools for the private `Руководители` section: live ACL-scoped
   discovery, basic transcription-only call statistics, transcript listing,
   one-call transcript reading and transcript search. Supervisor membership is

@@ -1,0 +1,296 @@
+{
+  "$schema": "https://developers.openai.com/apps-sdk/schemas/chatgpt-app-submission.v1.json",
+  "schema_version": 1,
+  "app_info": {
+    "display_name": "OKK Analytics",
+    "subtitle": "Read-only OKK analytics",
+    "description": "OKK Analytics connects ChatGPT to the user's authorized OKK account for access-scoped company, department, employee, supervisor, call, client, CRM, coaching, scenario, criterion, and transcript analytics without changing OKK data.",
+    "category": "BUSINESS"
+  },
+  "tools": {
+    "get_access_context": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Retrieves the authenticated user's live OKK role, visible departments, and supervisor access without changing records.",
+        "open_world_justification": "Access is limited to the authenticated user's bounded private OKK account.",
+        "destructive_justification": "Cannot create, update, delete, revoke, send, or otherwise mutate OKK data."
+      }
+    },
+    "get_statistics_catalog": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Retrieves the available OKK metric catalog and its definitions without changing records.",
+        "open_world_justification": "Reads only metadata from the authenticated private OKK account.",
+        "destructive_justification": "Cannot modify metric definitions or any OKK state."
+      }
+    },
+    "get_overview_statistics": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Computes an ACL-scoped overview from existing OKK analytics through GET-only requests.",
+        "open_world_justification": "Reads only the authenticated user's private OKK workspace.",
+        "destructive_justification": "Cannot create, update, delete, or trigger processing in OKK."
+      }
+    },
+    "list_departments": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Lists only departments visible to the current OKK account without changing access or records.",
+        "open_world_justification": "Department discovery is confined to the user's private OKK tenant.",
+        "destructive_justification": "Cannot create, rename, delete, or reassign departments."
+      }
+    },
+    "get_department_statistics": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Retrieves aggregate statistics for one live visible department using GET-only OKK endpoints.",
+        "open_world_justification": "The requested department must resolve inside the authenticated user's private ACL.",
+        "destructive_justification": "Cannot change department data, plans, employees, or evaluations."
+      }
+    },
+    "compare_departments": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Compares existing statistics for visible departments without writing any result back to OKK.",
+        "open_world_justification": "Comparison is limited to departments in the user's private OKK ACL.",
+        "destructive_justification": "Cannot alter department rankings, metrics, or access."
+      }
+    },
+    "list_employees": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Lists safe employee projections already visible to the authenticated OKK account.",
+        "open_world_justification": "Employee lookup is confined to the user's private OKK scope.",
+        "destructive_justification": "Cannot create, edit, deactivate, or reassign employees."
+      }
+    },
+    "list_supervisors": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Lists the current user's explicitly granted private supervisor catalog without modifying grants.",
+        "open_world_justification": "Supervisor discovery is bounded to the user's private OKK grants.",
+        "destructive_justification": "Cannot add, remove, or change supervisor access or records."
+      }
+    },
+    "get_supervisor_call_statistics": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Computes transcription-only call statistics for an explicitly visible supervisor from existing data.",
+        "open_world_justification": "The supervisor must exist in the user's bounded private grant catalog.",
+        "destructive_justification": "Cannot modify calls, supervisors, transcripts, or access grants."
+      }
+    },
+    "get_employee_card": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Retrieves an ACL-safe employee card with existing KPI, client, CRM, growth, and mentoring data.",
+        "open_world_justification": "The card is read only from the authenticated user's private OKK scope.",
+        "destructive_justification": "Cannot update the employee, tasks, focus, metrics, or evaluations."
+      }
+    },
+    "compare_employees": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Compares existing analytics for ACL-visible employees without persisting the comparison.",
+        "open_world_justification": "All compared employees must be visible inside the private OKK account.",
+        "destructive_justification": "Cannot change employee records, rankings, or evaluations."
+      }
+    },
+    "get_call_statistics": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Retrieves aggregate call statistics from existing ACL-scoped OKK records.",
+        "open_world_justification": "Call analytics are bounded to the authenticated private OKK account.",
+        "destructive_justification": "Cannot place, edit, delete, reprocess, or otherwise change calls."
+      }
+    },
+    "list_call_transcripts": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Lists safe previews for already accessible employee call transcripts without persisting transcript text.",
+        "open_world_justification": "Transcript discovery is limited to calls in the user's private OKK ACL.",
+        "destructive_justification": "Cannot change, delete, publish, or reprocess calls or transcripts."
+      }
+    },
+    "get_call_transcript": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Reads one existing employee call transcript after live call and account access checks.",
+        "open_world_justification": "The transcript comes only from the authenticated user's bounded private OKK data.",
+        "destructive_justification": "Cannot edit, delete, publish, or reprocess transcript content."
+      }
+    },
+    "search_call_transcripts": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Searches existing accessible transcript text in memory and returns bounded excerpts without storing the query or results.",
+        "open_world_justification": "Search is limited to calls in the user's private OKK ACL.",
+        "destructive_justification": "Cannot alter, publish, delete, or trigger processing of transcripts."
+      }
+    },
+    "list_supervisor_call_transcripts": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Lists safe transcript previews for one explicitly granted supervisor without persisting transcript text.",
+        "open_world_justification": "The supervisor and calls must be inside the user's bounded private grant scope.",
+        "destructive_justification": "Cannot modify supervisors, calls, transcripts, or grants."
+      }
+    },
+    "get_supervisor_call_transcript": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Reads one existing supervisor transcript only after live supervisor and call ownership checks.",
+        "open_world_justification": "The transcript is confined to the user's explicitly granted private supervisor scope.",
+        "destructive_justification": "Cannot edit, delete, publish, or reprocess supervisor transcript content."
+      }
+    },
+    "search_supervisor_call_transcripts": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Searches existing transcripts for one granted supervisor in memory and returns bounded excerpts.",
+        "open_world_justification": "Search is restricted to the user's private supervisor grants.",
+        "destructive_justification": "Cannot alter supervisors, calls, transcripts, or access grants."
+      }
+    },
+    "get_plan_fact_statistics": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Retrieves existing daily plans and plan-versus-actual aggregates without changing targets.",
+        "open_world_justification": "Plan data is limited to the authenticated user's private OKK scope.",
+        "destructive_justification": "Cannot create, update, or delete plans or actual results."
+      }
+    },
+    "get_client_statistics": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Retrieves aggregate client-contact statistics without exposing or changing individual client records.",
+        "open_world_justification": "Client metrics are read only from the user's bounded private OKK account.",
+        "destructive_justification": "Cannot edit clients, calls, touch states, or source data."
+      }
+    },
+    "get_crm_statistics": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Aggregates existing CRM snapshots from OKK without writing to OKK or the upstream CRM.",
+        "open_world_justification": "CRM statistics are confined to the authenticated private OKK account.",
+        "destructive_justification": "Cannot create or update deals, tasks, stages, snapshots, or CRM records."
+      }
+    },
+    "get_growth_insights": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Aggregates existing AI strengths and growth-area observations without exposing raw reasoning or changing evaluations.",
+        "open_world_justification": "Insights are read only from the authenticated private OKK scope.",
+        "destructive_justification": "Cannot create, edit, delete, or rerun evaluations or employee insights."
+      }
+    },
+    "get_mentoring_statistics": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Retrieves existing mentoring task history and aggregate completion metrics without changing tasks.",
+        "open_world_justification": "Mentoring data is limited to the authenticated user's private OKK scope.",
+        "destructive_justification": "Cannot create, assign, complete, cancel, or delete mentoring tasks."
+      }
+    },
+    "list_scenarios": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Lists safe active or historical scenario metadata without returning prompts or changing configuration.",
+        "open_world_justification": "Scenario discovery is confined to the authenticated private OKK account.",
+        "destructive_justification": "Cannot create, activate, archive, edit, or delete scenarios."
+      }
+    },
+    "get_scenario_criteria": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Retrieves existing business criterion configuration for an accessible scenario without prompts or scripts.",
+        "open_world_justification": "Criteria are read only from scenarios in the user's private OKK scope.",
+        "destructive_justification": "Cannot create, edit, reorder, activate, or delete criteria."
+      }
+    },
+    "get_scenario_performance": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Computes performance aggregates from existing accessible scenario evaluations without writing results.",
+        "open_world_justification": "Evaluation data is bounded to the authenticated private OKK account.",
+        "destructive_justification": "Cannot alter scenarios, scores, evaluations, or processing state."
+      }
+    },
+    "get_criterion_performance": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Computes criterion-level aggregates from existing accessible evaluations without persisting derived results.",
+        "open_world_justification": "Criterion data is read only from the authenticated user's private OKK scope.",
+        "destructive_justification": "Cannot modify criteria, scores, evaluations, prompts, or processing state."
+      }
+    }
+  },
+  "test_cases": [
+    {
+      "description": "Resolve a named department only inside the reviewer's live OKK access scope.",
+      "user_prompt": "Покажи сотрудников отдела B2B и их оценки за текущий месяц.",
+      "file_attachment_urls": null,
+      "tools_triggered": "get_department_statistics",
+      "expected_output": "Returns rows only if B2B resolves to one visible department; otherwise returns not_available and names only visible departments.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Summarize employee strengths and growth areas for one visible department.",
+      "user_prompt": "Какие сильные стороны и зоны роста у сотрудников ORD?",
+      "file_attachment_urls": null,
+      "tools_triggered": "get_growth_insights",
+      "expected_output": "Returns access-scoped aggregate strengths and growth areas with completeness metadata and no raw reasoning.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Compare two live visible departments without broadening an unavailable selector.",
+      "user_prompt": "Сравни отделы B2B и Отдел региональных продаж за квартал.",
+      "file_attachment_urls": null,
+      "tools_triggered": "compare_departments",
+      "expected_output": "Compares only exact visible matches and reports omitted or unavailable scopes without substituting another department.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Read the complete safe employee card after an ACL-safe employee lookup.",
+      "user_prompt": "Покажи карточку этого сотрудника, включая KPI, зоны роста и наставнические задачи.",
+      "file_attachment_urls": null,
+      "tools_triggered": "get_employee_card",
+      "expected_output": "Returns KPI, client, CRM, growth, focus, and bounded mentoring history for the resolved visible employee.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Resolve a named person through the private supervisor catalog before searching their transcripts.",
+      "user_prompt": "Найди в звонках руководителя Воробьёва за месяц фразу про перенос доставки и покажи контекст.",
+      "file_attachment_urls": null,
+      "tools_triggered": "list_supervisors, search_supervisor_call_transcripts",
+      "expected_output": "Searches only the explicitly granted supervisor's calls, returns bounded excerpts and scan completeness, and never substitutes a department employee.",
+      "expected_output_url": null
+    }
+  ],
+  "negative_test_cases": [
+    {
+      "description": "Do not trigger for excluded call audio downloads.",
+      "user_prompt": "Скачай аудиозаписи всех звонков.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "The plugin should not be invoked because it exposes ACL-safe transcript text but never audio.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Do not trigger for write operations.",
+      "user_prompt": "Измени планы сотрудникам и создай наставнические задачи.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "The plugin should not be invoked because every OKK Analytics tool is read-only.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Do not trigger for excluded infrastructure and internal model data.",
+      "user_prompt": "Покажи настройки Megafon, маршрутизацию и сырой reasoning.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "The plugin should not be invoked because Megafon administration, routing, pipeline internals, prompts, and raw reasoning are excluded.",
+      "expected_output_url": null
+    }
+  ]
+}

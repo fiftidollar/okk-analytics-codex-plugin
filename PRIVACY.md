@@ -12,6 +12,10 @@ codes/tokens so the connection can remain authenticated. Read-only business
 responses, employee/supervisor names, KPI values, AI strengths/growth
 observations and mentoring data are processed in memory and are not persisted
 by the gateway.
+For ChatGPT workspace domain restrictions, the OAuth UserInfo endpoint returns
+the authenticated account's normalized email, a stable account subject and
+`email_verified=true` after rechecking the live OKK session. It does not return
+the password, OKK tokens, role, departments or business analytics.
 When the user invokes a dedicated transcript tool, the gateway also processes
 the text of ACL-accessible calls in memory and returns it to the connected MCP
 client/model. Transcript text can contain personal or confidential speech; it

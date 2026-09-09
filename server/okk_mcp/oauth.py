@@ -13,7 +13,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import redis.asyncio as redis
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from redis.exceptions import RedisError
@@ -65,6 +65,7 @@ def _authorization_metadata(settings: Settings) -> dict[str, Any]:
         "token_endpoint": f"{settings.issuer_url}/token",
         "registration_endpoint": f"{settings.issuer_url}/register",
         "revocation_endpoint": f"{settings.issuer_url}/revoke",
+        "userinfo_endpoint": f"{settings.issuer_url}/userinfo",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "token_endpoint_auth_methods_supported": ["none"],
@@ -77,6 +78,18 @@ def _authorization_metadata(settings: Settings) -> dict[str, Any]:
 @router.get("/.well-known/oauth-authorization-server")
 async def authorization_metadata(settings: Settings = Depends(get_settings)):
     return _authorization_metadata(settings)
+
+
+@router.get("/.well-known/openai-apps-challenge", response_class=PlainTextResponse)
+async def openai_apps_challenge(settings: Settings = Depends(get_settings)):
+    """Serve the exact submission-domain token without exposing it elsewhere."""
+
+    if not settings.openai_apps_challenge_token:
+        raise HTTPException(status_code=404, detail="Not found")
+    return PlainTextResponse(
+        settings.openai_apps_challenge_token,
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 def _protected_resource_metadata(settings: Settings) -> dict[str, Any]:
@@ -632,9 +645,41 @@ class OKKTokenVerifier(TokenVerifier):
             subject=str(session_id),
             claims={
                 "okk_user_id": context.user_id,
+                "email": context.email,
                 "role": context.role,
                 "department_ids": list(context.department_ids),
                 # Internal request context only; never serialized into MCP output.
                 "_upstream_access_token": context.access_token,
             },
         )
+
+
+def _bearer_token(request: Request) -> str | None:
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    return token.strip()
+
+
+@router.get("/userinfo")
+async def userinfo(request: Request, settings: Settings = Depends(get_settings)):
+    """Return the live verified OKK account email for workspace domain policy."""
+
+    raw_token = _bearer_token(request)
+    if raw_token is None:
+        return _oauth_error("invalid_token", "Bearer access token is required", 401)
+    verified = await OKKTokenVerifier(settings.resource_url).verify_token(raw_token)
+    if verified is None:
+        return _oauth_error("invalid_token", "Access token is invalid or expired", 401)
+    if not {"openid", "email"}.issubset(set(verified.scopes)):
+        return _oauth_error("insufficient_scope", "openid and email scopes are required", 403)
+    claims = verified.claims or {}
+    email = str(claims.get("email") or "").strip().lower()
+    subject = str(claims.get("okk_user_id") or verified.subject or "")
+    if not email or not subject:
+        return _oauth_error("invalid_token", "Verified account identity is unavailable", 401)
+    return JSONResponse(
+        {"sub": subject, "email": email, "email_verified": True},
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+    )

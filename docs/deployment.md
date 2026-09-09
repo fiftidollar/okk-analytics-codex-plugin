@@ -26,6 +26,8 @@ plugin at the test-stand API.
 - Production OKK API:
   `https://okk-backend.akfixdev.ru/api/v1`.
 - Independent high-entropy OAuth and session-encryption secrets.
+- During universal-directory submission only, the exact
+  `OPENAI_APPS_CHALLENGE_TOKEN` issued by the OpenAI Platform portal.
 
 Never reuse the OKK JWT signing secret; this gateway authenticates through the
 public OKK login API and does not mint OKK tokens.
@@ -36,7 +38,9 @@ public OKK login API and does not mint OKK tokens.
    every placeholder and keep `APP_ENV=production`.
 2. Run `alembic -c alembic.ini upgrade head` from `server/`.
 3. Deploy the container behind TLS and verify forwarded headers.
-4. Verify health and both OAuth metadata documents.
+4. Verify health and both OAuth metadata documents. Require `openid` and
+   `email` in `scopes_supported`, and require the advertised
+   `userinfo_endpoint` to use the same HTTPS issuer origin.
 5. Verify unauthenticated `/mcp` returns `401` with a
    `resource_metadata` challenge.
 6. Complete Authorization Code + PKCE in a real Codex client.
@@ -97,6 +101,13 @@ public OKK login API and does not mint OKK tokens.
 12. Inspect structured `okk_analytics_tool_call` logs. Confirm request IDs,
     timings, status and department code are present, while credentials, raw
     selectors, entity IDs, employee names and response payloads are absent.
+13. For a universal Plugins Directory submission, configure the portal-issued
+    `OPENAI_APPS_CHALLENGE_TOKEN`, verify
+    `/.well-known/openai-apps-challenge` returns exactly that token as plain
+    text, and verify `/userinfo` with a newly authorized `openid email` token
+    returns only `sub`, normalized `email` and `email_verified=true`. Upload the
+    final skill tree, import `chatgpt-app-submission.json`, scan all 27 tools,
+    and review the five positive and three negative cases before submission.
 
 ## Dokploy production compose
 

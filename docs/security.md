@@ -95,6 +95,14 @@ criteria-only GET endpoint should replace this compatibility path.
   and refresh tokens retain their original scope and require a fresh OAuth
   authorization before transcript tools become available.
 - Public clients only (`token_endpoint_auth_method=none`).
+- OAuth metadata advertises `openid`, `email` and `/userinfo`. The UserInfo
+  response revalidates the live OKK session and returns only the account
+  subject, normalized email and `email_verified=true`; no role, department,
+  upstream token or internal session identifier is returned.
+- The OpenAI submission-domain token is loaded only from
+  `OPENAI_APPS_CHALLENGE_TOKEN` and returned verbatim from the dedicated
+  well-known route. It is not committed, logged or reused as an application
+  secret.
 - Dynamic registration never serializes absent optional URI metadata as JSON
   `null`; fields such as `client_uri` are omitted unless they contain a
   validated value. This keeps strict Codex/Claude Code OAuth clients on the

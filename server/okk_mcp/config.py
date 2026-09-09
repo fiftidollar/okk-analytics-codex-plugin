@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     transcript_search_max_calls: int = Field(default=1000, ge=25, le=5000)
     analytics_max_employees: int = Field(default=2000, ge=100, le=10000)
     analytics_trace_enabled: bool = True
+    openai_apps_challenge_token: str = Field(default="", max_length=1000)
 
     @model_validator(mode="after")
     def validate_deployment(self) -> Settings:

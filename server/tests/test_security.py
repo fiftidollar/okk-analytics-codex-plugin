@@ -91,8 +91,11 @@ def test_scopes_are_allowlisted_and_canonicalized():
     )
     with pytest.raises(ValueError):
         validate_scopes("okk.statistics.write")
-    assert validate_scopes(None) == ("okk.scenarios.read okk.statistics.read okk.transcripts.read")
+    assert validate_scopes(None) == (
+        "email okk.scenarios.read okk.statistics.read okk.transcripts.read openid"
+    )
     assert "okk.transcripts.read" in DEFAULT_SCOPES
+    assert {"openid", "email"}.issubset(set(DEFAULT_SCOPES.split()))
 
 
 def test_login_consent_names_transcripts_only_when_that_scope_is_requested():
@@ -211,12 +214,27 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
         if "transcript" in tool.name
     }
     assert transcript_tools == {
-        "list_call_transcripts": {"okk.statistics.read", "okk.transcripts.read"},
-        "get_call_transcript": {"okk.statistics.read", "okk.transcripts.read"},
-        "search_call_transcripts": {"okk.statistics.read", "okk.transcripts.read"},
-        "list_supervisor_call_transcripts": {"okk.statistics.read", "okk.transcripts.read"},
-        "get_supervisor_call_transcript": {"okk.statistics.read", "okk.transcripts.read"},
-        "search_supervisor_call_transcripts": {"okk.statistics.read", "okk.transcripts.read"},
+        "list_call_transcripts": {"openid", "email", "okk.statistics.read", "okk.transcripts.read"},
+        "get_call_transcript": {"openid", "email", "okk.statistics.read", "okk.transcripts.read"},
+        "search_call_transcripts": {"openid", "email", "okk.statistics.read", "okk.transcripts.read"},
+        "list_supervisor_call_transcripts": {
+            "openid",
+            "email",
+            "okk.statistics.read",
+            "okk.transcripts.read",
+        },
+        "get_supervisor_call_transcript": {
+            "openid",
+            "email",
+            "okk.statistics.read",
+            "okk.transcripts.read",
+        },
+        "search_supervisor_call_transcripts": {
+            "openid",
+            "email",
+            "okk.statistics.read",
+            "okk.transcripts.read",
+        },
     }
 
 
@@ -262,11 +280,50 @@ def test_metadata_and_mcp_auth_challenge_are_discoverable():
         )
     assert authorization.status_code == 200
     assert authorization.json()["code_challenge_methods_supported"] == ["S256"]
+    assert authorization.json()["userinfo_endpoint"].endswith("/userinfo")
+    assert {"openid", "email"}.issubset(set(authorization.json()["scopes_supported"]))
     assert "okk.transcripts.read" in authorization.json()["scopes_supported"]
     assert protected.json()["resource"].endswith("/mcp")
     assert "okk.transcripts.read" in protected.json()["scopes_supported"]
     assert challenge.status_code == 401
     assert "resource_metadata=" in challenge.headers["www-authenticate"]
+
+
+def test_openai_domain_challenge_returns_only_the_configured_token():
+    response = asyncio.run(oauth.openai_apps_challenge(Settings(openai_apps_challenge_token="review-token")))
+    assert response.body == b"review-token"
+    assert response.media_type == "text/plain"
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_userinfo_returns_live_verified_email(monkeypatch):
+    verified = oauth.AccessToken(
+        token="mcp-access",
+        client_id="chatgpt",
+        scopes=["openid", "email", "okk.statistics.read"],
+        expires_at=2_000_000_000,
+        resource="http://localhost:8020/mcp",
+        subject="session-id",
+        claims={"okk_user_id": "user-1", "email": "Reviewer@Example.com"},
+    )
+    monkeypatch.setattr(oauth.OKKTokenVerifier, "verify_token", AsyncMock(return_value=verified))
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/userinfo",
+            "headers": [(b"authorization", b"Bearer mcp-access")],
+        }
+    )
+
+    response = asyncio.run(oauth.userinfo(request, Settings()))
+
+    assert json.loads(response.body) == {
+        "sub": "user-1",
+        "email": "reviewer@example.com",
+        "email_verified": True,
+    }
+    assert response.headers["cache-control"] == "no-store"
 
 
 def test_dynamic_registration_omits_null_optional_client_uri_for_strict_oauth_clients():

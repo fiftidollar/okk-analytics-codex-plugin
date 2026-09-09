@@ -29,6 +29,7 @@ async def test_password_is_forwarded_once_and_never_persisted():
                 "access_token": "okk-access",
                 "user": {
                     "id": "user-1",
+                    "email": "user@example.com",
                     "role": "viewer",
                     "department_ids": ["department-1"],
                     "is_active": True,

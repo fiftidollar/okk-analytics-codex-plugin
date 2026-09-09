@@ -23,6 +23,7 @@ class FakePlatform:
         self.context = AccountContext(
             session_id=uuid4(),
             user_id="user-1",
+            email="viewer@example.com",
             role=role,
             department_ids=tuple(department_ids),
             access_token="upstream-access",

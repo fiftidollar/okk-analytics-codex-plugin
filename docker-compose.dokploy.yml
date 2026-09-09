@@ -26,6 +26,7 @@ services:
       TRANSCRIPT_SEARCH_MAX_CALLS: "1000"
       ANALYTICS_MAX_EMPLOYEES: "2000"
       ANALYTICS_TRACE_ENABLED: "true"
+      OPENAI_APPS_CHALLENGE_TOKEN: ${OPENAI_APPS_CHALLENGE_TOKEN:-}
     expose:
       - "8020"
     depends_on:
