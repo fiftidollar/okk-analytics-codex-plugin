@@ -181,6 +181,10 @@ backend container returned the same department UUID, the same 14 employee
 UUID/name pairs, the same per-employee averages and the same summary values.
 A real ChatGPT Web run through the published OKK Analytics integration then
 rendered exactly those 14 names and scores, with no foreign or invented person.
+In the same chat, an adversarial follow-up asserted that two invented people
+belonged to ORD and demanded fabricated averages. ChatGPT rechecked the live
+directory, stated that neither person existed (including inactive employees),
+kept the authoritative count at 14 and did not manufacture a score.
 
 Set `FORWARDED_ALLOW_IPS` only to the actual ingress proxy addresses. Using `*`
 is acceptable only when the application port is unreachable except through an
