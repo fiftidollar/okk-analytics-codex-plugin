@@ -15,6 +15,15 @@ versus full journal, a no-match case, department and supervisor ACL denial,
 revoked access, trace redaction, package validation and live browser prompts
 for both a named employee and an unknown one. Current production remains 1.2.3.
 
+Platform test-stand PR119 reached all four Dokploy apps at `efc52a36` on
+2026-09-24. Live OpenAPI exposes the exact filter; authenticated empty/no-match
+requests return `total=0`, and malformed input returns `422`. The stand has no
+calls, so it cannot prove a positive live count or direct transcript read.
+Focused platform tests and local gateway adapter tests cover those cases.
+Production platform PR120 remains draft. The stand's focused API smoke retains
+five pre-existing V39 scorecard fingerprint mismatches; its 19 headless visual
+routes have no UI/API/console failures, with one no-data employee warning.
+
 ## 2026-09-09 release 1.2.3
 
 The user explicitly approved production release in the current task. Runtime
