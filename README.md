@@ -6,11 +6,11 @@ and Claude Code never receive the password, and every result is restricted by
 the account's current role, department ACL and explicit private-supervisor
 grants.
 
-Release 1.2.4 is a local candidate. It repairs direct transcript reads,
+Release 1.2.4 is live in production. It repairs direct transcript reads,
 supports complete long transcripts through offset chunks, and adds an exact
 phone-history tool with the new `okk.phones.read` scope. The phone tool requires
 the matching platform read-only `POST /calls/phone-lookup` contract, now live
-and verified on test-stand, before gateway rollout. The number travels in the
+on production and test-stand. The number travels in the
 JSON body, outside access-log URLs.
 
 The account must have a working local OKK password. An account provisioned only

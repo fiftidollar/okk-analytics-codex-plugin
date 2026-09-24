@@ -1,10 +1,10 @@
 # Architecture
 
-The 1.2.4 candidate adds offset transcript reads and a phone-history read path.
+The production 1.2.4 release adds offset transcript reads and a phone-history read path.
 The phone path uses the platform's indexed exact number filter and the gateway's
 live ACL checks; OAuth requires the separate `okk.phones.read` scope. It does
-not scan a bounded first page and call that a full count. Production is still
-1.2.3 until the platform and gateway release gates pass.
+not scan a bounded first page and call that a full count. Production runs
+platform PR120 and gateway 1.2.4 after the 2026-09-24 release.
 
 The 1.2.3 release adds explicit department metric semantics and nullable plan
 totals with per-metric roster coverage. It introduces no new upstream endpoint,
@@ -21,7 +21,7 @@ Codex MCP client
        -> existing OKK /api/v1 over HTTPS
             -> /auth/login, /auth/refresh, /auth/me
             -> existing read-only analytics GET endpoints
-            -> POST /calls/phone-lookup (candidate, phone in JSON body)
+            -> POST /calls/phone-lookup (phone in JSON body)
             -> ACL-protected /employees/restricted
             -> ACL-protected /calls/{call_id}/transcript
 ```
