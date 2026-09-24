@@ -21,6 +21,7 @@ Codex MCP client
        -> existing OKK /api/v1 over HTTPS
             -> /auth/login, /auth/refresh, /auth/me
             -> existing read-only analytics GET endpoints
+            -> POST /calls/phone-lookup (candidate, phone in JSON body)
             -> ACL-protected /employees/restricted
             -> ACL-protected /calls/{call_id}/transcript
 ```

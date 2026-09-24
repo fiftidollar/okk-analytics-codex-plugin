@@ -8,25 +8,25 @@ be read through `start_char` / `next_start_char` chunks. The new
 `list_call_phone_records` tool requires `okk.phones.read` and the platform
 read-only `POST /calls/phone-lookup` exact indexed filter with the number in
 the JSON body, plus the normalized phone field
-in each call-list item. Deploy and verify the platform contract on test-stand
-before the gateway; release to production only with explicit approval.
+in each call-list item. The platform contract is live and verified on
+test-stand; release to production only with explicit approval.
 Fresh OAuth authorization is required for the new scope. The release gate must
 repeat direct call-ID transcript reads, chunk reconstruction, exact phone count
 versus full journal, a no-match case, department and supervisor ACL denial,
 revoked access, trace redaction, package validation and live browser prompts
 for both a named employee and an unknown one. Current production remains 1.2.3.
 
-Platform test-stand PR119 reached all four Dokploy apps at `efc52a36` on
-2026-09-24. Live OpenAPI exposes the exact filter; authenticated empty/no-match
-requests return `total=0`, and malformed input returns `422`. The stand has no
-calls, so it cannot prove a positive live count or direct transcript read.
-That first stand candidate used GET; nginx access logs would retain the phone
-in the URL. The revised POST body contract must replace it on test-stand before
-production approval.
-Focused platform tests and local gateway adapter tests cover those cases.
+Platform test-stand PR122 reached all four Dokploy apps at `c40c8a6c` on
+2026-09-24. Live OpenAPI exposes POST JSON body lookup and no GET phone query;
+authenticated empty/no-match requests return `200`, `total=0`,
+`Cache-Control: private, no-store`, and malformed input returns `422`. The
+first GET version in PR119 was superseded because nginx logs URLs. The stand
+has no calls, so it cannot prove a positive live count or direct transcript
+read. Focused platform tests and local gateway adapter tests cover those cases.
 Production platform PR120 remains draft. The stand's focused API smoke retains
 five pre-existing V39 scorecard fingerprint mismatches; its 19 headless visual
-routes have no UI/API/console failures, with one no-data employee warning.
+screenshots were manually inspected and have no UI/API/console failures, with
+one no-data employee warning.
 Live production MCP 1.2.3 roster probes on all three visible departments
 (B2B, CSM, ORD) returned complete authoritative rosters of 3, 3, and 13;
 ranking rows outside those rosters or with conflicting names were zero.
