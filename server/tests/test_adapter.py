@@ -43,6 +43,12 @@ class FakePlatform:
     async def get_with_context(self, _context, path, *, params=None):
         return await self.get(None, path, params=params)
 
+    async def phone_lookup_with_context(self, _context, payload):
+        path = "/calls/phone-lookup"
+        self.calls.append((path, list(payload.items())))
+        value = self.responses[path]
+        return value(payload) if callable(value) else value
+
 
 def adapter(platform: FakePlatform) -> AnalyticsAdapter:
     return AnalyticsAdapter(platform, str(platform.context.session_id), Settings())
@@ -117,15 +123,15 @@ async def test_phone_history_uses_exact_normalized_filter_and_source_total():
         },
     }
 
-    def phone_rows(params):
-        assert dict(params)["phone_number"] == number
+    def phone_rows(body):
+        assert body["phone_number"] == number
         return {"items": [call], "total": 7, "page": 1, "page_size": 1, "pages": 7}
 
     platform = FakePlatform(
         department_ids=(department_id,),
         responses={
             "/departments": [{"id": department_id, "name": "Продажи", "code": "sales"}],
-            "/calls": phone_rows,
+            "/calls/phone-lookup": phone_rows,
         },
     )
     result = await adapter(platform).list_call_phone_records(
@@ -146,7 +152,7 @@ async def test_phone_history_fails_closed_if_platform_ignores_new_filter():
         department_ids=(department_id,),
         responses={
             "/departments": [{"id": department_id, "name": "Продажи", "code": "sales"}],
-            "/calls": {
+            "/calls/phone-lookup": {
                 "items": [
                     {
                         "id": call_id,
@@ -178,7 +184,7 @@ async def test_phone_history_requires_explicit_supervisor_grant():
         responses={
             "/departments": [],
             "/employees/restricted": [{"id": supervisor_id, "full_name": "Руководитель"}],
-            "/calls": {"items": [call], "total": 1, "page": 1, "pages": 1},
+            "/calls/phone-lookup": {"items": [call], "total": 1, "page": 1, "pages": 1},
         },
     )
     denied = FakePlatform(
@@ -192,7 +198,7 @@ async def test_phone_history_requires_explicit_supervisor_grant():
     assert visible["data"]["matching_calls_total"] == 1
     assert visible["data"]["items"][0]["employee"]["section"] == "supervisors"
     assert hidden["status"] == "not_available"
-    assert not any(path == "/calls" for path, _params in denied.calls)
+    assert not any(path == "/calls/phone-lookup" for path, _params in denied.calls)
 
 
 @pytest.mark.anyio
@@ -201,7 +207,7 @@ async def test_phone_history_reports_no_call_only_for_zero_source_total():
         role="admin",
         responses={
             "/departments": [],
-            "/calls": {"items": [], "total": 0, "page": 1, "pages": 0},
+            "/calls/phone-lookup": {"items": [], "total": 0, "page": 1, "pages": 0},
         },
     )
     result = await adapter(platform).list_call_phone_records(phone_number="79991234567")

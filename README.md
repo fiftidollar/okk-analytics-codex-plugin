@@ -9,7 +9,8 @@ grants.
 Release 1.2.4 is a local candidate. It repairs direct transcript reads,
 supports complete long transcripts through offset chunks, and adds an exact
 phone-history tool with the new `okk.phones.read` scope. The phone tool requires
-the matching platform `/calls?phone_number=` contract before gateway rollout.
+the matching platform read-only `POST /calls/phone-lookup` contract before
+gateway rollout. The number travels in the JSON body, outside access-log URLs.
 
 The account must have a working local OKK password. An account provisioned only
 through HR/SSO needs a local OKK password set by the normal account-management

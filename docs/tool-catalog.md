@@ -101,7 +101,9 @@ and segment responses expose `next_start_char` / `next_start_segment`; repeat
 the request with that offset until null. Text chunks include `source_sha256`
 to detect a transcript changed between reads.
 
-`list_call_phone_records` uses the indexed upstream exact `phone_number` filter.
+`list_call_phone_records` uses the indexed upstream exact `phone_number` filter
+through read-only `POST /calls/phone-lookup`; the number is in the JSON body,
+outside access-log URLs.
 Its `matching_calls_total` counts all ACL-visible journal records for the number,
 including missed, short and in-process calls. `has_call` answers existence. The
 default `all` period sends no date bounds, so the full available journal is

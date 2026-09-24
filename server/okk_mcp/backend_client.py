@@ -285,6 +285,13 @@ class AnalyticsAdapter:
         context = await self.context()
         return await self.platform.get_with_context(context, path, params=_query(**params))
 
+    async def _phone_lookup(self, **body: Any) -> Any:
+        context = await self.context()
+        return await self.platform.phone_lookup_with_context(
+            context,
+            {key: value for key, value in body.items() if value is not None},
+        )
+
     async def _bounded(self, factory: Callable[[], Awaitable[Any]]) -> Any:
         async with self._semaphore:
             return await factory()
@@ -1938,8 +1945,7 @@ class AnalyticsAdapter:
             employee = str(employee_row["id"]) if employee_row else None
             scope = {**self.department_scope(department_row), "employee_id": employee}
 
-        payload = await self._get(
-            "/calls",
+        payload = await self._phone_lookup(
             phone_number=normalized_phone,
             department_id=str(department_row["id"]) if department_row else None,
             employee_id=employee,

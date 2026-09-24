@@ -6,7 +6,8 @@ The gateway fixes direct transcript reads where the upstream call-detail
 employee has `department_id` but no nested `department`. Long transcripts can
 be read through `start_char` / `next_start_char` chunks. The new
 `list_call_phone_records` tool requires `okk.phones.read` and the platform
-`GET /calls?phone_number=` exact indexed filter plus the normalized phone field
+read-only `POST /calls/phone-lookup` exact indexed filter with the number in
+the JSON body, plus the normalized phone field
 in each call-list item. Deploy and verify the platform contract on test-stand
 before the gateway; release to production only with explicit approval.
 Fresh OAuth authorization is required for the new scope. The release gate must
@@ -19,6 +20,9 @@ Platform test-stand PR119 reached all four Dokploy apps at `efc52a36` on
 2026-09-24. Live OpenAPI exposes the exact filter; authenticated empty/no-match
 requests return `total=0`, and malformed input returns `422`. The stand has no
 calls, so it cannot prove a positive live count or direct transcript read.
+That first stand candidate used GET; nginx access logs would retain the phone
+in the URL. The revised POST body contract must replace it on test-stand before
+production approval.
 Focused platform tests and local gateway adapter tests cover those cases.
 Production platform PR120 remains draft. The stand's focused API smoke retains
 five pre-existing V39 scorecard fingerprint mismatches; its 19 headless visual

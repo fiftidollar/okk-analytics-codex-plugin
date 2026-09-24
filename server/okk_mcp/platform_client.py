@@ -233,6 +233,33 @@ class OKKPlatformClient:
             raise ValueError(f"OKK rejected the analytics filter ({response.status_code})")
         return response.json()
 
+    async def phone_lookup_with_context(
+        self,
+        context: AccountContext,
+        payload: dict[str, Any],
+    ) -> Any:
+        """Read phone history through the sole approved body-only POST route."""
+
+        try:
+            response = await self.client.post(
+                "/calls/phone-lookup",
+                json=payload,
+                headers={"Authorization": f"Bearer {context.access_token}"},
+            )
+        except httpx.HTTPError as exc:
+            raise OKKUnavailable("OKK analytics is temporarily unavailable") from exc
+        if response.status_code == 401:
+            raise OKKAuthenticationError("OKK session is no longer valid")
+        if response.status_code == 404:
+            raise OKKUnavailable("OKK phone lookup contract is temporarily unavailable")
+        if response.status_code == 403:
+            raise OKKNotAvailable("Requested OKK data is not available")
+        if response.status_code >= 500:
+            raise OKKUnavailable("OKK analytics is temporarily unavailable")
+        if response.status_code >= 400:
+            raise ValueError(f"OKK rejected the analytics filter ({response.status_code})")
+        return response.json()
+
     async def revoke_upstream(self, session_id: UUID | str) -> None:
         """Best-effort upstream logout without ever exposing the refresh token."""
 
