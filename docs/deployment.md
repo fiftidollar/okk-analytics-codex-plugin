@@ -1,6 +1,6 @@
 # Production deployment and release gate
 
-## 2026-09-24 candidate 1.2.4 — not deployed
+## 2026-09-24 production release 1.2.4
 
 The gateway fixes direct transcript reads where the upstream call-detail
 employee has `department_id` but no nested `department`. Long transcripts can
@@ -8,13 +8,8 @@ be read through `start_char` / `next_start_char` chunks. The new
 `list_call_phone_records` tool requires `okk.phones.read` and the platform
 read-only `POST /calls/phone-lookup` exact indexed filter with the number in
 the JSON body, plus the normalized phone field
-in each call-list item. The platform contract is live and verified on
-test-stand; release to production only with explicit approval.
-Fresh OAuth authorization is required for the new scope. The release gate must
-repeat direct call-ID transcript reads, chunk reconstruction, exact phone count
-versus full journal, a no-match case, department and supervisor ACL denial,
-revoked access, trace redaction, package validation and live browser prompts
-for both a named employee and an unknown one. Current production remains 1.2.3.
+in each call-list item. The platform contract is live on test-stand and
+production. Fresh OAuth authorization is required for the new scope.
 
 Platform test-stand PR122 reached all four Dokploy apps at `c40c8a6c` on
 2026-09-24. Live OpenAPI exposes POST JSON body lookup and no GET phone query;
@@ -23,7 +18,9 @@ authenticated empty/no-match requests return `200`, `total=0`,
 first GET version in PR119 was superseded because nginx logs URLs. The stand
 has no calls, so it cannot prove a positive live count or direct transcript
 read. Focused platform tests and local gateway adapter tests cover those cases.
-Production platform PR120 remains draft. The stand's focused API smoke retains
+Production platform PR120 merged as `a4c5041b846602bd88bc0919f06dae033e93937d`;
+all five apps auto-deployed that exact commit with status `done`. The stand's
+focused API smoke retains
 five pre-existing V39 scorecard fingerprint mismatches; its 19 headless visual
 screenshots were manually inspected and have no UI/API/console failures, with
 one no-data employee warning.
@@ -31,8 +28,24 @@ Live production MCP 1.2.3 roster probes on all three visible departments
 (B2B, CSM, ORD) returned complete authoritative rosters of 3, 3, and 13;
 ranking rows outside those rosters or with conflicting names were zero.
 Unknown-name employee and private-supervisor searches both returned no data.
-This verifies the sampled tool outputs; repeat adversarial browser prose checks
-after the 1.2.4 rollout before claiming the new release is accepted.
+This verifies the sampled tool outputs. After rollout, direct production MCP
+`get_call_transcript` by call ID returned `13,778` of `13,778` characters,
+`truncated=false`, for a live ORD call that previously returned `not_available`.
+The production API lookup returned `total=5` with `page_size=1`; all five unique
+matching records were retrieved through pagination. No-match, malformed input,
+and cache behavior also passed. This already-open Codex task retains the old
+tool inventory and OAuth grant, so the new phone tool and fresh browser prose
+remain to be exercised after reconnecting with `okk.phones.read`.
+Post-rollout MCP roster reads still report authoritative B2B/CSM/ORD employee
+counts of `3/3/13`, with live-directory IDs and names. This checks the tool
+data boundary; it does not guarantee every future free-form answer.
+
+Gateway PR1 merged as `89ab83e2fa417ca5daa919b3c4095a2ec01624de`.
+No automatic Compose deployment appeared after the wait; one documented
+Dokploy MCP `deploy_compose` fallback was used. Public `/health` reports
+`1.2.4` and `/ready` reports ready. The Dokploy Compose deployment-list tool
+rejects its compose ID and container SSH cannot open its configured key, so
+the exact running SHA could not be independently read from Dokploy.
 
 ## 2026-09-09 release 1.2.3
 
