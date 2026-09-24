@@ -23,6 +23,12 @@ Focused platform tests and local gateway adapter tests cover those cases.
 Production platform PR120 remains draft. The stand's focused API smoke retains
 five pre-existing V39 scorecard fingerprint mismatches; its 19 headless visual
 routes have no UI/API/console failures, with one no-data employee warning.
+Live production MCP 1.2.3 roster probes on all three visible departments
+(B2B, CSM, ORD) returned complete authoritative rosters of 3, 3, and 13;
+ranking rows outside those rosters or with conflicting names were zero.
+Unknown-name employee and private-supervisor searches both returned no data.
+This verifies the sampled tool outputs; repeat adversarial browser prose checks
+after the 1.2.4 rollout before claiming the new release is accepted.
 
 ## 2026-09-09 release 1.2.3
 
