@@ -43,6 +43,12 @@ class FakePlatform:
     async def get_with_context(self, _context, path, *, params=None):
         return await self.get(None, path, params=params)
 
+    async def phone_lookup_with_context(self, _context, payload):
+        path = "/calls/phone-lookup"
+        self.calls.append((path, list(payload.items())))
+        value = self.responses[path]
+        return value(payload) if callable(value) else value
+
 
 def adapter(platform: FakePlatform) -> AnalyticsAdapter:
     return AnalyticsAdapter(platform, str(platform.context.session_id), Settings())
@@ -56,6 +62,158 @@ def test_transcript_match_modes_are_literal_case_insensitive_and_non_regex():
     assert _match_positions(text, "delivery missing", "all_terms") == []
     assert len(_match_positions(text, "missing delivery", "any_terms")) == 2
     assert _match_positions(text, ".*", "phrase") == []
+
+
+@pytest.mark.anyio
+async def test_call_detail_without_nested_department_reads_every_transcript_chunk():
+    department_id, employee_id, call_id = (str(uuid4()) for _ in range(3))
+    transcript = "Начало " + ("разговор с клиентом " * 30) + "конец"
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Продажи", "code": "sales"}],
+            "/employees/restricted": [],
+            f"/employees/{employee_id}": {
+                "id": employee_id,
+                "full_name": "Имя из справочника",
+                "department_id": department_id,
+            },
+            f"/calls/{call_id}": {
+                "id": call_id,
+                "employee_id": employee_id,
+                "employee": {
+                    "id": employee_id,
+                    "full_name": "Имя из звонка",
+                    "department_id": department_id,
+                },
+            },
+            f"/calls/{call_id}/transcript": {"transcript": transcript},
+        },
+    )
+    analytics = adapter(platform)
+    chunks = []
+    offset = 0
+    while True:
+        result = await analytics.get_call_transcript(
+            call_id, department_ref="sales", start_char=offset, max_chars=100
+        )
+        assert result["status"] in {"ok", "partial"}
+        assert result["data"]["call"]["employee"]["full_name"] == "Имя из справочника"
+        chunks.append(result["data"]["transcript"])
+        offset = result["data"]["next_start_char"]
+        if offset is None:
+            break
+    assert "".join(chunks) == transcript
+    assert result["data"]["total_chars"] == len(transcript)
+
+
+@pytest.mark.anyio
+async def test_phone_history_uses_exact_normalized_filter_and_source_total():
+    department_id, employee_id, call_id = (str(uuid4()) for _ in range(3))
+    number = "79991234567"
+    call = {
+        "id": call_id,
+        "employee_id": employee_id,
+        "counterparty_phone_normalized": number,
+        "call_status": "missed",
+        "employee": {
+            "id": employee_id,
+            "full_name": "Сотрудник",
+            "department": {"id": department_id, "name": "Продажи", "code": "sales"},
+        },
+    }
+
+    def phone_rows(body):
+        assert body["phone_number"] == number
+        return {"items": [call], "total": 7, "page": 1, "page_size": 1, "pages": 7}
+
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Продажи", "code": "sales"}],
+            "/calls/phone-lookup": phone_rows,
+        },
+    )
+    result = await adapter(platform).list_call_phone_records(
+        phone_number="8 (999) 123-45-67", department_ref="sales", page_size=1
+    )
+    assert result["status"] == "ok"
+    assert result["data"]["matching_calls_total"] == 7
+    assert result["data"]["has_call"] is True
+    assert result["data"]["items"][0]["counterparty_phone_normalized"] == number
+    assert result["data"]["items"][0]["call_status"] == "missed"
+    assert result["effective_scope"]["department_code"] == "sales"
+
+
+@pytest.mark.anyio
+async def test_phone_history_fails_closed_if_platform_ignores_new_filter():
+    department_id, employee_id, call_id = (str(uuid4()) for _ in range(3))
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Продажи", "code": "sales"}],
+            "/calls/phone-lookup": {
+                "items": [
+                    {
+                        "id": call_id,
+                        "employee_id": employee_id,
+                        "counterparty_phone_normalized": "79990000000",
+                    }
+                ],
+                "total": 1,
+            },
+        },
+    )
+    result = await adapter(platform).list_call_phone_records(phone_number="79991234567")
+    assert result["status"] == "temporarily_unavailable"
+    assert result["data"]["reason"] == "phone_filter_api_contract_unavailable"
+
+
+@pytest.mark.anyio
+async def test_phone_history_requires_explicit_supervisor_grant():
+    supervisor_id, call_id = str(uuid4()), str(uuid4())
+    number = "79991234567"
+    call = {
+        "id": call_id,
+        "employee_id": supervisor_id,
+        "counterparty_phone_normalized": number,
+        "employee": {"id": supervisor_id, "full_name": "Руководитель"},
+    }
+    granted = FakePlatform(
+        role="admin",
+        responses={
+            "/departments": [],
+            "/employees/restricted": [{"id": supervisor_id, "full_name": "Руководитель"}],
+            "/calls/phone-lookup": {"items": [call], "total": 1, "page": 1, "pages": 1},
+        },
+    )
+    denied = FakePlatform(
+        role="admin",
+        responses={"/departments": [], "/employees/restricted": []},
+    )
+
+    visible = await adapter(granted).list_call_phone_records(phone_number=number, supervisor_id=supervisor_id)
+    hidden = await adapter(denied).list_call_phone_records(phone_number=number, supervisor_id=supervisor_id)
+    assert visible["status"] == "ok"
+    assert visible["data"]["matching_calls_total"] == 1
+    assert visible["data"]["items"][0]["employee"]["section"] == "supervisors"
+    assert hidden["status"] == "not_available"
+    assert not any(path == "/calls/phone-lookup" for path, _params in denied.calls)
+
+
+@pytest.mark.anyio
+async def test_phone_history_reports_no_call_only_for_zero_source_total():
+    platform = FakePlatform(
+        role="admin",
+        responses={
+            "/departments": [],
+            "/calls/phone-lookup": {"items": [], "total": 0, "page": 1, "pages": 0},
+        },
+    )
+    result = await adapter(platform).list_call_phone_records(phone_number="79991234567")
+    assert result["status"] == "no_data"
+    assert result["data"]["matching_calls_total"] == 0
+    assert result["data"]["has_call"] is False
 
 
 @pytest.mark.anyio
@@ -1289,6 +1447,7 @@ def test_operational_trace_is_useful_but_redacts_ids_names_and_business_payload(
                 "department_ref": "Confidential Department Name",
                 "employee_id": employee_id,
                 "period": "month",
+                "phone_number": "79991234567",
             },
             result={
                 "status": "ok",
@@ -1308,6 +1467,7 @@ def test_operational_trace_is_useful_but_redacts_ids_names_and_business_payload(
         department_id,
         "Confidential Department Name",
         "Secret Person",
+        "79991234567",
         "secret-session-subject",
     ):
         assert secret not in trace
@@ -1608,6 +1768,9 @@ async def test_generic_call_transcript_accepts_granted_supervisor_but_rejects_un
         responses={
             "/departments": [],
             "/employees/restricted": [],
+            f"/employees/{supervisor_id}": lambda _params: (_ for _ in ()).throw(
+                OKKNotAvailable("not visible")
+            ),
             f"/calls/{call_id}": call,
         },
     )

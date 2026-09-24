@@ -1,5 +1,39 @@
 # Production deployment and release gate
 
+## 2026-09-24 candidate 1.2.4 — not deployed
+
+The gateway fixes direct transcript reads where the upstream call-detail
+employee has `department_id` but no nested `department`. Long transcripts can
+be read through `start_char` / `next_start_char` chunks. The new
+`list_call_phone_records` tool requires `okk.phones.read` and the platform
+read-only `POST /calls/phone-lookup` exact indexed filter with the number in
+the JSON body, plus the normalized phone field
+in each call-list item. The platform contract is live and verified on
+test-stand; release to production only with explicit approval.
+Fresh OAuth authorization is required for the new scope. The release gate must
+repeat direct call-ID transcript reads, chunk reconstruction, exact phone count
+versus full journal, a no-match case, department and supervisor ACL denial,
+revoked access, trace redaction, package validation and live browser prompts
+for both a named employee and an unknown one. Current production remains 1.2.3.
+
+Platform test-stand PR122 reached all four Dokploy apps at `c40c8a6c` on
+2026-09-24. Live OpenAPI exposes POST JSON body lookup and no GET phone query;
+authenticated empty/no-match requests return `200`, `total=0`,
+`Cache-Control: private, no-store`, and malformed input returns `422`. The
+first GET version in PR119 was superseded because nginx logs URLs. The stand
+has no calls, so it cannot prove a positive live count or direct transcript
+read. Focused platform tests and local gateway adapter tests cover those cases.
+Production platform PR120 remains draft. The stand's focused API smoke retains
+five pre-existing V39 scorecard fingerprint mismatches; its 19 headless visual
+screenshots were manually inspected and have no UI/API/console failures, with
+one no-data employee warning.
+Live production MCP 1.2.3 roster probes on all three visible departments
+(B2B, CSM, ORD) returned complete authoritative rosters of 3, 3, and 13;
+ranking rows outside those rosters or with conflicting names were zero.
+Unknown-name employee and private-supervisor searches both returned no data.
+This verifies the sampled tool outputs; repeat adversarial browser prose checks
+after the 1.2.4 rollout before claiming the new release is accepted.
+
 ## 2026-09-09 release 1.2.3
 
 The user explicitly approved production release in the current task. Runtime

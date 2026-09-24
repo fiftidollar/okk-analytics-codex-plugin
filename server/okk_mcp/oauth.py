@@ -245,6 +245,7 @@ def _render_login(
 ) -> HTMLResponse:
     error_html = f'<div class="error">{html.escape(error)}</div>' if error else ""
     transcript_scope = ", транскрипции доступных звонков" if "okk.transcripts.read" in scope.split() else ""
+    phone_scope = ", номера клиентов и поиск звонков по номеру" if "okk.phones.read" in scope.split() else ""
     body = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Вход в ОКК</title>
 <style>:root{{--bg:#f4f6f8;--card:#fff;--text:#17202a;--muted:#637083;--brand:#1769e0;--danger:#b42318}}
@@ -256,7 +257,7 @@ button{{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;back
 <form method="post" action="/authorize"><input type="hidden" name="authorization_request" value="{html.escape(signed_request, quote=True)}"><input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}">
 <label for="email">Логин (email)</label><input id="email" name="email" type="email" autocomplete="username" maxlength="200" required autofocus>
 <label for="password">Пароль</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required>
-<div class="scope">Только чтение: статистика, карточки сотрудников, наставничество, сценарии и критерии{transcript_scope} — строго в пределах прав аккаунта.</div>
+<div class="scope">Только чтение: статистика, карточки сотрудников, наставничество, сценарии и критерии{transcript_scope}{phone_scope} — строго в пределах прав аккаунта.</div>
 <button type="submit">Войти и разрешить доступ</button></form>
 <div class="next"><strong>Что произойдёт дальше</strong><br>Браузер передаст вход обратно в Codex. Вернитесь в Codex и выберите «Проверить подключение OKK»: сообщение «OKK подключён» с ролью и отделами означает, что вход действительно завершён.</div>
 <p><small>MCP-шлюз сразу передаёт пароль в штатный API ОКК, не сохраняет его и никогда не передаёт Codex.</small></p></section></main></body></html>"""

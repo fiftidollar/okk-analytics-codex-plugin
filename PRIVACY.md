@@ -1,6 +1,6 @@
 # Privacy policy
 
-Last updated: 2026-09-09.
+Last updated: 2026-09-24.
 
 OKK Analytics connects Codex to the OKK account that the user explicitly
 authorizes. The gateway forwards the login and password directly to the normal
@@ -20,6 +20,9 @@ When the user invokes a dedicated transcript tool, the gateway also processes
 the text of ACL-accessible calls in memory and returns it to the connected MCP
 client/model. Transcript text can contain personal or confidential speech; it
 is never stored in the gateway database, cache or operational logs.
+When the account grants `okk.phones.read`, the dedicated phone tool can return
+client phone numbers and exact call counts within the account's current access.
+The gateway processes those numbers in memory and does not persist or log them.
 
 Operational logs contain a request ID, pseudonymous actor hash, normalized tool
 name, filter-presence/count flags (including only a boolean for supervisor

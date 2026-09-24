@@ -92,9 +92,10 @@ def test_scopes_are_allowlisted_and_canonicalized():
     with pytest.raises(ValueError):
         validate_scopes("okk.statistics.write")
     assert validate_scopes(None) == (
-        "email okk.scenarios.read okk.statistics.read okk.transcripts.read openid"
+        "email okk.phones.read okk.scenarios.read okk.statistics.read okk.transcripts.read openid"
     )
     assert "okk.transcripts.read" in DEFAULT_SCOPES
+    assert "okk.phones.read" in DEFAULT_SCOPES
     assert {"openid", "email"}.issubset(set(DEFAULT_SCOPES.split()))
 
 
@@ -136,6 +137,7 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
         "get_employee_card",
         "compare_employees",
         "get_call_statistics",
+        "list_call_phone_records",
         "list_call_transcripts",
         "get_call_transcript",
         "search_call_transcripts",
@@ -235,6 +237,13 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
             "okk.statistics.read",
             "okk.transcripts.read",
         },
+    }
+    phone_tool = next(tool for tool in tools if tool.name == "list_call_phone_records")
+    assert set(phone_tool.meta["securitySchemes"][0]["scopes"]) == {
+        "openid",
+        "email",
+        "okk.statistics.read",
+        "okk.phones.read",
     }
 
 

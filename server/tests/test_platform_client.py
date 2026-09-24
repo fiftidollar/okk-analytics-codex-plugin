@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import json
+from uuid import uuid4
 
 import httpx
 import pytest
 
 from okk_mcp.config import Settings
-from okk_mcp.platform_client import OKKAuthenticationError, OKKPlatformClient
+from okk_mcp.platform_client import (
+    AccountContext,
+    OKKAuthenticationError,
+    OKKPlatformClient,
+    OKKUnavailable,
+)
 
 
 @pytest.fixture
@@ -77,4 +83,43 @@ async def test_analytics_client_rejects_auth_and_non_normalized_paths_before_net
         await client.get("session", "/departments/../auth/users")
     with pytest.raises(ValueError):
         await client.get("session", "https://example.com/")
+    await client.close()
+
+
+@pytest.mark.anyio
+async def test_phone_lookup_sends_number_only_in_post_body():
+    phone = "79991234567"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/api/v1/calls/phone-lookup"
+        assert not request.url.query
+        assert json.loads(request.content) == {"phone_number": phone, "page": 1}
+        return httpx.Response(200, json={"items": [], "total": 0})
+
+    client = OKKPlatformClient(Settings(okk_api_base_url="https://okk.example/api/v1"))
+    await client.client.aclose()
+    client.client = httpx.AsyncClient(
+        base_url="https://okk.example/api/v1",
+        transport=httpx.MockTransport(handler),
+    )
+    context = AccountContext(uuid4(), "user-1", "user@example.com", "admin", (), "access")
+    assert await client.phone_lookup_with_context(context, {"phone_number": phone, "page": 1}) == {
+        "items": [],
+        "total": 0,
+    }
+    await client.close()
+
+
+@pytest.mark.anyio
+async def test_phone_lookup_missing_upstream_route_is_not_reported_as_no_call():
+    client = OKKPlatformClient(Settings(okk_api_base_url="https://okk.example/api/v1"))
+    await client.client.aclose()
+    client.client = httpx.AsyncClient(
+        base_url="https://okk.example/api/v1",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(404)),
+    )
+    context = AccountContext(uuid4(), "user-1", "user@example.com", "admin", (), "access")
+    with pytest.raises(OKKUnavailable, match="contract"):
+        await client.phone_lookup_with_context(context, {"phone_number": "79991234567"})
     await client.close()

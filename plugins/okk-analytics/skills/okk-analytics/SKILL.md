@@ -137,7 +137,16 @@ rebuild the report only from the newly returned IDs and names.
 - Calls, duration, scores and day trend: `get_call_statistics`.
 - Call discovery and transcript availability: `list_call_transcripts`.
 - Full raw/diarized text or speaker segments for one known accessible call:
-  `get_call_transcript`.
+  `get_call_transcript`. If `next_start_char` or `next_start_segment` is present,
+  call again with that offset until it is null. Keep `source_sha256` identical
+  across text chunks; if it changes, restart at offset zero. Never describe a
+  preview or one chunk as the complete transcript.
+- Exact call count or existence by client phone, or a page of visible call
+  numbers: `list_call_phone_records`. For an unspecified period use `all` so
+  an earlier call is not silently missed. Use `matching_calls_total`, not the
+  number of returned page items. Check `status` and `source_complete` before
+  claiming that no call exists. This tool requires `okk.phones.read` and only
+  returns calls in the current account's department or supervisor grants.
 - Phrase/word search across ACL-accessible call text:
   `search_call_transcripts`. Preserve `scanned_calls`, `source_calls_total`,
   `source_complete` and `result_complete`; a bounded search is not proof that
@@ -198,7 +207,9 @@ loaded.
 
 ## Explicitly out of scope
 
-Do not request or expose audio, structured phone-number fields, raw prompts, prompt runtime, raw AI
+Do not request or expose audio, raw prompts, prompt runtime, raw AI
 reasoning, scripts, Megafon administration, processing pipeline state, routing,
 bulk operations or any write action. These exclusions are intentional even if
 another OKK endpoint happens to contain such data.
+Phone numbers are the narrow exception: use only `list_call_phone_records`
+after its dedicated OAuth scope check; never copy numbers into operational logs.

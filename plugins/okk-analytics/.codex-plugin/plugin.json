@@ -1,7 +1,7 @@
 {
   "name": "okk-analytics",
-  "version": "1.2.3",
-  "description": "Read-only OKK analytics, supervisors and ACL-safe call transcripts with native account OAuth.",
+  "version": "1.2.4",
+  "description": "Read-only OKK analytics, transcripts and scoped phone history with native account OAuth.",
   "author": {
     "name": "Alpes",
     "url": "https://github.com/fiftidollar"
@@ -9,13 +9,13 @@
   "homepage": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
   "repository": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
   "license": "MIT",
-  "keywords": ["okk", "analytics", "kpi", "employees", "supervisors", "transcripts", "read-only"],
+  "keywords": ["okk", "analytics", "kpi", "employees", "supervisors", "transcripts", "phone", "read-only"],
   "skills": "./skills/",
   "apps": "./.app.json",
   "interface": {
     "displayName": "OKK Analytics",
-    "shortDescription": "Статистика, руководители и транскрипции ОКК — только на чтение.",
-    "longDescription": "Подключает Codex к вашему аккаунту ОКК через OAuth: общая, отделовая и персональная статистика, персонально доступный раздел руководителей, клиентские и CRM-метрики, план/факт, AI-сильные стороны и зоны роста, наставнические задачи, сценарии, критерии, транскрипции доступных звонков и поиск по ним. Результаты всегда ограничены текущими правами пользователя.",
+    "shortDescription": "Статистика, транскрипции и звонки по номеру ОКК — только на чтение.",
+    "longDescription": "Подключает Codex к вашему аккаунту ОКК через OAuth: статистика, отделы, сотрудники, руководители, клиентские и CRM-метрики, планы, наставничество, сценарии, полные транскрипции и поиск звонков по номеру. Номера доступны только с отдельным разрешением; все результаты ограничены текущими правами пользователя.",
     "developerName": "Alpes",
     "category": "Data & Analytics",
     "websiteURL": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
@@ -30,7 +30,8 @@
       "Native OKK OAuth",
       "Access-aware employee insights",
       "Private supervisors section",
-      "ACL-safe transcript search"
+      "ACL-safe transcript search",
+      "Scoped phone call lookup"
     ],
     "defaultPrompt": [
       "Проверить подключение OKK и показать мой доступ.",

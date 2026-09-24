@@ -17,6 +17,7 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `get_employee_card` | KPI, plan/client/CRM, strengths, growth, focus and task windows |
 | `compare_employees` | KPI, strengths, growth, focus and task-count comparison |
 | `get_call_statistics` | Call volume, evaluated count, scores, pass rate, duration and trend |
+| `list_call_phone_records` | ACL-scoped client phone page or exact all-status call count/existence by normalized number; requires `okk.phones.read` |
 | `list_call_transcripts` | ACL-scoped call catalog, transcript availability and bounded previews |
 | `get_call_transcript` | Raw/diarized full text or safe speaker segments for one accessible call |
 | `search_call_transcripts` | Phrase/all-term/any-term search with excerpts and explicit scan completeness |
@@ -92,6 +93,23 @@ filters. A direct call ID is first checked through the ACL-protected call-detail
 endpoint and then checked again against the gateway's live department catalog
 before the transcript endpoint is called. Missing and inaccessible call IDs
 therefore have the same neutral `not_available` result.
+
+Call detail uses an employee response without a nested department. The gateway
+resolves that employee through the live directory before reading the transcript;
+this keeps a call discoverable from the catalog readable by its UUID. Long text
+and segment responses expose `next_start_char` / `next_start_segment`; repeat
+the request with that offset until null. Text chunks include `source_sha256`
+to detect a transcript changed between reads.
+
+`list_call_phone_records` uses the indexed upstream exact `phone_number` filter
+through read-only `POST /calls/phone-lookup`; the number is in the JSON body,
+outside access-log URLs.
+Its `matching_calls_total` counts all ACL-visible journal records for the number,
+including missed, short and in-process calls. `has_call` answers existence. The
+default `all` period sends no date bounds, so the full available journal is
+searched. A response page is only a sample of that total. A platform revision
+without the phone field/filter fails closed with `temporarily_unavailable`.
+Numbers never enter the other analytics or transcript tools.
 
 ## Common response envelope
 
