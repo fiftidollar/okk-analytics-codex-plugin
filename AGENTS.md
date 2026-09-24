@@ -13,12 +13,16 @@ from the private OKK platform repository.
   receives valid empty results.
 - Direct inaccessible IDs return neutral `not_available`. Mixed lists reveal
   only an omitted count.
-- Never expose audio, structured phone-number fields, raw prompts, prompt
+- Never expose audio, raw prompts, prompt
   runtime, raw reasoning, scripts, Megafon, routing, pipeline internals or
-  writes. Transcript text is the only sensitive-content exception: expose it
+  writes. Transcript text is a sensitive-content exception: expose it
   solely through the dedicated ordinary-employee or private-supervisor
   transcript tools, under `okk.transcripts.read`, after upstream and gateway
   ACL checks; never persist or log it.
+- Client phone numbers are a separate exception through `list_call_phone_records`
+  under `okk.phones.read`. Enforce the live department or supervisor ACL and
+  never log or persist the number. Exact counts must come from the upstream
+  indexed phone filter, not a bounded scan of call pages.
 - Update tool, plugin, security and deployment docs together when a contract
   changes.
 - Validate `pytest`, compilation, Alembic offline SQL, release smoke and plugin packaging before

@@ -58,6 +58,11 @@ membership or replace unavailable OKK scores.
 Safe projections exclude email, password/PBX fields, structured phone numbers,
 audio URLs, raw prompts, prompt runtime, raw reasoning, scripts, Megafon,
 routing and pipeline state. Nothing from an analytics response is persisted.
+The single phone exception is `list_call_phone_records`, gated by both
+`okk.statistics.read` and `okk.phones.read`. It returns only the client-side
+normalized number from calls in the caller's live department or explicit
+supervisor scope. The upstream indexed exact filter supplies the count. A
+gateway guard rejects a platform response that ignores the filter.
 The B2B touch-cycle extension follows the same rule: the client-statistics tool
 may expose aggregate counts and the fixed reset-window metadata, but never a
 phone, per-number transition row or hidden manager/client identity.
@@ -111,6 +116,8 @@ criteria-only GET endpoint should replace this compatibility path.
 - Transcript access is a separate `okk.transcripts.read` grant. Existing access
   and refresh tokens retain their original scope and require a fresh OAuth
   authorization before transcript tools become available.
+- Phone access is a separate `okk.phones.read` grant. Older tokens require a
+  fresh authorization; refresh cannot add it silently.
 - Public clients only (`token_endpoint_auth_method=none`).
 - OAuth metadata advertises `openid`, `email` and `/userinfo`. The UserInfo
   response revalidates the live OKK session and returns only the account

@@ -16,9 +16,10 @@ ALLOWED_SCOPES = frozenset(
         "okk.statistics.read",
         "okk.scenarios.read",
         "okk.transcripts.read",
+        "okk.phones.read",
     }
 )
-DEFAULT_SCOPES = "email okk.scenarios.read okk.statistics.read okk.transcripts.read openid"
+DEFAULT_SCOPES = "email okk.phones.read okk.scenarios.read okk.statistics.read okk.transcripts.read openid"
 
 
 def token_hash(raw: str) -> str:

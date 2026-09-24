@@ -1,5 +1,20 @@
 # Production deployment and release gate
 
+## 2026-09-24 candidate 1.2.4 — not deployed
+
+The gateway fixes direct transcript reads where the upstream call-detail
+employee has `department_id` but no nested `department`. Long transcripts can
+be read through `start_char` / `next_start_char` chunks. The new
+`list_call_phone_records` tool requires `okk.phones.read` and the platform
+`GET /calls?phone_number=` exact indexed filter plus the normalized phone field
+in each call-list item. Deploy and verify the platform contract on test-stand
+before the gateway; release to production only with explicit approval.
+Fresh OAuth authorization is required for the new scope. The release gate must
+repeat direct call-ID transcript reads, chunk reconstruction, exact phone count
+versus full journal, a no-match case, department and supervisor ACL denial,
+revoked access, trace redaction, package validation and live browser prompts
+for both a named employee and an unknown one. Current production remains 1.2.3.
+
 ## 2026-09-09 release 1.2.3
 
 The user explicitly approved production release in the current task. Runtime

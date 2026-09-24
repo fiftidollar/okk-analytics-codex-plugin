@@ -1,7 +1,7 @@
 {
   "name": "okk-analytics",
-  "version": "1.2.3",
-  "description": "Read-only OKK analytics, private supervisors and call transcripts with native OAuth and live ACL discovery.",
+  "version": "1.2.4",
+  "description": "Read-only OKK analytics, full call transcripts and scoped phone history with native OAuth and live ACL discovery.",
   "author": {
     "name": "Alpes",
     "url": "https://github.com/fiftidollar"
@@ -9,6 +9,6 @@
   "homepage": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
   "repository": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
   "license": "MIT",
-  "keywords": ["okk", "analytics", "supervisors", "transcripts", "mcp", "read-only"],
+  "keywords": ["okk", "analytics", "supervisors", "transcripts", "phone", "mcp", "read-only"],
   "skills": "./skills/"
 }

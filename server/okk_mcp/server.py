@@ -87,6 +87,7 @@ READ_ONLY = ToolAnnotations(
 STAT_SCOPE = "okk.statistics.read"
 SCENARIO_SCOPE = "okk.scenarios.read"
 TRANSCRIPT_SCOPE = "okk.transcripts.read"
+PHONE_SCOPE = "okk.phones.read"
 IDENTITY_SCOPES = ("openid", "email")
 
 
@@ -165,6 +166,11 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             "claim KPI, scenario, CRM, client, growth or mentoring data for a transcription-only "
             "supervisor. Supervisor access is determined only by the live OKK restricted catalog; "
             "never hardcode names, emails or grants. "
+            "For long transcripts follow next_start_char or next_start_segment until null; "
+            "a catalog preview or one chunk is not the complete text. "
+            "For exact phone-number existence or call counts, use list_call_phone_records "
+            "with the dedicated phone scope and read matching_calls_total, not one page's "
+            "item count. The default all period means the whole available journal history. "
             "Never ask the user for their OKK password in chat: authentication happens only "
             "on the OKK authorization page. Never infer hidden departments or entities from "
             "not_available/omitted results. Transcripts may be read only through the dedicated "
@@ -469,6 +475,45 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         )
 
     @mcp.tool(
+        title="Звонки по номеру телефона",
+        description=(
+            "Показывает номера клиентов и точное число доступных звонков по заданному номеру "
+            "за период. Без номера возвращает страницу журнала с номерами. Считает все записи "
+            "звонков, включая пропущенные, короткие и ещё обрабатываемые; сохраняет ACL "
+            "отдела, сотрудника и персонального раздела руководителей. По умолчанию ищет "
+            "за всю доступную историю, а не только за текущий месяц."
+        ),
+        annotations=READ_ONLY,
+        meta=_security_meta(STAT_SCOPE, PHONE_SCOPE),
+        structured_output=True,
+    )
+    async def list_call_phone_records(
+        phone_number: str | None = Field(default=None, min_length=3, max_length=40),
+        period: Period = "all",
+        department_id: UUID | None = None,
+        department_ref: str | None = Field(default=None, max_length=200),
+        employee_id: UUID | None = None,
+        supervisor_id: UUID | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        page: int = Field(default=1, ge=1),
+        page_size: int = Field(default=25, ge=1, le=100),
+    ) -> AnalyticsEnvelope:
+        _require_scopes(STAT_SCOPE, PHONE_SCOPE)
+        return await _read(
+            client,
+            "/mcp-read/call-phone-records",
+            phone_number=phone_number,
+            department_id=department_id,
+            department_ref=department_ref,
+            employee_id=employee_id,
+            supervisor_id=supervisor_id,
+            page=page,
+            page_size=page_size,
+            **_period_params(period, start_date, end_date),
+        )
+
+    @mcp.tool(
         title="Каталог транскрипций звонков",
         description=(
             "Возвращает только доступные текущему аккаунту звонки, наличие транскрипции и "
@@ -513,8 +558,10 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         title="Полная транскрипция звонка",
         description=(
             "Читает полную raw/diarized транскрипцию или безопасно спроецированные сегменты "
-            "одного доступного звонка. Недоступный и несуществующий UUID дают одинаковый "
-            "not_available; телефоны, аудио и внутренние поля звонка не возвращаются."
+            "одного доступного звонка. Длинный текст читайте кусками: передавайте "
+            "next_start_char как следующий start_char до null; сверяйте source_sha256. "
+            "Недоступный и несуществующий UUID дают одинаковый not_available; "
+            "телефоны, аудио и внутренние поля звонка не возвращаются."
         ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE, TRANSCRIPT_SCOPE),
@@ -523,8 +570,10 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     async def get_call_transcript(
         call_id: UUID,
         transcript_format: TranscriptFormat = "diarized",
-        max_chars: int = Field(default=120000, ge=1000, le=500000),
+        max_chars: int = Field(default=16000, ge=1000, le=500000),
         max_segments: int = Field(default=2000, ge=1, le=10000),
+        start_char: int = Field(default=0, ge=0),
+        start_segment: int = Field(default=0, ge=0),
         department_id: UUID | None = None,
         department_ref: str | None = Field(
             default=None, max_length=200, description="Optional exact visible department guard."
@@ -538,6 +587,8 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             transcript_format=transcript_format,
             max_chars=max_chars,
             max_segments=max_segments,
+            start_char=start_char,
+            start_segment=start_segment,
             department_id=department_id,
             department_ref=department_ref,
             employee_id=employee_id,
@@ -621,7 +672,8 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         title="Полная транскрипция звонка руководителя",
         description=(
             "Читает raw/diarized текст или безопасные speaker-сегменты одного звонка, "
-            "одновременно проверяя доступ к руководителю и принадлежность звонка ему."
+            "одновременно проверяя доступ к руководителю и принадлежность звонка ему. "
+            "Для полного длинного текста повторяйте запрос с next_start_char до null."
         ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE, TRANSCRIPT_SCOPE),
@@ -631,8 +683,10 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         supervisor_id: UUID,
         call_id: UUID,
         transcript_format: TranscriptFormat = "diarized",
-        max_chars: int = Field(default=120000, ge=1000, le=500000),
+        max_chars: int = Field(default=16000, ge=1000, le=500000),
         max_segments: int = Field(default=2000, ge=1, le=10000),
+        start_char: int = Field(default=0, ge=0),
+        start_segment: int = Field(default=0, ge=0),
     ) -> AnalyticsEnvelope:
         _require_scopes(STAT_SCOPE, TRANSCRIPT_SCOPE)
         return await _read(
@@ -642,6 +696,8 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             transcript_format=transcript_format,
             max_chars=max_chars,
             max_segments=max_segments,
+            start_char=start_char,
+            start_segment=start_segment,
         )
 
     @mcp.tool(

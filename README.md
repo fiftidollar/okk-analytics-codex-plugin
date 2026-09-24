@@ -6,6 +6,11 @@ and Claude Code never receive the password, and every result is restricted by
 the account's current role, department ACL and explicit private-supervisor
 grants.
 
+Release 1.2.4 is a local candidate. It repairs direct transcript reads,
+supports complete long transcripts through offset chunks, and adds an exact
+phone-history tool with the new `okk.phones.read` scope. The phone tool requires
+the matching platform `/calls?phone_number=` contract before gateway rollout.
+
 The account must have a working local OKK password. An account provisioned only
 through HR/SSO needs a local OKK password set by the normal account-management
 process first; the plugin never authenticates through the HR platform.
@@ -16,7 +21,7 @@ the Codex/Claude Code plugin packages.
 
 ## Included
 
-- 27 strictly typed MCP tools for company, department, employee, call, client,
+- 28 strictly typed MCP tools for company, department, employee, call, client,
   plan/fact, CRM, growth, mentoring, scenario and criterion statistics, plus
   an ACL-safe private Supervisors catalog, call metrics, transcript catalog,
   full transcript reading and full-text search.
@@ -26,7 +31,8 @@ the Codex/Claude Code plugin packages.
 - Client statistics include the B2B 30-day cycle: acting clients, new first
   touches, new repeat touches and the subset reactivated from repeat back into
   first touch after at least 30 days without a valid call. A number must enter
-  repeat touch before that reset is possible. No phone rows are exposed.
+  repeat touch before that reset is possible. Phone rows are available only
+  through the dedicated `okk.phones.read` call tool.
 - Scenario catalog and complete business criterion configuration without
   prompts or scripts, plus scenario/criterion performance aggregation.
 - OAuth Authorization Code + PKCE S256, dynamic client registration, refresh
@@ -56,9 +62,11 @@ the Codex/Claude Code plugin packages.
 
 ## Deliberately excluded
 
-Audio, structured phone-number fields, raw prompts, prompt runtime, raw AI
+Audio, raw prompts, prompt runtime, raw AI
 reasoning, scripts, Megafon administration, processing pipeline, routing, bulk
 operations and every write action.
+Client phone numbers are available only through the ACL-scoped phone tool and
+its separate OAuth permission.
 
 ## Repository layout
 
@@ -66,7 +74,7 @@ operations and every write action.
 plugins/okk-analytics/   Shared skill plus Codex and Claude Code plugin manifests
 .agents/plugins/         Codex community marketplace manifest
 .claude-plugin/          Claude Code community marketplace manifest
-server/okk_mcp/          OAuth server, encrypted sessions and 27 MCP tools
+server/okk_mcp/          OAuth server, encrypted sessions and 28 MCP tools
 server/migrations/       Standalone PostgreSQL schema
 server/tests/            Security, ACL, projection and tool-contract tests
 docs/                    Architecture, tools, security and deployment runbooks

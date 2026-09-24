@@ -174,6 +174,19 @@ def _query(**values: Any) -> list[tuple[str, str]]:
     return result
 
 
+def _normalized_phone_filter(value: str) -> str:
+    if len(value) > 40 or not re.fullmatch(r"[+()\-\s\d]+", value):
+        raise ValueError("Invalid phone number")
+    digits = "".join(character for character in value if character.isdigit())
+    if len(digits) == 11 and digits.startswith("8"):
+        digits = "7" + digits[1:]
+    elif len(digits) == 10:
+        digits = "7" + digits
+    if not 3 <= len(digits) <= 20:
+        raise ValueError("Invalid phone number")
+    return digits
+
+
 def _selector_key(value: Any) -> str:
     """Normalize a human department selector without fuzzy guessing."""
     normalized = unicodedata.normalize("NFKC", str(value or "")).casefold().strip()
@@ -265,6 +278,7 @@ class AnalyticsAdapter:
         self._context = validated_context
         self._departments: list[dict[str, Any]] | None = None
         self._restricted_supervisors: list[dict[str, Any]] | None = None
+        self._call_employees: dict[str, dict[str, Any] | None] = {}
         self._semaphore = asyncio.Semaphore(settings.analytics_parallel_requests)
 
     async def _get(self, path: str, **params: Any) -> Any:
@@ -676,24 +690,38 @@ class AnalyticsAdapter:
     ) -> dict[str, Any] | None:
         """Apply a second ACL/cross-filter guard to an upstream call payload."""
         safe = self._safe_call(row)
-        if employee_id and safe.get("employee_id") != employee_id:
+        call_employee_id = safe.get("employee_id")
+        if not call_employee_id or (employee_id and call_employee_id != employee_id):
             return None
         nested_employee = safe.get("employee") or {}
+        if nested_employee.get("id") and nested_employee["id"] != call_employee_id:
+            return None
         nested_department = nested_employee.get("department") or {}
         call_department_id = str(nested_department.get("id") or "")
-        if not call_department_id and safe.get("employee_id"):
-            supervisor = await self.restricted_supervisor(str(safe["employee_id"]))
-            if supervisor:
-                if department_id:
-                    return None
+        if not call_department_id:
+            supervisor = await self.restricted_supervisor(call_employee_id)
+            if supervisor and not department_id:
                 return self._safe_supervisor_call(row, supervisor)
-            return None
+            # /calls/{id} uses EmployeeResponse, which has department_id but
+            # no nested department. Resolve the live directory record before
+            # deciding that a visible call is unavailable.
+            if call_employee_id not in self._call_employees:
+                self._call_employees[call_employee_id] = await self.employee(call_employee_id)
+            canonical_employee = self._call_employees[call_employee_id]
+            if canonical_employee is None:
+                return None
+            call_department_id = str(canonical_employee["department_id"])
+            safe["employee"] = {
+                "id": call_employee_id,
+                "full_name": canonical_employee["full_name"],
+                "department": canonical_employee["department"],
+            }
         if department_id and call_department_id != department_id:
             return None
         context = await self.context()
         if not context.is_admin:
             visible = {str(item["id"]) for item in await self.departments()}
-            if not call_department_id or call_department_id not in visible:
+            if call_department_id not in visible:
                 return None
         return safe
 
@@ -936,6 +964,7 @@ class AnalyticsAdapter:
             "/mcp-read/search-supervisor-call-transcripts": self.search_supervisor_call_transcripts,
             "/mcp-read/compare-employees": self.compare_employees,
             "/mcp-read/call-statistics": self.get_call_statistics,
+            "/mcp-read/call-phone-records": self.list_call_phone_records,
             "/mcp-read/call-transcripts": self.list_call_transcripts,
             "/mcp-read/search-call-transcripts": self.search_call_transcripts,
             "/mcp-read/plan-fact-statistics": self.get_plan_fact_statistics,
@@ -1019,6 +1048,7 @@ class AnalyticsAdapter:
                 "domain": "transcripts",
                 "metrics": ["call_catalog", "full_text", "speaker_segments", "full_text_search"],
             },
+            {"domain": "phone_calls", "metrics": ["visible_numbers", "exact_call_count", "call_exists"]},
             {
                 "domain": "scenarios",
                 "metrics": ["catalog", "criteria", "scenario_performance", "criterion_performance"],
@@ -1072,6 +1102,10 @@ class AnalyticsAdapter:
                     },
                     {"tool": "get_call_statistics", "use_for": "call volume, quality and daily trend"},
                     {
+                        "tool": "list_call_phone_records",
+                        "use_for": "ACL-scoped client phone catalog or exact all-status call count by number",
+                    },
+                    {
                         "tool": "list_call_transcripts",
                         "use_for": "ACL-scoped call catalog with transcript availability and previews",
                     },
@@ -1124,6 +1158,7 @@ class AnalyticsAdapter:
                     "employees": "source_total/source_complete distinguish full population from configured cap",
                     "calls": "source_calls/source_calls_total and partial identify truncation",
                     "transcript_search": "scanned_calls/source_calls_total and source_complete identify bounded search",
+                    "phone_calls": "matching_calls_total is the indexed full result count, not the returned page size",
                     "mentoring": "active 5 and completed 10 tasks per employee; always a bounded window",
                     "crm": "latest snapshot per employee only; requested historical dates are never mislabeled",
                     "historical_scenarios": "available only when the connected OKK role exposes them",
@@ -1780,8 +1815,10 @@ class AnalyticsAdapter:
         self,
         call_id: str,
         transcript_format: str = "diarized",
-        max_chars: int = 120000,
+        max_chars: int = 16000,
         max_segments: int = 2000,
+        start_char: int = 0,
+        start_segment: int = 0,
         department_id: Any = None,
         department_ref: Any = None,
         employee_id: Any = None,
@@ -1820,23 +1857,30 @@ class AnalyticsAdapter:
             return await self.envelope({}, status="not_available")
         if transcript_format == "segments":
             source = self._safe_segments(payload.get("segments"))
-            returned = source[:max_segments]
-            truncated = len(returned) < len(source)
+            returned = source[start_segment : start_segment + max_segments]
+            next_segment = start_segment + len(returned)
+            truncated = start_segment > 0 or next_segment < len(source)
             transcript_data: dict[str, Any] = {
                 "segments": returned,
                 "total_segments": len(source),
                 "returned_segments": len(returned),
+                "start_segment": start_segment,
+                "next_start_segment": next_segment if next_segment < len(source) else None,
             }
             available = bool(source)
         else:
             source_text = payload.get("transcript")
             source_text = source_text if isinstance(source_text, str) else ""
-            returned_text = source_text[:max_chars]
-            truncated = len(returned_text) < len(source_text)
+            returned_text = source_text[start_char : start_char + max_chars]
+            next_char = start_char + len(returned_text)
+            truncated = start_char > 0 or next_char < len(source_text)
             transcript_data = {
                 "transcript": returned_text,
                 "total_chars": len(source_text),
                 "returned_chars": len(returned_text),
+                "start_char": start_char,
+                "next_start_char": next_char if next_char < len(source_text) else None,
+                "source_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
             }
             available = bool(source_text.strip())
         data = {
@@ -1855,6 +1899,112 @@ class AnalyticsAdapter:
                 "call_id": call_id,
                 "transcript_format": transcript_format,
             },
+        )
+
+    async def list_call_phone_records(
+        self,
+        phone_number: str | None = None,
+        period: str = "all",
+        department_id: Any = None,
+        department_ref: Any = None,
+        employee_id: Any = None,
+        supervisor_id: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        page: int = 1,
+        page_size: int = 25,
+        **_: Any,
+    ) -> dict[str, Any]:
+        """Read exact phone history from the indexed, upstream ACL-scoped call list."""
+        normalized_phone = _normalized_phone_filter(phone_number) if phone_number else None
+        bounds = None if period == "all" else _period_bounds(period, start_date, end_date)
+        if supervisor_id:
+            if any(value is not None for value in (department_id, department_ref, employee_id)):
+                return await self.envelope({}, status="not_available")
+            supervisor = await self.restricted_supervisor(supervisor_id)
+            if not supervisor:
+                return await self.envelope({}, status="not_available")
+            department_row = None
+            employee = supervisor["id"]
+            scope = self.supervisor_scope(supervisor)
+        else:
+            department_row, employee_row, invalid = await self.resolve_entity_scope(
+                department_id=department_id,
+                department_ref=department_ref,
+                employee_id=employee_id,
+            )
+            if invalid:
+                return await self.envelope({}, status="not_available")
+            employee = str(employee_row["id"]) if employee_row else None
+            scope = {**self.department_scope(department_row), "employee_id": employee}
+
+        payload = await self._get(
+            "/calls",
+            phone_number=normalized_phone,
+            department_id=str(department_row["id"]) if department_row else None,
+            employee_id=employee,
+            date_from=bounds[0] if bounds else None,
+            date_to=bounds[1] if bounds else None,
+            page=page,
+            page_size=page_size,
+        )
+        rows = payload.get("items") or []
+        if normalized_phone and not rows and int(payload.get("total") or 0) > 0:
+            return await self.envelope(
+                {"reason": "phone_result_page_unverifiable"},
+                status="partial",
+                scope=scope,
+                period=bounds,
+            )
+        # Older platform revisions ignore unknown query parameters. Never
+        # report their unfiltered count as the answer to an exact-number query.
+        if any(
+            "counterparty_phone_normalized" not in row
+            or (normalized_phone and row["counterparty_phone_normalized"] != normalized_phone)
+            for row in rows
+        ):
+            return await self.envelope(
+                {"reason": "phone_filter_api_contract_unavailable"},
+                status="temporarily_unavailable",
+                scope=scope,
+                period=bounds,
+            )
+        visible = await asyncio.gather(
+            *(
+                self._bounded(
+                    lambda row=row: self._visible_call(
+                        row,
+                        department_id=str(department_row["id"]) if department_row else None,
+                        employee_id=employee,
+                    )
+                )
+                for row in rows
+            )
+        )
+        items = [
+            {**call, "counterparty_phone_normalized": row["counterparty_phone_normalized"]}
+            for row, call in zip(rows, visible, strict=True)
+            if call is not None
+        ]
+        omitted = len(rows) - len(items)
+        total = int(payload.get("total") or 0)
+        data = {
+            "items": items,
+            "matching_calls_total": total if normalized_phone and not omitted else None,
+            "has_call": (total > 0) if normalized_phone and not omitted else None,
+            "source_calls_total": total,
+            "page": int(payload.get("page") or page),
+            "page_size": int(payload.get("page_size") or page_size),
+            "pages": int(payload.get("pages") or 0),
+            "returned_calls": len(items),
+            "source_complete": omitted == 0,
+        }
+        return await self.envelope(
+            data,
+            status="partial" if omitted else ("ok" if total else "no_data"),
+            scope={**scope, "phone_number": normalized_phone},
+            period=bounds,
+            omitted=omitted,
         )
 
     async def search_call_transcripts(
@@ -2056,8 +2206,10 @@ class AnalyticsAdapter:
         call_id: str,
         supervisor_id: str,
         transcript_format: str = "diarized",
-        max_chars: int = 120000,
+        max_chars: int = 16000,
         max_segments: int = 2000,
+        start_char: int = 0,
+        start_segment: int = 0,
         **_: Any,
     ) -> dict[str, Any]:
         supervisor = await self.restricted_supervisor(supervisor_id)
@@ -2076,23 +2228,30 @@ class AnalyticsAdapter:
             return await self.envelope({}, status="not_available")
         if transcript_format == "segments":
             source = self._safe_segments(payload.get("segments"))
-            returned = source[:max_segments]
-            truncated = len(returned) < len(source)
+            returned = source[start_segment : start_segment + max_segments]
+            next_segment = start_segment + len(returned)
+            truncated = start_segment > 0 or next_segment < len(source)
             transcript_data: dict[str, Any] = {
                 "segments": returned,
                 "total_segments": len(source),
                 "returned_segments": len(returned),
+                "start_segment": start_segment,
+                "next_start_segment": next_segment if next_segment < len(source) else None,
             }
             available = bool(source)
         else:
             source_text = payload.get("transcript")
             source_text = source_text if isinstance(source_text, str) else ""
-            returned_text = source_text[:max_chars]
-            truncated = len(returned_text) < len(source_text)
+            returned_text = source_text[start_char : start_char + max_chars]
+            next_char = start_char + len(returned_text)
+            truncated = start_char > 0 or next_char < len(source_text)
             transcript_data = {
                 "transcript": returned_text,
                 "total_chars": len(source_text),
                 "returned_chars": len(returned_text),
+                "start_char": start_char,
+                "next_start_char": next_char if next_char < len(source_text) else None,
+                "source_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
             }
             available = bool(source_text.strip())
         return await self.envelope(
@@ -3050,6 +3209,7 @@ class BackendClient:
             + int(bool(params.get("scenario_id"))),
             "criterion_filter_count": len(params.get("criterion_ids") or []),
             "search_filter": bool(params.get("search")),
+            "phone_filter": bool(params.get("phone_number")),
             "page": params.get("page"),
             "page_size": params.get("page_size"),
         }
