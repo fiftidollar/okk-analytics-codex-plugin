@@ -25,7 +25,7 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `get_supervisor_call_transcript` | Raw/diarized text or safe speaker segments for one call belonging to an accessible supervisor |
 | `search_supervisor_call_transcripts` | Bounded phrase/term search across one accessible supervisor's transcripts |
 | `get_plan_fact_statistics` | Weekly call-plan items (direction × clients × counting) with plan and fact for the period, per department or one employee |
-| `get_client_statistics` | New/regular contacts, missed/no-answer, plus B2B first/repeat touches and returns from repeat to first after 30 days |
+| `get_client_statistics` | New/regular contacts, missed/no-answer, plus first/repeat touches and returns from repeat to first after the reset period for departments that track client touches |
 | `get_crm_statistics` | Bitrix deals, tasks, overdue, stages, funnels and employee coverage |
 | `get_growth_insights` | Employee and aggregate AI strengths/growth areas without raw reasoning |
 | `get_mentoring_statistics` | Active/recent completed task window, status/overdue/completion stats |

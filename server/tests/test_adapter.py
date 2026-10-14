@@ -281,10 +281,11 @@ async def test_statistics_catalog_routes_transcripts_without_listing_them_as_exc
         "search_supervisor_call_transcripts",
     }.issubset(routes)
     assert {
-        "b2b_first_touch",
-        "b2b_repeat_touch",
-        "b2b_reactivated_after_30_days",
+        "new_client_first_touch",
+        "new_client_repeat_touch",
+        "new_client_reactivated_first_touch",
     }.issubset(domains["clients"])
+    assert domains["plans"][0] == "weekly_plan_items"
     assert "transcripts" not in result["data"]["explicit_exclusions"]
 
 

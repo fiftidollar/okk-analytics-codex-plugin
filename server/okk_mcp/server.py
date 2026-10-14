@@ -771,8 +771,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         title="Статистика клиентов",
         description=(
             "Максимальная статистика новых/действующих клиентов, эффективных контактов, "
-            "недозвонов и пропущенных, а для B2B — первых/повторных касаний и возвратов "
-            "из повторного в первое касание после 30 дней."
+            "недозвонов и пропущенных, а для отделов, которые ведут касания "
+            "(client_touch_metrics_applicable=true), — первых/повторных касаний и возвратов "
+            "из повторного в первое касание после new_client_touch_reset_days дней."
         ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),

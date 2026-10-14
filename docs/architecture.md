@@ -77,12 +77,17 @@ identity, basic call volume/duration/direction and transcript data only. It does
 not expose or manufacture department membership, evaluation scores, scenarios,
 clients, CRM, AI growth observations or mentoring tasks.
 
-`get_client_statistics` projects the platform summary counters for the B2B
-30-day touch cycle. Existing, new-first and new-repeat call counts are
-mutually exclusive; the reactivated-after-30-days counter is a documented
-subset of first touches and contains only resets from the previous repeat-touch
-state. The gateway does not recompute chronology and does not receive or
-serialize the underlying phone rows.
+`get_client_statistics` projects the platform summary counters for the client
+touch cycle of departments that track touches (OKK decides this per department
+and reports `client_touch_metrics_applicable` and the reset period). Existing,
+new-first and new-repeat call counts are mutually exclusive; the reactivated
+counter is a documented subset of first touches and contains only resets from
+the previous repeat-touch state. The gateway does not recompute chronology and
+does not receive or serialize the underlying phone rows.
+
+Call plans come from the OKK plan constructor (`/call-plans/plan-fact`); the
+gateway passes plan items, plan and fact through without recomputing them,
+drops the edit history and grounds personal items against the live roster.
 
 On the first OKK request in a new task, the bundled skill calls
 `get_access_context`. A successful call returns `authenticated=true`, the role

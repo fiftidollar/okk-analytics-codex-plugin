@@ -11,7 +11,11 @@
   call-plan API; on an older platform composite reports mark only the plan
   section `not_available`.
 - Department records expose `client_status_tracked` and `client_touch_tracked`
-  instead of the retired `weekly_call_plan`.
+  instead of the retired `weekly_call_plan`. Client-touch metrics are described
+  per department (`client_touch_metrics_applicable`, reset days from OKK)
+  instead of being tied to a B2B department code; the catalog names them
+  `new_client_first_touch`, `new_client_repeat_touch` and
+  `new_client_reactivated_first_touch`.
 
 ## 1.2.3 — 2026-09-09
 

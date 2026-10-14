@@ -1034,9 +1034,9 @@ class AnalyticsAdapter:
                     "repeats",
                     "missed",
                     "no_answer",
-                    "b2b_first_touch",
-                    "b2b_repeat_touch",
-                    "b2b_reactivated_after_30_days",
+                    "new_client_first_touch",
+                    "new_client_repeat_touch",
+                    "new_client_reactivated_first_touch",
                 ],
             },
             {"domain": "employees", "metrics": ["card", "strengths", "growth_areas", "focus", "mentoring"]},
@@ -1143,8 +1143,8 @@ class AnalyticsAdapter:
                     {
                         "tool": "get_client_statistics",
                         "use_for": (
-                            "client/contact/repeat/no-answer metrics and the B2B 30-day "
-                            "first/repeat-touch cycle"
+                            "client/contact/repeat/no-answer metrics and, for departments "
+                            "with client_touch_tracked, the first/repeat-touch cycle"
                         ),
                     },
                     {"tool": "get_crm_statistics", "use_for": "latest Bitrix snapshots only"},

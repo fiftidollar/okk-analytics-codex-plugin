@@ -153,13 +153,15 @@ rebuild the report only from the newly returned IDs and names.
   the phrase is absent from unscanned calls.
 - Weekly call plans and their facts for departments or one employee:
   `get_plan_fact_statistics`.
-- New/regular client contacts and the B2B 30-day first/repeat-touch cycle:
+- New/regular client contacts and, for departments whose response has
+  `client_touch_metrics_applicable=true`, the first/repeat-touch cycle:
   `get_client_statistics`. Treat `new_client_reactivated_first_touch_calls_total`
   as a subset of first touches, not an additional category. The mutually
-  exclusive B2B call categories are existing, new first touch and new repeat
-  touch. The call after any first touch is repeat even after a 30-day gap;
-  exactly 30 elapsed days starts a new first-touch cycle only when the previous
-  state was repeat.
+  exclusive call categories are existing, new first touch and new repeat touch.
+  The call after any first touch is repeat even after a long gap; exactly
+  `new_client_touch_reset_days` elapsed days start a new first-touch cycle only
+  when the previous state was repeat. Do not report touch metrics for a
+  department where they are not applicable.
 - Bitrix CRM snapshot statistics: `get_crm_statistics`.
 - AI strengths and growth observations: `get_growth_insights`.
 - Mentoring task history and completion statistics:

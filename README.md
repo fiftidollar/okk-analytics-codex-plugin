@@ -30,11 +30,15 @@ the Codex/Claude Code plugin packages.
 - Full employee-card view available through the current OKK API: KPI, plan/fact,
   client and CRM metrics, AI strengths, growth areas, weekly/saved focus, active
   tasks and recent completed tasks.
-- Client statistics include the B2B 30-day cycle: acting clients, new first
+- Client statistics include, for departments that track client touches
+  (`client_touch_tracked` in OKK), the touch cycle: acting clients, new first
   touches, new repeat touches and the subset reactivated from repeat back into
-  first touch after at least 30 days without a valid call. A number must enter
-  repeat touch before that reset is possible. Phone rows are available only
-  through the dedicated `okk.phones.read` call tool.
+  first touch after `new_client_touch_reset_days` without a valid call. A number
+  must enter repeat touch before that reset is possible. Phone rows are
+  available only through the dedicated `okk.phones.read` call tool.
+- Weekly call plans from the OKK plan constructor: plan items (direction ×
+  clients × counting), plan and fact for any period, per department or one
+  employee.
 - Scenario catalog and complete business criterion configuration without
   prompts or scripts, plus scenario/criterion performance aggregation.
 - OAuth Authorization Code + PKCE S256, dynamic client registration, refresh
