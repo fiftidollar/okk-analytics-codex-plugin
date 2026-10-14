@@ -1,7 +1,25 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 — prepared 2026-10-14, not released
 
+- Plugin packages match what the clients actually load (checked by installing
+  into isolated homes of Codex CLI 0.154.0 and Claude Code 2.1.118): Codex
+  reads the root AgentPlugin `plugin.json` and `mcp.json`, Claude Code reads
+  `.claude-plugin/plugin.json` and `.mcp.json`. Removed `.mcp.codex.json`: no
+  client read it, so its `oauth_resource` never applied. `mcp.json` stays
+  limited to `type` and `url` because Codex 0.154 drops a server entry with any
+  other field. The version lives once per manifest and equals the gateway
+  version; the Claude marketplace entry no longer repeats it.
+- Codex listing: `shortDescription` within 30 characters and `supportURL`.
+- ChatGPT submission file: `$schema` now points to the current
+  `plugins/schemas/chatgpt-app-submission.v1.json`, and the missing
+  `list_call_phone_records` tool is listed; a test keeps the file equal to the
+  server's tool inventory.
+- Security: new OAuth clients may register only loopback return addresses or
+  HTTPS addresses on `MCP_OAUTH_REDIRECT_HOSTS` (default `chatgpt.com`,
+  `claude.ai`, `claude.com`). The login page names where the browser will
+  return and warns about an unknown site. Previously anyone could register a
+  client named «Codex» with their own return address.
 - Read call plans from the OKK call-plan constructor (`/call-plans/plan-fact`)
   instead of the removed per-employee `/plans` API. `get_plan_fact_statistics`
   now returns plan items per department (direction × clients × counting, plan

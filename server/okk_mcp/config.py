@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     analytics_max_employees: int = Field(default=2000, ge=100, le=10000)
     analytics_trace_enabled: bool = True
     openai_apps_challenge_token: str = Field(default="", max_length=1000)
+    # Сайты, на которые новый OAuth-клиент может получить код входа (через запятую).
+    # Адреса этого компьютера (Codex, Claude Code) разрешены всегда. Чужой адрес
+    # возврата — это кража кода входа человека, который ввёл пароль на нашей странице.
+    mcp_oauth_redirect_hosts: str = "chatgpt.com,claude.ai,claude.com"
 
     @model_validator(mode="after")
     def validate_deployment(self) -> Settings:
@@ -107,6 +111,14 @@ class Settings(BaseSettings):
     @property
     def api_base_url(self) -> str:
         return self.okk_api_base_url.rstrip("/")
+
+    @property
+    def oauth_redirect_hosts(self) -> frozenset[str]:
+        return frozenset(
+            host.strip().lower().rstrip(".")
+            for host in self.mcp_oauth_redirect_hosts.split(",")
+            if host.strip()
+        )
 
 
 @lru_cache

@@ -59,16 +59,40 @@ def validate_redirect_uri(uri: str) -> str:
         raise ValueError("invalid_redirect_uri")
     if parsed.scheme == "https":
         return uri
-    if parsed.scheme != "http":
-        raise ValueError("invalid_redirect_uri")
-    try:
-        address = ipaddress.ip_address(parsed.hostname)
-        is_loopback = address.is_loopback
-    except ValueError:
-        is_loopback = parsed.hostname.lower() == "localhost"
-    if not is_loopback:
+    if parsed.scheme != "http" or not is_loopback_host(parsed.hostname):
         raise ValueError("invalid_redirect_uri")
     return uri
+
+
+def is_loopback_host(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host.lower() == "localhost"
+
+
+def validate_registered_redirect_uri(uri: str, allowed_hosts: frozenset[str]) -> str:
+    """Адрес возврата нового клиента: этот компьютер (RFC 8252) или известный сайт клиента.
+
+    Регистрация открыта всем, поэтому без списка любой мог бы зарегистрировать «Codex»
+    со своим адресом и получить код входа человека, который ввёл пароль на нашей странице.
+    """
+
+    validated = validate_redirect_uri(uri)
+    host = urlparse(validated).hostname or ""
+    if is_loopback_host(host) or _serialize_redirect_host(host).rstrip(".") in allowed_hosts:
+        return validated
+    raise ValueError("invalid_redirect_uri")
+
+
+def redirect_destination(uri: str, allowed_hosts: frozenset[str]) -> tuple[str, bool]:
+    """Куда браузер вернёт человека после входа: подпись для страницы входа и «известен ли адрес»."""
+
+    host = urlparse(uri).hostname or ""
+    if is_loopback_host(host):
+        return "в приложение на этом компьютере", True
+    serialized = _serialize_redirect_host(host).rstrip(".")
+    return serialized, serialized in allowed_hosts
 
 
 def redirect_origin(uri: str) -> str:

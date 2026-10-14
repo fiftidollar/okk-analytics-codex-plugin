@@ -1,5 +1,33 @@
 # Production deployment and release gate
 
+## 1.3.0 candidate (not released)
+
+Prerequisite: the OKK platform this gateway reads must already serve
+`GET /call-plans/plan-fact` (the plan constructor). Against an older platform
+the gateway still works, but every plan section is `not_available`. The old
+`/plans/*` API is removed from the platform only after this gateway is live
+(expand → migrate → contract).
+
+Verified locally on 2026-10-14: 157 tests, Ruff lint and format;
+`claude plugin validate` for the marketplace and the plugin; installation of
+the package into isolated homes of Codex CLI 0.154.0 and Claude Code 2.1.118
+(each client registers exactly one server from its own file). Not verified:
+OAuth login and tool calls against a live gateway in Codex, Claude Code and
+ChatGPT.
+
+Release gate in addition to the steps below:
+
+- `MCP_OAUTH_REDIRECT_HOSTS` keeps its default unless a client with another
+  web return site must connect. Before release, check that fresh ChatGPT,
+  Codex and Claude Code connections register successfully; a refused
+  registration answers `invalid_redirect_uri`.
+- On the login page, the return destination reads «в приложение на этом
+  компьютере» for Codex/Claude Code and `chatgpt.com` for ChatGPT.
+- A department report and `get_plan_fact_statistics` return plan items whose
+  plan and fact equal the OKK «Планы» page for the same period.
+- Bumping the version makes clients reload the skill: update the plugin and
+  start a new chat.
+
 ## 2026-09-24 production release 1.2.4
 
 The gateway fixes direct transcript reads where the upstream call-detail

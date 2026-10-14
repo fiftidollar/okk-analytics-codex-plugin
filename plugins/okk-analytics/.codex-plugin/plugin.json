@@ -1,6 +1,6 @@
 {
   "name": "okk-analytics",
-  "version": "1.2.4",
+  "version": "1.3.0",
   "description": "Read-only OKK analytics, transcripts and scoped phone history with native account OAuth.",
   "author": {
     "name": "Alpes",
@@ -14,13 +14,14 @@
   "apps": "./.app.json",
   "interface": {
     "displayName": "OKK Analytics",
-    "shortDescription": "Статистика, транскрипции и звонки по номеру ОКК — только на чтение.",
+    "shortDescription": "Аналитика звонков ОКК",
     "longDescription": "Подключает Codex к вашему аккаунту ОКК через OAuth: статистика, отделы, сотрудники, руководители, клиентские и CRM-метрики, планы, наставничество, сценарии, полные транскрипции и поиск звонков по номеру. Номера доступны только с отдельным разрешением; все результаты ограничены текущими правами пользователя.",
     "developerName": "Alpes",
     "category": "Data & Analytics",
     "websiteURL": "https://github.com/fiftidollar/okk-analytics-codex-plugin",
     "privacyPolicyURL": "https://github.com/fiftidollar/okk-analytics-codex-plugin/blob/main/PRIVACY.md",
     "termsOfServiceURL": "https://github.com/fiftidollar/okk-analytics-codex-plugin/blob/main/TERMS.md",
+    "supportURL": "https://github.com/fiftidollar/okk-analytics-codex-plugin/issues",
     "brandColor": "#DC3F4F",
     "composerIcon": "./assets/okk-analytics.png",
     "logo": "./assets/okk-analytics.png",
