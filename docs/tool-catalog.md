@@ -24,7 +24,7 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `list_supervisor_call_transcripts` | Private-supervisor call catalog, transcript availability and bounded previews |
 | `get_supervisor_call_transcript` | Raw/diarized text or safe speaker segments for one call belonging to an accessible supervisor |
 | `search_supervisor_call_transcripts` | Bounded phrase/term search across one accessible supervisor's transcripts |
-| `get_plan_fact_statistics` | Total/inbound/outbound/new/regular plans and daily rows |
+| `get_plan_fact_statistics` | Weekly call-plan items (direction × clients × counting) with plan and fact for the period, per department or one employee |
 | `get_client_statistics` | New/regular contacts, missed/no-answer, plus B2B first/repeat touches and returns from repeat to first after 30 days |
 | `get_crm_statistics` | Bitrix deals, tasks, overdue, stages, funnels and employee coverage |
 | `get_growth_insights` | Employee and aggregate AI strengths/growth areas without raw reasoning |
@@ -181,7 +181,38 @@ population; `total_calls` is duration-qualified, while `calls_evaluated` require
 an actual KPI score. Average duration does not require a score. Average quality
 must not be recomputed by averaging employee means.
 
-`get_plan_fact_statistics.data.totals` and the department `plan_fact` preserve
-null when no plan is set for a metric; assigned zero remains zero. `coverage`
-reports employees with/without a plan per metric, using the visible roster as
-the denominator. A sum with missing assignments is not a complete team target.
+# Weekly call plan (1.3.0)
+
+Plans come from the OKK call-plan constructor (`GET /call-plans/plan-fact`).
+A department has one plan per week in one of two modes: `department` (one plan
+for the whole department; the fact counts every employee's calls) or
+`employees` (personal plans; the department plan is their sum). A plan is a
+list of items; each item is direction (`all`/`outbound`/`inbound`) × clients
+(`all`/`new`/`existing`) × counting (`connected` — the telephony reports the
+call was answered; `successful` — a live manager–client conversation;
+`successful_from_min` — successful and not shorter than
+`min_call_duration_seconds`; `evaluated` — only scored calls) × number of
+calls. Items count different calls and are never added together.
+
+For a period that covers part of a week, OKK splits the weekly plan across the
+working days Monday–Friday (the remainder goes to the first days); a whole week
+carries the whole plan. The gateway returns OKK's numbers as is and does not
+recompute plans or facts.
+
+`get_plan_fact_statistics` returns `data.departments[]` — one entry per
+requested department (or every visible department when neither a department
+nor an employee is given) with `mode` (`department`, `employees`, `mixed` for
+a period whose weeks differ, `null` when no plan exists), `weeks`, `items` and
+personal `employees[].items`. `get_department_statistics.data.plan_fact` and
+`get_employee_card.data.plan_fact` carry the same department entry; in an
+employee card under a department plan, `contribution` is that employee's calls
+inside the department fact.
+
+- `mode=null` means no plan was set; it is not a zero plan.
+- `fact=null` with `fact_state=no_client_base` means OKK had no monthly client
+  base for new/existing classification; it is unavailable, not zero.
+- `changed=true` means the item was edited after the week started. The edit
+  history and its authors are not exposed.
+- If the connected OKK platform has no call-plan API, composite reports keep
+  their other sections and return `plan_fact.status=not_available`;
+  `get_plan_fact_statistics` skips such departments and reports `partial`.

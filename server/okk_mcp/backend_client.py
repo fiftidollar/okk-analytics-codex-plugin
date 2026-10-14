@@ -27,7 +27,7 @@ from okk_mcp.platform_client import (
     OKKPlatformClient,
     OKKUnavailable,
 )
-from okk_mcp.reporting import aggregate_plan_totals, department_report_contract
+from okk_mcp.reporting import department_report_contract, plan_fact_report_contract, safe_plan_fact
 
 MSK = ZoneInfo("Europe/Moscow")
 LOGGER = logging.getLogger("okk_mcp.analytics_trace")
@@ -500,7 +500,8 @@ class AnalyticsAdapter:
             "is_active",
             "min_call_duration",
             "passing_score",
-            "weekly_call_plan",
+            "client_status_tracked",
+            "client_touch_tracked",
             "created_at",
             "updated_at",
         )
@@ -1050,7 +1051,18 @@ class AnalyticsAdapter:
                     "transcript_search",
                 ],
             },
-            {"domain": "plans", "metrics": ["total", "inbound", "outbound", "new", "regular", "daily"]},
+            {
+                "domain": "plans",
+                "metrics": [
+                    "weekly_plan_items",
+                    "direction",
+                    "clients",
+                    "counting",
+                    "plan",
+                    "fact",
+                    "contribution",
+                ],
+            },
             {
                 "domain": "transcripts",
                 "metrics": ["call_catalog", "full_text", "speaker_segments", "full_text_search"],
@@ -1124,7 +1136,10 @@ class AnalyticsAdapter:
                         "tool": "search_call_transcripts",
                         "use_for": "full-text search across transcripts of ACL-scoped calls",
                     },
-                    {"tool": "get_plan_fact_statistics", "use_for": "employee and department call plan/fact"},
+                    {
+                        "tool": "get_plan_fact_statistics",
+                        "use_for": "weekly call plan items and their facts for departments or one employee",
+                    },
                     {
                         "tool": "get_client_statistics",
                         "use_for": (
@@ -1322,12 +1337,8 @@ class AnalyticsAdapter:
             removed_trends,
             normalized_trends,
         ) = self._ground_employee_rows(department_trends.get("employee_trends"), roster, "employee_id", "id")
-        plan = await self.get_plan_fact_statistics(
-            start_date=bounds[0], end_date=bounds[1], department_id=resolved_id
-        )
-        plan_data = dict(plan.get("data") or {})
-        plan_data["employees"], removed_plan, normalized_plan = self._ground_employee_rows(
-            plan_data.get("employees"), roster, "employee_id", "id"
+        plan_fact, removed_plan, normalized_plan = await self.optional_plan_fact(
+            department_row, bounds[0], bounds[1], roster
         )
         excluded_source_records = (
             roster_excluded + removed_top + removed_ranking + removed_trends + removed_plan
@@ -1350,8 +1361,7 @@ class AnalyticsAdapter:
                 "department_summary": department_summary,
                 "complete_employee_ranking": department_ranking,
                 "department_and_employee_trends": department_trends,
-                "plan_fact": plan_data,
-                "plan_fact_status": plan["status"],
+                "plan_fact": plan_fact,
                 "authoritative_employee_roster": {
                     "items": roster,
                     "employee_count": len(roster),
@@ -1361,10 +1371,10 @@ class AnalyticsAdapter:
             },
             status=(
                 "partial"
-                if plan["status"] == "partial"
-                or not roster_complete
+                if not roster_complete
                 or excluded_source_records
                 or normalized_source_records
+                or plan_fact.get("status") == "not_available"
                 else "ok"
             ),
             scope=self.department_scope(department_row),
@@ -1585,10 +1595,10 @@ class AnalyticsAdapter:
                 return await self.envelope({}, status="not_available")
         bounds = _period_bounds(period, start_date, end_date)
         common = _period_query(period, start_date, end_date)
-        page_data, summary, plan, crm = await asyncio.gather(
+        page_data, summary, (plan, _, _), crm = await asyncio.gather(
             self._page_data(employee_id, *bounds),
             self._get(f"/employees/{employee_id}/summary", **common),
-            self._get(f"/plans/employee/{employee_id}/total", start_date=bounds[0], end_date=bounds[1]),
+            self.optional_plan_fact(department_row, *bounds, [employee], employee_id=employee["id"]),
             self._get(f"/employees/{employee_id}/bitrix-metrics"),
         )
         active = [self._safe_task(row) for row in page_data.get("mentoring_tasks") or []]
@@ -2439,54 +2449,88 @@ class AnalyticsAdapter:
         if invalid:
             return await self.envelope({"reason": "requested_scope_not_available"}, status="not_available")
         employee = str(employee_row["id"]) if employee_row else None
-        department = str(department_row["id"]) if department_row else None
         if employee_row:
-            visible_employees, complete, roster_excluded = [employee_row], True, 0
+            roster, complete, roster_excluded = [employee_row], True, 0
         else:
-            visible_employees, complete, _, roster_excluded = await self.employees(
-                department_id=department, include_inactive=False
+            roster, complete, _, roster_excluded = await self.employees(
+                department_id=str(department_row["id"]) if department_row else None, include_inactive=False
             )
-        department_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for row in visible_employees:
-            if row.get("department_id"):
-                department_groups[row["department_id"]].append(row)
-        summaries: list[dict[str, Any]] = []
-        removed_source_records = 0
-        normalized_source_records = 0
-        for department_key in department_groups:
-            rows = await self._get(
-                "/plans/summary", start_date=start, end_date=end, department_id=department_key
-            )
-            grounded, removed, normalized = self._ground_employee_rows(
-                rows,
-                department_groups[department_key],
-                "employee_id",
-                "id",
-            )
+        targets = [department_row] if department_row else await self.departments()
+        plans: list[dict[str, Any]] = []
+        unavailable_departments = removed_source_records = normalized_source_records = 0
+        for target in targets:
+            department_roster = [row for row in roster if row.get("department_id") == str(target["id"])]
+            try:
+                plan, removed, normalized = await self.department_plan_fact(
+                    target, start, end, department_roster, employee_id=employee
+                )
+            except OKKNotAvailable:
+                unavailable_departments += 1
+                continue
+            plans.append(plan)
             removed_source_records += removed
             normalized_source_records += normalized
-            summaries.extend(grounded)
-        if employee:
-            summaries = [row for row in summaries if str(row.get("employee_id")) == employee]
-        plan_totals = aggregate_plan_totals(summaries, len(visible_employees))
         excluded_source_records = roster_excluded + removed_source_records
+        if unavailable_departments:
+            status = "partial" if plans else "not_available"
+        elif not any(plan["mode"] for plan in plans):
+            status = "no_data"
+        elif not complete or excluded_source_records or normalized_source_records:
+            status = "partial"
+        else:
+            status = "ok"
         return await self.envelope(
-            {**plan_totals, "employees": summaries},
-            status=(
-                "partial"
-                if summaries and (not complete or excluded_source_records or normalized_source_records)
-                else ("ok" if summaries else "no_data")
-            ),
+            {"reporting_contract": plan_fact_report_contract(), "departments": plans},
+            status=status,
             scope={**self.department_scope(department_row), "employee_id": employee},
             period=(start, end),
             employee_roster_grounding=self.employee_roster_grounding(
                 department_row,
-                visible_employees,
+                roster,
                 source_complete=complete and not roster_excluded,
                 excluded_source_records=excluded_source_records,
                 normalized_source_records=normalized_source_records,
             ),
         )
+
+    async def department_plan_fact(
+        self,
+        department: dict[str, Any],
+        start: date,
+        end: date,
+        roster: list[dict[str, Any]],
+        *,
+        employee_id: str | None = None,
+    ) -> tuple[dict[str, Any], int, int]:
+        """План-факт отдела из OKK: поля отчёта без авторов правок, сотрудники — только из живого справочника."""
+        report = await self._get(
+            "/call-plans/plan-fact",
+            department_id=department["id"],
+            employee_id=employee_id,
+            period="custom",
+            start_date=start,
+            end_date=end,
+        )
+        plan = safe_plan_fact(report if isinstance(report, dict) else {})
+        plan["employees"], removed, normalized = self._ground_employee_rows(
+            plan["employees"], roster, "employee_id"
+        )
+        return {**self.department_scope(department), **plan}, removed, normalized
+
+    async def optional_plan_fact(
+        self,
+        department: dict[str, Any],
+        start: date,
+        end: date,
+        roster: list[dict[str, Any]],
+        *,
+        employee_id: str | None = None,
+    ) -> tuple[dict[str, Any], int, int]:
+        """План-факт внутри составного отчёта: если плана звонков нет на платформе, остальной отчёт остаётся."""
+        try:
+            return await self.department_plan_fact(department, start, end, roster, employee_id=employee_id)
+        except OKKNotAvailable:
+            return {**self.department_scope(department), "status": "not_available"}, 0, 0
 
     async def get_client_statistics(
         self,

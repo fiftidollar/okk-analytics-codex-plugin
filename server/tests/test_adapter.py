@@ -613,7 +613,26 @@ async def test_employee_card_contains_growth_and_tasks_without_raw_reasoning():
             "transcript_raw": "must never leave adapter",
         },
         f"/employees/{employee_id}/summary": {"calls_total": 12, "new_client_contacts_total": 4},
-        f"/plans/employee/{employee_id}/total": {"plan_total": 20},
+        "/call-plans/plan-fact": {
+            "department_id": department_id,
+            "employee_id": employee_id,
+            "weeks": [{"week_start": "2026-10-12", "mode": "department", "min_call_duration_seconds": 60}],
+            "items": [
+                {
+                    "employee_id": None,
+                    "direction": "all",
+                    "clients": "all",
+                    "counting": "connected",
+                    "plan": 20,
+                    "fact": 9,
+                    "fact_state": "ready",
+                    "contribution": 4,
+                    "min_call_duration_seconds": [],
+                    "changes": [{"author": "Автор правки плана", "kind": "items", "was": 10, "now": 20}],
+                }
+            ],
+            "employees": [],
+        },
         f"/employees/{employee_id}/bitrix-metrics": {
             "status": "ok",
             "total_open_deals": 3,
@@ -632,6 +651,12 @@ async def test_employee_card_contains_growth_and_tasks_without_raw_reasoning():
     assert "reasoning" not in serialized.lower()
     assert "transcript" not in serialized.lower()
     assert "internal integration debug" not in serialized
+    plan_item = result["data"]["plan_fact"]["items"][0]
+    assert (plan_item["plan"], plan_item["fact"], plan_item["contribution"]) == (20, 9, 4)
+    assert plan_item["changed"] is True
+    assert "Автор правки плана" not in serialized
+    plan_call = next(params for path, params in platform.calls if path == "/call-plans/plan-fact")
+    assert ("employee_id", employee_id) in plan_call and ("period", "custom") in plan_call
 
 
 @pytest.mark.anyio
@@ -929,7 +954,17 @@ async def test_department_card_by_name_returns_complete_department_sources_only(
             f"/departments/{b2b_id}/ranking": {"employees": [{"id": employee_id}]},
             f"/departments/{b2b_id}/trends": {"employee_trends": [{"id": employee_id}]},
             "/employees": {"items": [employee], "total": 1, "pages": 1},
-            "/plans/summary": [{"employee_id": employee_id, "plan_total": 10}],
+            "/call-plans/plan-fact": {
+                "weeks": [{"week_start": "2026-10-12", "mode": "employees", "min_call_duration_seconds": 60}],
+                "items": [_plan_item(None, plan=10, fact=3)],
+                "employees": [
+                    {
+                        "employee_id": employee_id,
+                        "full_name": "B2B Employee",
+                        "items": [_plan_item(employee_id, 10, 3)],
+                    }
+                ],
+            },
         },
     )
 
@@ -939,9 +974,10 @@ async def test_department_card_by_name_returns_complete_department_sources_only(
     assert result["effective_scope"]["department_id"] == b2b_id
     assert result["data"]["complete_employee_ranking"]["employees"][0]["id"] == employee_id
     assert "summary.calls_total" in result["data"]["reporting_contract"]["metric_definitions"]
-    assert result["data"]["plan_fact"]["totals"]["plan_total"] == 10
-    assert result["data"]["plan_fact"]["totals"]["plan_inbound"] is None
-    assert result["data"]["plan_fact"]["coverage"]["plan_inbound"]["employees_without_plan"] == 1
+    plan_fact = result["data"]["plan_fact"]
+    assert plan_fact["mode"] == "employees"
+    assert (plan_fact["items"][0]["plan"], plan_fact["items"][0]["fact"]) == (10, 3)
+    assert plan_fact["employees"][0]["canonical_employee_name"] == "B2B Employee"
     assert result["data"]["department_and_employee_trends"]["employee_trends"][0]["id"] == employee_id
     assert result["employee_roster_grounding"] == {
         "source": "live_okk_employee_directory",
@@ -1012,7 +1048,14 @@ async def test_department_report_drops_foreign_people_and_canonicalizes_every_na
             f"/departments/{ord_id}/ranking": {"employees": mixed_rows},
             f"/departments/{ord_id}/trends": {"employee_trends": mixed_rows},
             "/employees": {"items": [ord_employee, foreign_employee], "total": 2, "pages": 1},
-            "/plans/summary": mixed_rows,
+            "/call-plans/plan-fact": {
+                "weeks": [{"week_start": "2026-10-12", "mode": "employees"}],
+                "items": [],
+                "employees": [
+                    {"employee_id": ord_employee_id, "full_name": "Выдуманное Имя", "items": []},
+                    {"employee_id": foreign_employee_id, "full_name": "Левый Сотрудник", "items": []},
+                ],
+            },
         },
     )
 
@@ -1035,6 +1078,135 @@ async def test_department_report_drops_foreign_people_and_canonicalizes_every_na
     assert "Левый Сотрудник" not in serialized
     assert "Выдуманное Имя" not in serialized
     assert serialized.count("Иван ОРД") >= 4
+
+
+def _plan_item(employee_id, plan, fact, *, state="ready"):
+    return {
+        "employee_id": employee_id,
+        "direction": "outbound",
+        "clients": "all",
+        "counting": "successful",
+        "plan": plan,
+        "fact": fact,
+        "fact_state": state,
+        "contribution": None,
+        "min_call_duration_seconds": [],
+        "changes": [],
+    }
+
+
+@pytest.mark.anyio
+async def test_plan_fact_statistics_covers_every_visible_department_and_marks_gaps():
+    sales_id, support_id, closed_id = str(uuid4()), str(uuid4()), str(uuid4())
+
+    def plan_fact(params):
+        department = dict(params)["department_id"]
+        if department == closed_id:
+            raise OKKNotAvailable("not connected")
+        if department == support_id:
+            return {"weeks": [{"week_start": "2026-10-12", "mode": None}], "items": [], "employees": []}
+        return {
+            "weeks": [{"week_start": "2026-10-12", "mode": "department"}],
+            "items": [_plan_item(None, 16, None, state="no_client_base")],
+            "employees": [],
+        }
+
+    platform = FakePlatform(
+        role="admin",
+        responses={
+            "/departments": [
+                {"id": sales_id, "name": "Продажи", "code": "sales"},
+                {"id": support_id, "name": "Сопровождение", "code": "csm"},
+                {"id": closed_id, "name": "Закрытый", "code": "closed"},
+            ],
+            "/employees": {"items": [], "total": 0, "pages": 1},
+            "/call-plans/plan-fact": plan_fact,
+        },
+    )
+
+    result = await adapter(platform).get_plan_fact_statistics("2026-10-12", "2026-10-14")
+
+    assert result["status"] == "partial"  # один отдел недоступен
+    departments = {entry["department_code"]: entry for entry in result["data"]["departments"]}
+    assert set(departments) == {"sales", "csm"}
+    assert departments["csm"]["mode"] is None and departments["csm"]["items"] == []
+    unknown = departments["sales"]["items"][0]
+    assert unknown["fact"] is None and unknown["fact_state"] == "no_client_base"
+    assert "plan_fact.items.counting" in result["data"]["reporting_contract"]["metric_definitions"]
+    for _path, params in platform.calls[1:]:
+        if _path == "/call-plans/plan-fact":
+            assert ("period", "custom") in params and ("start_date", "2026-10-12") in params
+
+
+@pytest.mark.anyio
+async def test_plan_fact_statistics_without_any_plan_is_no_data():
+    department_id = str(uuid4())
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Продажи", "code": "sales"}],
+            "/employees": {"items": [], "total": 0, "pages": 1},
+            "/call-plans/plan-fact": {"weeks": [{"week_start": "2026-10-12", "mode": None}], "items": []},
+        },
+    )
+
+    result = await adapter(platform).get_plan_fact_statistics(
+        "2026-10-12", "2026-10-18", department_ref="sales"
+    )
+
+    assert result["status"] == "no_data"
+    assert result["data"]["departments"][0]["mode"] is None
+
+
+@pytest.mark.anyio
+async def test_plan_fact_statistics_on_platform_without_call_plans_is_not_available():
+    department_id = str(uuid4())
+
+    def missing(_params):
+        raise OKKNotAvailable("no call plans")
+
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Продажи", "code": "sales"}],
+            "/employees": {"items": [], "total": 0, "pages": 1},
+            "/call-plans/plan-fact": missing,
+        },
+    )
+
+    result = await adapter(platform).get_plan_fact_statistics("2026-10-12", "2026-10-18")
+
+    assert result["status"] == "not_available"
+    assert result["data"]["departments"] == []
+
+
+@pytest.mark.anyio
+async def test_department_report_keeps_statistics_when_platform_has_no_call_plans():
+    department_id = str(uuid4())
+
+    def missing(_params):
+        raise OKKNotAvailable("no call plans")
+
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Продажи", "code": "sales"}],
+            "/dashboard/summary": {"calls": 1},
+            "/dashboard/calls-trend": [],
+            "/dashboard/top-employees": [],
+            f"/departments/{department_id}/summary": {"calls": 1},
+            f"/departments/{department_id}/ranking": {"employees": []},
+            f"/departments/{department_id}/trends": {"employee_trends": []},
+            "/employees": {"items": [], "total": 0, "pages": 1},
+            "/call-plans/plan-fact": missing,
+        },
+    )
+
+    result = await adapter(platform).get_department_statistics(department_ref="sales", period="today")
+
+    assert result["status"] == "partial"
+    assert result["data"]["plan_fact"]["status"] == "not_available"
+    assert result["data"]["department_summary"] == {"calls": 1}
 
 
 @pytest.mark.anyio

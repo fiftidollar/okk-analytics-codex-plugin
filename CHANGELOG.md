@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Read call plans from the OKK call-plan constructor (`/call-plans/plan-fact`)
+  instead of the removed per-employee `/plans` API. `get_plan_fact_statistics`
+  now returns plan items per department (direction × clients × counting, plan
+  and fact for the period, plan mode and weeks); the department report and the
+  employee card embed the same structure. Unknown facts stay `null`, the edit
+  history and its authors are not exposed. Requires an OKK platform with the
+  call-plan API; on an older platform composite reports mark only the plan
+  section `not_available`.
+- Department records expose `client_status_tracked` and `client_touch_tracked`
+  instead of the retired `weekly_call_plan`.
+
 ## 1.2.3 — 2026-09-09
 
 - Preserve unset plan totals as null and expose per-metric employee coverage;

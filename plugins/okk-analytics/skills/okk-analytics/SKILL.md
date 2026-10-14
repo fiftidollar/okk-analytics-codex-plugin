@@ -151,7 +151,8 @@ rebuild the report only from the newly returned IDs and names.
   `search_call_transcripts`. Preserve `scanned_calls`, `source_calls_total`,
   `source_complete` and `result_complete`; a bounded search is not proof that
   the phrase is absent from unscanned calls.
-- Plans and actual completion: `get_plan_fact_statistics`.
+- Weekly call plans and their facts for departments or one employee:
+  `get_plan_fact_statistics`.
 - New/regular client contacts and the B2B 30-day first/repeat-touch cycle:
   `get_client_statistics`. Treat `new_client_reactivated_first_touch_calls_total`
   as a subset of first touches, not an additional category. The mutually
@@ -187,8 +188,12 @@ loaded.
   `total_calls` counts successful conversations above the duration threshold.
   Average duration uses that threshold population even when a score is absent.
   Average quality uses evaluated calls; never average employee averages.
-- Plan totals preserve `null` for unset plans and `0` for assigned zero plans.
-  Check per-metric `coverage` before claiming a complete department plan.
+- A call plan is a list of items: direction × clients × what is counted ×
+  number of calls. Report every item separately and never add items together.
+  Use the item `counting` label from `reporting_contract.metric_definitions`
+  (connected, successful, successful from the minimum duration, evaluated).
+- `mode=null` means no plan was set, not a zero plan. `fact=null` with
+  `fact_state=no_client_base` is unavailable, not zero and not completion.
 - After a disputed name, repeat the exact scoped lookup and state that no
   matching accessible OKK record was found when appropriate. Do not offer
   uploaded cards or spreadsheets as replacement evidence for OKK membership

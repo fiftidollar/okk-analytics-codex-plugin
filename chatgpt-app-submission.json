@@ -155,7 +155,7 @@
     "get_plan_fact_statistics": {
       "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
       "justifications": {
-        "read_only_justification": "Retrieves existing daily plans and plan-versus-actual aggregates without changing targets.",
+        "read_only_justification": "Retrieves existing weekly call-plan items and their plan-versus-actual values for the period without changing plans.",
         "open_world_justification": "Plan data is limited to the authenticated user's private OKK scope.",
         "destructive_justification": "Cannot create, update, or delete plans or actual results."
       }
