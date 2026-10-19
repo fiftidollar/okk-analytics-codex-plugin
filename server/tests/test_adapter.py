@@ -745,6 +745,41 @@ async def test_unfiltered_performance_never_reports_negative_omitted_filters():
     assert criteria["omitted_filters_count"] == 0
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("scenario_fields", "statuses", "expected"),
+    [
+        pytest.param({}, ("norm", "below_norm"), (50.0, "department_norm"), id="okk-norm-per-call"),
+        pytest.param({"passing_score": 85}, (None, None), (50.0, "scenario_threshold"), id="older-okk-api"),
+        # Before: a scenario without `passing_score` compared every score with 0 and reported 100%.
+        pytest.param({}, (None, None), (None, None), id="no-norm-is-unknown-not-100"),
+        pytest.param({"passing_score": 85}, ("norm", None), (None, None), id="mixed-api-is-unknown"),
+    ],
+)
+async def test_scenario_pass_rate_follows_the_norm_okk_reports(scenario_fields, statuses, expected):
+    department_id = str(uuid4())
+    scenario_id = str(uuid4())
+    calls = [
+        {"id": str(uuid4()), "scenario_id": scenario_id, "employee_id": str(uuid4()), "department_id": department_id,
+         "quality_score": score, "quality_status": status}
+        for score, status in zip((90, 70), statuses)
+    ]
+    responses = {
+        "/departments": [{"id": department_id, "name": "Продажи", "code": "sales"}],
+        "/scenarios": {
+            "items": [{"id": scenario_id, "department_id": department_id, "name": "Сценарий", "code": "scenario",
+                       "categories": [], **scenario_fields}],
+            "pages": 1,
+        },
+        "/calls": {"items": calls, "total": len(calls), "pages": 1},
+    }
+    analytics = adapter(FakePlatform(department_ids=(department_id,), responses=responses))
+
+    [row] = (await analytics.get_scenario_performance(period="today"))["data"]
+
+    assert (row["pass_rate"], row["pass_rate_basis"]) == expected
+
+
 def test_session_cipher_is_authenticated_and_models_store_hashes_not_raw_mcp_tokens():
     cipher = SessionCipher("x" * 32)
     sealed = cipher.seal("upstream-token")
