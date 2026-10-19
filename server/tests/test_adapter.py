@@ -760,15 +760,29 @@ async def test_scenario_pass_rate_follows_the_norm_okk_reports(scenario_fields, 
     department_id = str(uuid4())
     scenario_id = str(uuid4())
     calls = [
-        {"id": str(uuid4()), "scenario_id": scenario_id, "employee_id": str(uuid4()), "department_id": department_id,
-         "quality_score": score, "quality_status": status}
-        for score, status in zip((90, 70), statuses)
+        {
+            "id": str(uuid4()),
+            "scenario_id": scenario_id,
+            "employee_id": str(uuid4()),
+            "department_id": department_id,
+            "quality_score": score,
+            "quality_status": status,
+        }
+        for score, status in zip((90, 70), statuses, strict=True)
     ]
     responses = {
         "/departments": [{"id": department_id, "name": "Продажи", "code": "sales"}],
         "/scenarios": {
-            "items": [{"id": scenario_id, "department_id": department_id, "name": "Сценарий", "code": "scenario",
-                       "categories": [], **scenario_fields}],
+            "items": [
+                {
+                    "id": scenario_id,
+                    "department_id": department_id,
+                    "name": "Сценарий",
+                    "code": "scenario",
+                    "categories": [],
+                    **scenario_fields,
+                }
+            ],
             "pages": 1,
         },
         "/calls": {"items": calls, "total": len(calls), "pages": 1},
