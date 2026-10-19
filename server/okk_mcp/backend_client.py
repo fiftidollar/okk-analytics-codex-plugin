@@ -96,6 +96,30 @@ def _number(value: Any) -> float:
         return 0.0
 
 
+_QUALITY_STATUSES = ("norm", "below_norm")
+
+
+def _pass_rate(rows: list[dict[str, Any]], passing_score: Any) -> tuple[float | None, str | None]:
+    """Share of evaluations at or above the norm, and what the norm was.
+
+    OKK decides the norm itself and returns it per call as `quality_status` (`norm` /
+    `below_norm`, the department norm stored with the evaluation): that is the basis
+    `department_norm`. An older OKK API has no such field; there the scenario threshold
+    `passing_score` is compared with the score (`scenario_threshold`). Without either, or
+    with a mix, the rate is unknown (`None`), never a guessed 100%.
+    """
+    if not rows:
+        return None, None
+    statuses = [row.get("quality_status") for row in rows]
+    if all(status in _QUALITY_STATUSES for status in statuses):
+        return round(statuses.count("norm") / len(rows) * 100, 1), "department_norm"
+    if passing_score is not None and all(status is None for status in statuses):
+        threshold = _number(passing_score)
+        passed = sum(_number(row.get("quality_score")) >= threshold for row in rows)
+        return round(passed / len(rows) * 100, 1), "scenario_threshold"
+    return None, None
+
+
 def _insight_text(value: Any) -> str | None:
     if isinstance(value, str):
         return value.strip() or None
@@ -2921,7 +2945,7 @@ class AnalyticsAdapter:
         for scenario_id in effective:
             rows = groups.get(scenario_id, [])
             scores = [_number(row.get("quality_score")) for row in rows]
-            passing = _number(index[scenario_id].get("passing_score"))
+            pass_rate, pass_rate_basis = _pass_rate(rows, index[scenario_id].get("passing_score"))
             data.append(
                 {
                     "scenario": self._safe_scenario(index[scenario_id]),
@@ -2930,9 +2954,8 @@ class AnalyticsAdapter:
                     "avg_score": round(sum(scores) / len(scores), 2) if scores else None,
                     "min_score": min(scores) if scores else None,
                     "max_score": max(scores) if scores else None,
-                    "pass_rate": round(sum(score >= passing for score in scores) / len(scores) * 100, 1)
-                    if scores
-                    else None,
+                    "pass_rate": pass_rate,
+                    "pass_rate_basis": pass_rate_basis,
                 }
             )
         return await self.envelope(

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Scenario pass rate follows the norm OKK decides per call (`quality_status`:
+  `norm` / `below_norm`, the department norm stored with the evaluation)
+  instead of comparing scores with the scenario `passing_score`. An older OKK
+  API without `quality_status` still uses `passing_score`; with neither, or a
+  mix, the rate is `null`. Before, a scenario without `passing_score` compared
+  every score with 0 and reported 100%. The new `pass_rate_basis` field names
+  the norm used. This lets OKK drop the unused scenario threshold.
+
 ## 1.2.3 — 2026-09-09
 
 - Preserve unset plan totals as null and expose per-metric employee coverage;
