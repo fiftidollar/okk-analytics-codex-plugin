@@ -83,7 +83,7 @@
     "get_employee_card": {
       "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
       "justifications": {
-        "read_only_justification": "Retrieves an ACL-safe employee card with existing KPI, client, CRM, growth, and mentoring data.",
+        "read_only_justification": "Retrieves an ACL-safe employee card with existing KPI, client, CRM, growth, and weekly focus data.",
         "open_world_justification": "The card is read only from the authenticated user's private OKK scope.",
         "destructive_justification": "Cannot update the employee, tasks, focus, metrics, or evaluations."
       }
@@ -260,10 +260,10 @@
     },
     {
       "description": "Read the complete safe employee card after an ACL-safe employee lookup.",
-      "user_prompt": "Покажи карточку этого сотрудника, включая KPI, зоны роста и наставнические задачи.",
+      "user_prompt": "Покажи карточку этого сотрудника, включая KPI, зоны роста и недельный фокус.",
       "file_attachment_urls": null,
       "tools_triggered": "get_employee_card",
-      "expected_output": "Returns KPI, client, CRM, growth, focus, and bounded mentoring history for the resolved visible employee.",
+      "expected_output": "Returns KPI, client, CRM, growth areas, and weekly focus for the resolved visible employee.",
       "expected_output_url": null
     },
     {

@@ -1,13 +1,13 @@
 ---
 name: okk-analytics
-description: Use the connected OKK account for read-only business statistics, employee and private-supervisor discovery, call transcripts and transcript search, AI strengths and growth areas, mentoring tasks, plans, CRM, scenarios and criteria.
+description: Use the connected OKK account for read-only business statistics, employee and private-supervisor discovery, call transcripts and transcript search, AI strengths and growth areas, weekly focus, plans, CRM, scenarios and criteria.
 ---
 
 # OKK Analytics
 
 Use this skill when the user asks about OKK statistics, calls, KPI, departments,
 employees, employee cards, client work, plan/fact, CRM, AI strengths, growth
-areas, weekly focus, mentoring tasks, call transcripts, transcript search,
+areas, weekly focus, call transcripts, transcript search,
 supervisors/руководители, scenarios, criteria or their performance.
 
 ## Authentication and safety
@@ -164,19 +164,21 @@ rebuild the report only from the newly returned IDs and names.
   department where they are not applicable.
 - Bitrix CRM snapshot statistics: `get_crm_statistics`.
 - AI strengths and growth observations: `get_growth_insights`.
-- Mentoring task history and completion statistics:
-  `get_mentoring_statistics`.
+- Mentoring tasks: the current OKK keeps none. `get_mentoring_statistics`
+  answers `not_available` (`mentoring_not_kept_by_okk`); say that OKK has no
+  mentoring tasks, never that there are zero tasks.
 - Scenario discovery and business criteria: `list_scenarios`,
-  `get_scenario_criteria`.
+  `get_scenario_criteria`. Its rows carry no call counts or scores.
 - Scenario and criterion results: `get_scenario_performance`,
-  `get_criterion_performance`.
+  `get_criterion_performance`. A scenario counts all its versions. If
+  `effective_scope.excluded_evaluations` or `excluded_observations` is
+  non-zero, say that these evaluations could not be attributed and were not
+  counted.
 
 For a full employee answer, prefer `get_employee_card`: it already includes KPI,
-client/plan facts, CRM, saved and weekly focus, AI strengths and growth areas,
-active tasks and the latest completed-task window exposed by the current OKK
-API. Use `get_mentoring_statistics` for cross-employee rollups, and preserve its
-`partial`/history-window metadata instead of claiming that older tasks were
-loaded.
+client/plan facts, CRM, weekly focus, AI strengths and growth areas for one
+period. `mentoring_available=false` and a null `saved_focus` mean that OKK does
+not keep mentoring tasks or a saved focus, not that they are empty.
 
 ## Period and interpretation rules
 
@@ -205,8 +207,8 @@ loaded.
 - Distinguish `no_data` (the account can access the scope but no observations
   matched) from `not_available` (the scope/entity is unavailable). Never turn
   either status into invented zeroes or employees from a broader query.
-- Treat `source_complete=false`, call totals larger than loaded calls, and the
-  mentoring history-window marker as hard limits on completeness.
+- Treat `source_complete=false` and call totals larger than loaded calls as
+  hard limits on completeness.
 - CRM exposes only each employee's latest snapshot. If a requested historical
   date is `not_available`, do not present the latest snapshot as that date.
 - For comparisons, report which requested filters were omitted only as a count.

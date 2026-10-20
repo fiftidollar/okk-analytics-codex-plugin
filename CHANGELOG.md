@@ -60,6 +60,10 @@ Fixes found by a read-only check of 1.3.0 against the OKK test stand.
   in-process server's real inventory.
 - Tool descriptions: `list_departments` no longer promises a weekly plan;
   mentoring texts say the new OKK keeps none (`not_available`).
+- Skill: no longer offers mentoring tasks or a saved focus (OKK keeps
+  neither: say so, never zero); scenario results count all versions and name
+  evaluations that could not be attributed. Changed after the gateway
+  deployment, within 1.3.1.
 - Docs: the README release status and the architecture overview describe the
   live 1.3.0 instead of 1.2.2–1.2.4.
 
