@@ -168,6 +168,11 @@ plugin at the test-stand API.
   on `31.128.41.185` since 2026-10-14; the old `4vZgCU2D0Jj7LBv2_DA2k` is retired).
 - Source: branch `main`, `docker-compose.dokploy.yml`. Auto-deploy is off: a push
   to `main` does not deploy; the release deploys the Compose explicitly.
+- **1.3.0 needs the new OKK platform.** Its plan/fact reads `/call-plans/plan-fact`,
+  which the old production API lacks. Deploy 1.3.0 only after OKK production is
+  switched to the new architecture (step 8 of the switch window in the platform
+  `docs/RELEASE_FLOW_RUNBOOK.md`); deployed earlier, plan sections become
+  `not_available`.
 - Public issuer/resource: `https://okk-mcp.akfixdev.ru` and
   `https://okk-mcp.akfixdev.ru/mcp`.
 - Dedicated PostgreSQL and authenticated Redis are private Compose services;

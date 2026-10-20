@@ -715,7 +715,11 @@ class AnalyticsAdapter:
             "call_summary": row.get("call_summary"),
             # The new OKK API: the norm verdict of the score and the client status (new / existing)
             # instead of a client card.
-            **{key: row[key] for key in ("quality_status", "quality_threshold", "client_status") if key in row},
+            **{
+                key: row[key]
+                for key in ("quality_status", "quality_threshold", "client_status")
+                if key in row
+            },
             "employee": {
                 "id": str(employee.get("id")),
                 "full_name": employee.get("full_name"),
@@ -2053,7 +2057,10 @@ class AnalyticsAdapter:
         # report their unfiltered count as the answer to an exact-number query.
         if any(
             "counterparty_phone_normalized" not in row
-            or (normalized_phone and not _phone_matches(row["counterparty_phone_normalized"], normalized_phone))
+            or (
+                normalized_phone
+                and not _phone_matches(row["counterparty_phone_normalized"], normalized_phone)
+            )
             for row in rows
         ):
             return await self.envelope(
@@ -2086,7 +2093,9 @@ class AnalyticsAdapter:
             "phone_match": (
                 None
                 if not normalized_phone
-                else "whole_number" if len(normalized_phone) >= PHONE_WHOLE_NUMBER_MIN_DIGITS else "number_ending"
+                else "whole_number"
+                if len(normalized_phone) >= PHONE_WHOLE_NUMBER_MIN_DIGITS
+                else "number_ending"
             ),
             "matching_calls_total": total if normalized_phone and not omitted else None,
             "has_call": (total > 0) if normalized_phone and not omitted else None,

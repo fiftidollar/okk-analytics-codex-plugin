@@ -479,7 +479,11 @@ async def test_department_norm_of_the_new_okk_api_is_listed():
     department_id = str(uuid4())
     platform = FakePlatform(
         role="admin",
-        responses={"/departments": [{"id": department_id, "name": "Сопровождение", "code": "csm", "quality_threshold": 80}]},
+        responses={
+            "/departments": [
+                {"id": department_id, "name": "Сопровождение", "code": "csm", "quality_threshold": 80}
+            ]
+        },
     )
 
     result = await adapter(platform).list_departments()
@@ -1588,7 +1592,9 @@ async def test_growth_mentions_count_criteria_when_okk_lines_carry_personal_numb
 
     def page(missed: int, lost: str) -> dict:
         return {
-            "aggregated_improvements": [f"Следующий шаг — недобор в {missed} из 4 звонков, теряет в среднем {lost} балла"],
+            "aggregated_improvements": [
+                f"Следующий шаг — недобор в {missed} из 4 звонков, теряет в среднем {lost} балла"
+            ],
             "insights": {
                 "summary": {
                     "growth_zones": [{"name": "Следующий шаг", "missed_calls": missed, "evaluated_calls": 4}],
@@ -1638,8 +1644,14 @@ async def test_mentoring_removed_from_okk_reads_as_not_kept_not_as_zero():
         employee_ids=[employee_id], department_ref="csm", period="today"
     )
 
-    assert (statistics["status"], statistics["data"]["reason"]) == ("not_available", "mentoring_not_kept_by_okk")
-    assert (compared["data"][0]["active_tasks"], compared["data"][0]["completed_tasks_recent"]) == (None, None)
+    assert (statistics["status"], statistics["data"]["reason"]) == (
+        "not_available",
+        "mentoring_not_kept_by_okk",
+    )
+    assert (compared["data"][0]["active_tasks"], compared["data"][0]["completed_tasks_recent"]) == (
+        None,
+        None,
+    )
 
 
 @pytest.mark.anyio
@@ -1673,7 +1685,11 @@ async def test_phone_history_by_number_ending_sends_iso_dates_and_accepts_ending
     )
 
     result = await adapter(platform).list_call_phone_records(
-        phone_number="4567", department_ref="sales", period="custom", start_date="2026-10-01", end_date="2026-10-19"
+        phone_number="4567",
+        department_ref="sales",
+        period="custom",
+        start_date="2026-10-01",
+        end_date="2026-10-19",
     )
 
     assert (result["status"], result["data"]["phone_match"]) == ("ok", "number_ending")
