@@ -941,7 +941,12 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Эффективность сценариев",
-        description="Сравнивает сценарии по числу оценок, охвату сотрудников, среднему/минимальному/максимальному баллу и pass rate.",
+        description=(
+            "Сравнивает сценарии по числу оценок, охвату сотрудников, среднему/минимальному/максимальному баллу и "
+            "pass rate — доле оценок не ниже нормы. pass_rate_basis: department_norm — норма отдела, сохранённая "
+            "с оценкой (признак OKK у звонка); scenario_threshold — порог сценария (старый API OKK); null — "
+            "нормы нет или признаки смешаны, доля неизвестна."
+        ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE, SCENARIO_SCOPE),
         structured_output=True,

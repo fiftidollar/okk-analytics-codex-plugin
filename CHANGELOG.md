@@ -34,6 +34,13 @@
   instead of being tied to a B2B department code; the catalog names them
   `new_client_first_touch`, `new_client_repeat_touch` and
   `new_client_reactivated_first_touch`.
+- Scenario pass rate follows the norm OKK decides per call (`quality_status`:
+  `norm` / `below_norm`, the department norm stored with the evaluation)
+  instead of comparing scores with the scenario `passing_score`. An older OKK
+  API without `quality_status` still uses `passing_score`; with neither, or a
+  mix, the rate is `null`. Before, a scenario without `passing_score` compared
+  every score with 0 and reported 100%. The new `pass_rate_basis` field names
+  the norm used. This lets OKK drop the unused scenario threshold.
 
 ## 1.2.3 — 2026-09-09
 
