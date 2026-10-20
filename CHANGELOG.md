@@ -1,6 +1,69 @@
 # Changelog
 
-## 1.3.0 — prepared 2026-10-14, not released
+## 1.3.1 — prepared 2026-10-20, not released
+
+Fixes found by a read-only check of 1.3.0 against the OKK test stand.
+
+- Scenario and criterion statistics no longer drop evaluations made on an
+  archived scenario version. OKK republishes a scenario under the same code
+  and archives the old version as `<code>__legacy_<timestamp>`; without
+  `scenario_ids` the gateway read only current versions and silently skipped
+  the rest while answering `ok` (stand, 01.10–20.10: 8 of 13 CSM evaluations,
+  86.0 / 62.5% instead of 89.0 / 76.9%; criteria 88 of 143 observations).
+  A scenario is now all its versions: `get_scenario_performance` rows add
+  `versions[]` (`scenario_id`, `current`, `evaluations`); criteria are joined
+  by their criterion `code` within the scenario, rows add `scenario` and
+  `scenario_versions` (replacing `scenarios`), and criterion projections
+  include `code`. A requested archived version ID stands for its scenario.
+  An archived version takes the code OKK shows on its calls, because OKK cuts
+  a code longer than 21 characters in the archived name.
+  `get_criterion_performance` with `scenario_id` no longer asks OKK for the
+  calls of one exact version.
+- Evaluations that cannot be attributed are reported, never dropped:
+  `effective_scope.excluded_evaluations`, `excluded_evaluation_reasons`
+  (`scenario_unknown`, `scenario_not_in_current_catalog`,
+  `criteria_version_not_readable`, `evaluation_items_unavailable`) and, for
+  criteria, `excluded_observations`; the result is then `partial`. A
+  non-admin cannot read archived criteria, so their observations land here.
+- The `scenario_id` filter of `list_call_transcripts` and
+  `search_call_transcripts` covers every version of the scenario. It went to
+  OKK `/calls`, which filters by the exact version, so calls evaluated on the
+  scenario's other versions were missing. The gateway now never sends
+  `scenario_id` to `/calls`: it reads the scope and takes the scenario's
+  calls itself (`list_call_transcripts` pages them, the search applies its
+  cap to them). Calls it cannot place are reported in
+  `effective_scope.excluded_calls` / `excluded_call_reasons` and make the
+  result `partial`; `effective_scope.scenario_code` names the scenario.
+- `list_scenarios` and other scenario projections no longer return
+  `calls_evaluated` / `avg_score`: the new OKK leaves them at 0 / null. Use
+  `get_scenario_performance`.
+- `get_employee_card` reads the page, the period summary and the plan for the
+  same explicit dates (before, the summary got the named period and OKK's own
+  range for `week`). It answers `ok` when every part loaded instead of always
+  `partial`.
+- CRM statistics read the snapshot statuses OKK actually returns. The gateway
+  counted a snapshot as usable only for `status == "ok"`, which OKK has never
+  sent (it writes `ready`, in the older API too), so every department showed 0
+  available snapshots and `partial`. Now `ready` is usable and the only source
+  of totals, stage and funnel counts; `no_bitrix_id` is "CRM does not apply"
+  (`not_applicable`), not a gap; `not_configured`, `not_synced` and `error` are
+  `unavailable`; any other value is `unknown_status`. `coverage` adds
+  `not_applicable`, `unknown_status` and `by_status`. With no usable snapshot
+  the result is `not_available` (or `no_data` when nobody is linked to
+  Bitrix). The employee card is `partial` when its CRM snapshot is
+  unavailable or unknown.
+- An empty `department_ref` fails closed as `not_available` like a blank or
+  unknown one; before, it meant "no filter" and returned all departments.
+- Release smoke expects the 28 registered tools (it missed
+  `list_call_phone_records` and failed against every real gateway), checks
+  the phone tool's `okk.phones.read` scope, and its test now validates the
+  in-process server's real inventory.
+- Tool descriptions: `list_departments` no longer promises a weekly plan;
+  mentoring texts say the new OKK keeps none (`not_available`).
+- Docs: the README release status and the architecture overview describe the
+  live 1.3.0 instead of 1.2.2–1.2.4.
+
+## 1.3.0 — released 2026-10-20
 
 - Plugin packages match what the clients actually load (checked by installing
   into isolated homes of Codex CLI 0.154.0 and Claude Code 2.1.118): Codex

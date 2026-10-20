@@ -248,7 +248,11 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Список отделов",
-        description="Возвращает доступные отделы и их KPI-настройки: пороги, минимальную длительность и недельный план.",
+        description=(
+            "Возвращает доступные отделы и их KPI-настройки: норму оценки (quality_threshold, в старом API "
+            "OKK — passing_score), минимальную длительность звонка и какие клиентские показатели ведёт отдел "
+            "(client_status_tracked, client_touch_tracked). План звонков — в get_plan_fact_statistics."
+        ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,
@@ -389,8 +393,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     @mcp.tool(
         title="Полная карточка сотрудника",
         description=(
-            "Возвращает KPI, план/факт, клиентские и CRM-метрики, AI-сильные стороны, зоны роста, "
-            "недельный/сохранённый фокус, активные и последние завершённые наставнические задачи."
+            "Возвращает KPI, план/факт, клиентские и CRM-метрики, AI-сильные стороны, зоны роста и "
+            "недельный фокус за один и тот же период. Наставничества в новом OKK нет: "
+            "mentoring_available=false, списки задач null."
         ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
@@ -519,7 +524,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         description=(
             "Возвращает только доступные текущему аккаунту звонки, наличие транскрипции и "
             "короткое превью без телефонов и аудио. Поддерживает фильтры отдела, сотрудника, "
-            "сценария и периода; недоступный фильтр никогда не расширяется до всех звонков."
+            "сценария и периода; недоступный фильтр никогда не расширяется до всех звонков. "
+            "Фильтр сценария охватывает все его версии; звонки, которые нельзя отнести к "
+            "сценарию, перечислены в effective_scope.excluded_calls."
         ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE, TRANSCRIPT_SCOPE),
@@ -600,7 +607,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         description=(
             "Ищет фразу или слова только в транскрипциях звонков из текущего ACL и возвращает "
             "контекстные фрагменты с безопасными карточками звонков. Ответ явно показывает "
-            "число просмотренных звонков и полноту поиска."
+            "число просмотренных звонков и полноту поиска. Фильтр сценария охватывает все его версии."
         ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE, TRANSCRIPT_SCOPE),
@@ -855,7 +862,11 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Статистика наставнических задач",
-        description="Максимально доступная через текущий API история задач: рекомендации, статусы, сроки, просрочка, completion rate и скорость выполнения; ответ явно отмечает ограниченное окно истории.",
+        description=(
+            "Наставнические задачи. В новом OKK наставничества нет: ответ not_available "
+            "(mentoring_not_kept_by_okk), это не ноль задач. Старый API OKK отдавал ограниченное окно "
+            "истории: статусы, сроки, просрочка, completion rate и скорость выполнения."
+        ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,
@@ -888,7 +899,10 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Список сценариев",
-        description="Безопасный каталог доступных активных и исторических сценариев без промптов, скриптов и маршрутизации.",
+        description=(
+            "Безопасный каталог доступных активных и исторических сценариев без промптов, скриптов и "
+            "маршрутизации. Число оценок и средний балл сценария — в get_scenario_performance."
+        ),
         annotations=READ_ONLY,
         meta=_security_meta(SCENARIO_SCOPE),
         structured_output=True,
@@ -945,7 +959,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             "Сравнивает сценарии по числу оценок, охвату сотрудников, среднему/минимальному/максимальному баллу и "
             "pass rate — доле оценок не ниже нормы. pass_rate_basis: department_norm — норма отдела, сохранённая "
             "с оценкой (признак OKK у звонка); scenario_threshold — порог сценария (старый API OKK); null — "
-            "нормы нет или признаки смешаны, доля неизвестна."
+            "нормы нет или признаки смешаны, доля неизвестна. Сценарий — все его версии: оценки архивных "
+            "версий входят в строку сценария (versions[]). Оценки, которые нельзя отнести к сценарию, "
+            "перечислены в effective_scope.excluded_evaluations, и ответ тогда partial."
         ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE, SCENARIO_SCOPE),
@@ -975,7 +991,12 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Эффективность критериев",
-        description="Показывает самые сильные/слабые критерии: наблюдения, охват, средний балл/процент, штрафы и последнее наблюдение.",
+        description=(
+            "Показывает самые сильные/слабые критерии: наблюдения, охват, средний балл/процент, штрафы и "
+            "последнее наблюдение. Критерий — его код в сценарии по всем версиям сценария. Наблюдения, "
+            "которые нельзя отнести к критерию (например, критерии архивной версии недоступны аккаунту), "
+            "перечислены в effective_scope.excluded_*, и ответ тогда partial."
+        ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE, SCENARIO_SCOPE),
         structured_output=True,

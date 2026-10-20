@@ -11,7 +11,7 @@ import re
 import time
 import unicodedata
 from collections import Counter, defaultdict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -121,6 +121,99 @@ def _pass_rate(rows: list[dict[str, Any]], passing_score: Any) -> tuple[float | 
         passed = sum(_number(row.get("quality_score")) >= threshold for row in rows)
         return round(passed / len(rows) * 100, 1), "scenario_threshold"
     return None, None
+
+
+# OKK republishes a scenario as a new version under the same code and archives the replaced one
+# under `<code>__legacy_<20-digit UTC timestamp>`, cutting a code longer than 21 characters to fit;
+# evaluations keep the version they were made on.
+_ARCHIVED_SCENARIO_CODE = re.compile(r"(?P<code>.+)__legacy_\d{20}")
+
+
+def _scenario_code(code: Any) -> str | None:
+    """The business code shared by every version of a scenario (an archived code may be cut)."""
+    text = str(code or "").strip()
+    archived = _ARCHIVED_SCENARIO_CODE.fullmatch(text)
+    return (archived.group("code") if archived else text) or None
+
+
+def _is_current_version(row: dict[str, Any]) -> bool:
+    return row.get("is_active") is not False
+
+
+def _shown_call_code(call: dict[str, Any]) -> str | None:
+    """The scenario code OKK shows for a call: the one scenario selection chose, else the version
+    code without the archive suffix."""
+    nested = call.get("scenario") if isinstance(call.get("scenario"), dict) else {}
+    return _scenario_code(call.get("detected_scenario_code") or nested.get("code"))
+
+
+def _scenario_versions_by_code(catalog: list[dict[str, Any]], calls: list[dict[str, Any]]) -> dict[str, str]:
+    """Scenario version ID → business code for the catalog rows the account can read. An archived
+    version takes the code OKK shows on its calls, because its own code may be cut; a row without
+    any code stands alone under its own ID."""
+    shown_on_calls: dict[str, str] = {}
+    for call in calls:
+        code = _shown_call_code(call)
+        if call.get("scenario_id") and code:
+            shown_on_calls.setdefault(str(call["scenario_id"]), code)
+    return {
+        str(row.get("id")): (None if _is_current_version(row) else shown_on_calls.get(str(row.get("id"))))
+        or _scenario_code(row.get("code"))
+        or str(row.get("id"))
+        for row in catalog
+    }
+
+
+def _shared_passing_score(versions: Iterable[str | None], index: dict[str, dict[str, Any]]) -> Any:
+    """The scenario threshold (older OKK API) when every evaluated version is readable and has the
+    same one; otherwise `None`, so a pass rate is never computed against another version's norm."""
+    thresholds = {index[version].get("passing_score") if version in index else None for version in versions}
+    return thresholds.pop() if len(thresholds) == 1 else None
+
+
+def _call_scenario_code(call: dict[str, Any], version_codes: dict[str, str]) -> str | None:
+    """The scenario a call was evaluated on: its version from the catalog when the account can read
+    it, otherwise the code OKK shows for the call (an archived version is readable only by an
+    admin). `None` — the call names no scenario."""
+    version = str(call.get("scenario_id") or "")
+    return version_codes[version] if version in version_codes else _shown_call_code(call)
+
+
+def _calls_of_scenario(
+    calls: list[dict[str, Any]], scenario_code: str, version_codes: dict[str, str]
+) -> tuple[list[dict[str, Any]], Counter[str]]:
+    """Calls made on any version of one scenario, in the order OKK listed them. A call without a
+    scenario version belongs to no scenario; a call on a version this account cannot read and that
+    OKK names without a code cannot be placed and is counted as excluded."""
+    selected: list[dict[str, Any]] = []
+    excluded: Counter[str] = Counter()
+    for call in calls:
+        if not call.get("scenario_id"):
+            continue
+        code = _call_scenario_code(call, version_codes)
+        if code is None:
+            excluded["scenario_unknown"] += 1
+        elif code == scenario_code:
+            selected.append(call)
+    return selected, excluded
+
+
+# Statuses of OKK `/employees/{id}/bitrix-metrics` (module `bitrix_metrics`, the same in the older
+# API): `ready` — today's snapshot; `no_bitrix_id` — the employee is not linked to Bitrix, CRM does
+# not apply to them; the others — no usable snapshot: integration not configured, not synced yet
+# today, sync failed. Any other value is reported as unknown, never guessed.
+_CRM_SNAPSHOT_STATES = {
+    "ready": "available",
+    "no_bitrix_id": "not_applicable",
+    "not_configured": "unavailable",
+    "not_synced": "unavailable",
+    "error": "unavailable",
+}
+
+
+def _crm_snapshot_state(metrics: dict[str, Any]) -> str:
+    """`available`, `not_applicable`, `unavailable` or `unknown_status`."""
+    return _CRM_SNAPSHOT_STATES.get(str(metrics.get("status") or ""), "unknown_status")
 
 
 def _insight_text(value: Any) -> str | None:
@@ -420,8 +513,9 @@ class AnalyticsAdapter:
         department_id: Any = None,
         department_ref: Any = None,
     ) -> tuple[dict[str, Any] | None, bool]:
-        """Resolve only against ACL-visible departments; never broaden a failed selector."""
-        selectors = [value for value in (department_id, department_ref) if value not in (None, "")]
+        """Resolve only against ACL-visible departments; never broaden a failed selector. A supplied
+        empty or blank selector names no department, so it fails closed like an unknown one."""
+        selectors = [value for value in (department_id, department_ref) if value is not None]
         if not selectors:
             return None, False
         departments = await self.departments()
@@ -670,7 +764,9 @@ class AnalyticsAdapter:
     @staticmethod
     def _safe_scenario(row: dict[str, Any]) -> dict[str, Any]:
         # Only fields OKK sends: the new API has no scenario `passing_score` (the norm is the
-        # department's), and a missing field must not read as "no threshold".
+        # department's), and a missing field must not read as "no threshold". The legacy
+        # `calls_evaluated` / `avg_score` are not projected: the new OKK leaves them at 0 / null,
+        # and evaluation counts come from get_scenario_performance.
         return {
             key: row.get(key)
             for key in (
@@ -682,8 +778,6 @@ class AnalyticsAdapter:
                 "passing_score",
                 "is_active",
                 "is_default",
-                "calls_evaluated",
-                "avg_score",
                 "created_at",
                 "updated_at",
             )
@@ -832,6 +926,8 @@ class AnalyticsAdapter:
                             key: item.get(key)
                             for key in (
                                 "id",
+                                # The criterion code OKK keeps across scenario versions.
+                                "code",
                                 "name",
                                 "description",
                                 "max_score",
@@ -844,7 +940,8 @@ class AnalyticsAdapter:
                                 "sort_order",
                                 "not_applicable_condition",
                             )
-                            # The new OKK API dropped `scoring_type` and `is_required`: omitted, not null.
+                            # The new OKK API dropped `scoring_type` and `is_required`, the older one
+                            # has no `code`: omitted, not null.
                             if key in item
                         },
                     }
@@ -1006,9 +1103,10 @@ class AnalyticsAdapter:
         end: date,
         department_id: str | None = None,
         employee_id: str | None = None,
-        scenario_id: str | None = None,
         max_calls: int | None = None,
     ) -> tuple[list[dict[str, Any]], int, bool]:
+        # No scenario filter on purpose: OKK filters `scenario_id` by the exact version, and a
+        # scenario is all its versions (`_calls_of_scenario`).
         cap = min(max_calls or self.settings.analytics_max_calls, self.settings.analytics_max_calls)
         rows: list[dict[str, Any]] = []
         page = 1
@@ -1018,7 +1116,6 @@ class AnalyticsAdapter:
                 "/calls",
                 department_id=department_id,
                 employee_id=employee_id,
-                scenario_id=scenario_id,
                 date_from=start,
                 date_to=end,
                 page=page,
@@ -1190,7 +1287,7 @@ class AnalyticsAdapter:
                         "tool": "search_supervisor_call_transcripts",
                         "use_for": "full-text search across accessible supervisor transcripts",
                     },
-                    {"tool": "get_employee_card", "use_for": "one employee KPI, insights, mentoring and CRM"},
+                    {"tool": "get_employee_card", "use_for": "one employee KPI, plan, insights and CRM"},
                     {
                         "tool": "compare_employees",
                         "use_for": "employee comparison, optionally guarded by department",
@@ -1225,7 +1322,10 @@ class AnalyticsAdapter:
                     },
                     {"tool": "get_crm_statistics", "use_for": "latest Bitrix snapshots only"},
                     {"tool": "get_growth_insights", "use_for": "aggregated AI strengths and growth areas"},
-                    {"tool": "get_mentoring_statistics", "use_for": "bounded mentoring-task window"},
+                    {
+                        "tool": "get_mentoring_statistics",
+                        "use_for": "mentoring tasks of an older OKK API; the new OKK keeps none (not_available)",
+                    },
                     {"tool": "list_scenarios", "use_for": "visible scenario catalog"},
                     {"tool": "get_scenario_criteria", "use_for": "business criteria of one visible scenario"},
                     {
@@ -1257,7 +1357,11 @@ class AnalyticsAdapter:
                     "calls": "source_calls/source_calls_total and partial identify truncation",
                     "transcript_search": "scanned_calls/source_calls_total and source_complete identify bounded search",
                     "phone_calls": "matching_calls_total is the indexed full result count, not the returned page size",
-                    "mentoring": "active 5 and completed 10 tasks per employee; always a bounded window",
+                    "mentoring": (
+                        "the new OKK keeps no mentoring: not_available (mentoring_not_kept_by_okk), never zero "
+                        "tasks; an older OKK API exposes at most 5 active and 10 completed tasks per employee, "
+                        "always a bounded window"
+                    ),
                     "crm": "latest snapshot per employee only; requested historical dates are never mislabeled",
                     "historical_scenarios": "available only when the connected OKK role exposes them",
                 },
@@ -1670,10 +1774,13 @@ class AnalyticsAdapter:
             if department_row is None:
                 return await self.envelope({}, status="not_available")
         bounds = _period_bounds(period, start_date, end_date)
-        common = _period_query(period, start_date, end_date)
+        # Every part of the card for the same explicit dates, as the OKK employee page asks: a named
+        # period would let OKK pick its own range for the summary.
         page_data, summary, (plan, _, _), crm = await asyncio.gather(
             self._page_data(employee_id, *bounds),
-            self._get(f"/employees/{employee_id}/summary", **common),
+            self._get(
+                f"/employees/{employee_id}/summary", period="custom", start_date=bounds[0], end_date=bounds[1]
+            ),
             self.optional_plan_fact(department_row, *bounds, [employee], employee_id=employee["id"]),
             self._get(f"/employees/{employee_id}/bitrix-metrics"),
         )
@@ -1701,9 +1808,16 @@ class AnalyticsAdapter:
             ),
             "crm": self._safe_crm(crm),
         }
+        # `partial` only for what is really missing: the bounded task window of the older OKK API, a
+        # platform without call plans, or a CRM snapshot that is not usable (not linked is no gap).
+        incomplete = (
+            mentoring_kept
+            or plan.get("status") == "not_available"
+            or _crm_snapshot_state(crm) in {"unavailable", "unknown_status"}
+        )
         return await self.envelope(
             data,
-            status="partial",
+            status="partial" if incomplete else "ok",
             scope={**self.department_scope(department_row), "employee_id": employee_id},
             period=bounds,
         )
@@ -1777,16 +1891,20 @@ class AnalyticsAdapter:
         dict[str, Any] | None,
         dict[str, Any] | None,
         dict[str, Any] | None,
+        list[dict[str, Any]],
         bool,
     ]:
+        """Department, employee, the requested scenario version and the scenario catalog it was
+        found in (the archive is in it only for an admin)."""
         department_row, employee_row, invalid = await self.resolve_entity_scope(
             department_id=department_id,
             department_ref=department_ref,
             employee_id=employee_id,
         )
         if invalid:
-            return department_row, employee_row, None, True
+            return department_row, employee_row, None, [], True
         scenario_row = None
+        scenarios: list[dict[str, Any]] = []
         if scenario_id:
             department = str(department_row["id"]) if department_row else None
             scenarios, _ = await self.scenarios(department, include_inactive=True)
@@ -1795,7 +1913,7 @@ class AnalyticsAdapter:
                 None,
             )
             if scenario_row is None:
-                return department_row, employee_row, None, True
+                return department_row, employee_row, None, scenarios, True
             scenario_department_id = str(scenario_row.get("department_id") or "")
             if department_row is None:
                 department_row = next(
@@ -1803,10 +1921,31 @@ class AnalyticsAdapter:
                     None,
                 )
                 if department_row is None:
-                    return None, employee_row, None, True
+                    return None, employee_row, None, scenarios, True
             if employee_row and str(employee_row.get("department_id")) != scenario_department_id:
-                return department_row, employee_row, None, True
-        return department_row, employee_row, scenario_row, False
+                return department_row, employee_row, None, scenarios, True
+        return department_row, employee_row, scenario_row, scenarios, False
+
+    async def _scenario_scope_calls(
+        self,
+        *,
+        bounds: tuple[date, date],
+        department: str | None,
+        employee: str | None,
+        scenario_row: dict[str, Any],
+        catalog: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], bool, str, Counter[str]]:
+        """Calls of every version of the requested scenario in the scope. OKK filters `scenario_id`
+        by the exact version, so the scope is read whole and the scenario's calls are taken here.
+        Returns the calls, whether the scope was read completely, the scenario code and what could
+        not be placed."""
+        calls, _, complete = await self.calls(
+            start=bounds[0], end=bounds[1], department_id=department, employee_id=employee
+        )
+        version_codes = _scenario_versions_by_code(catalog, calls)
+        scenario_code = version_codes[str(scenario_row.get("id"))]
+        selected, excluded = _calls_of_scenario(calls, scenario_code, version_codes)
+        return selected, complete, scenario_code, excluded
 
     async def list_call_transcripts(
         self,
@@ -1824,7 +1963,7 @@ class AnalyticsAdapter:
         **_: Any,
     ) -> dict[str, Any]:
         bounds = _period_bounds(period, start_date, end_date)
-        department_row, employee_row, scenario_row, invalid = await self._resolve_transcript_scope(
+        department_row, employee_row, scenario_row, catalog, invalid = await self._resolve_transcript_scope(
             department_id=department_id,
             department_ref=department_ref,
             employee_id=employee_id,
@@ -1839,16 +1978,35 @@ class AnalyticsAdapter:
         department = str(department_row["id"]) if department_row else None
         employee = str(employee_row["id"]) if employee_row else None
         scenario = str(scenario_row.get("id")) if scenario_row else None
-        payload = await self._get(
-            "/calls",
-            department_id=department,
-            employee_id=employee,
-            scenario_id=scenario,
-            date_from=bounds[0],
-            date_to=bounds[1],
-            page=page,
-            page_size=page_size,
-        )
+        scenario_code: str | None = None
+        excluded: Counter[str] = Counter()
+        source_complete = True
+        if scenario_row is None:
+            payload = await self._get(
+                "/calls",
+                department_id=department,
+                employee_id=employee,
+                date_from=bounds[0],
+                date_to=bounds[1],
+                page=page,
+                page_size=page_size,
+            )
+        else:
+            # A scenario is all its versions: its calls are taken from the whole scope and paged here.
+            selected, source_complete, scenario_code, excluded = await self._scenario_scope_calls(
+                bounds=bounds,
+                department=department,
+                employee=employee,
+                scenario_row=scenario_row,
+                catalog=catalog,
+            )
+            payload = {
+                "items": selected[(page - 1) * page_size : page * page_size],
+                "total": len(selected),
+                "page": page,
+                "page_size": page_size,
+                "pages": math.ceil(len(selected) / page_size),
+            }
 
         async def load(row: dict[str, Any]) -> dict[str, Any] | None:
             call = await self._visible_call(
@@ -1895,15 +2053,19 @@ class AnalyticsAdapter:
             "pages": int(payload.get("pages") or 0),
             "returned_calls": len(items),
             "transcripts_available": sum(1 for row in items if row.get("transcript_available")),
+            "source_complete": source_complete,
         }
         return await self.envelope(
             data,
-            status="ok" if items else "no_data",
+            status="partial" if not source_complete or excluded else ("ok" if items else "no_data"),
             scope={
                 **self.department_scope(department_row),
                 "employee_id": employee,
                 "scenario_id": scenario,
+                "scenario_code": scenario_code,
                 "transcript_format": transcript_format,
+                "excluded_calls": sum(excluded.values()),
+                "excluded_call_reasons": dict(sorted(excluded.items())),
             },
             period=bounds,
             omitted=omitted,
@@ -2133,7 +2295,7 @@ class AnalyticsAdapter:
         if len(query) < 2:
             raise ValueError("query must contain at least two non-whitespace characters")
         bounds = _period_bounds(period, start_date, end_date)
-        department_row, employee_row, scenario_row, invalid = await self._resolve_transcript_scope(
+        department_row, employee_row, scenario_row, catalog, invalid = await self._resolve_transcript_scope(
             department_id=department_id,
             department_ref=department_ref,
             employee_id=employee_id,
@@ -2148,14 +2310,28 @@ class AnalyticsAdapter:
         department = str(department_row["id"]) if department_row else None
         employee = str(employee_row["id"]) if employee_row else None
         scenario = str(scenario_row.get("id")) if scenario_row else None
-        calls, total, calls_complete = await self.calls(
-            start=bounds[0],
-            end=bounds[1],
-            department_id=department,
-            employee_id=employee,
-            scenario_id=scenario,
-            max_calls=self.settings.transcript_search_max_calls,
-        )
+        scenario_code: str | None = None
+        excluded: Counter[str] = Counter()
+        cap = self.settings.transcript_search_max_calls
+        if scenario_row is None:
+            calls, total, calls_complete = await self.calls(
+                start=bounds[0],
+                end=bounds[1],
+                department_id=department,
+                employee_id=employee,
+                max_calls=cap,
+            )
+        else:
+            # A scenario is all its versions: its calls come from the whole scope, then the search cap.
+            selected, scope_complete, scenario_code, excluded = await self._scenario_scope_calls(
+                bounds=bounds,
+                department=department,
+                employee=employee,
+                scenario_row=scenario_row,
+                catalog=catalog,
+            )
+            calls, total = selected[:cap], len(selected)
+            calls_complete = scope_complete and len(selected) <= cap
         visible_calls: list[dict[str, Any]] = []
         omitted = 0
         for row in calls:
@@ -2220,13 +2396,18 @@ class AnalyticsAdapter:
         return await self.envelope(
             data,
             status=(
-                "partial" if not source_complete or not result_complete else ("ok" if matches else "no_data")
+                "partial"
+                if not source_complete or not result_complete or excluded
+                else ("ok" if matches else "no_data")
             ),
             scope={
                 **self.department_scope(department_row),
                 "employee_id": employee,
                 "scenario_id": scenario,
+                "scenario_code": scenario_code,
                 "transcript_format": "diarized",
+                "excluded_calls": sum(excluded.values()),
+                "excluded_call_reasons": dict(sorted(excluded.items())),
             },
             period=bounds,
             omitted=omitted,
@@ -2715,11 +2896,14 @@ class AnalyticsAdapter:
         totals: dict[str, float] = defaultdict(float)
         stages: Counter[str] = Counter()
         funnels: Counter[str] = Counter()
-        available = 0
+        states: Counter[str] = Counter()
         for row in rows:
             metrics = row["metrics"]
-            if metrics.get("status") == "ok":
-                available += 1
+            state = _crm_snapshot_state(metrics)
+            states[state] += 1
+            if state != "available":
+                # Only a usable snapshot carries counters; the others answer zeros that mean nothing.
+                continue
             for key in (
                 "total_open_deals",
                 "deals_without_tasks",
@@ -2740,19 +2924,28 @@ class AnalyticsAdapter:
                 "source_total": source_total,
                 "source_complete": complete,
                 "employees": len(rows),
-                "available": available,
-                "unavailable": len(rows) - available,
+                "available": states["available"],
+                "not_applicable": states["not_applicable"],
+                "unavailable": states["unavailable"],
+                "unknown_status": states["unknown_status"],
+                "by_status": dict(Counter(str(row["metrics"].get("status")) for row in rows)),
             },
             "totals": dict(totals),
             "stage_counts": dict(stages),
             "funnel_counts": dict(funnels),
             "employees": rows,
         }
+        missing = states["unavailable"] + states["unknown_status"]
+        if not states["available"]:
+            # Nobody linked to Bitrix is no data; snapshots that exist but are unusable are not zero.
+            status = "not_available" if missing else "no_data"
+        elif missing or not complete or requested_snapshot:
+            status = "partial"
+        else:
+            status = "ok"
         return await self.envelope(
             data,
-            status="partial"
-            if rows and (not complete or bool(requested_snapshot) or available < len(rows))
-            else ("ok" if rows else "no_data"),
+            status=status,
             scope={**self.department_scope(department_row), "employee_id": employee},
         )
 
@@ -3025,6 +3218,8 @@ class AnalyticsAdapter:
         department = str(department_row["id"]) if department_row else None
         employee = str(employee_row["id"]) if employee_row else None
         requested = [str(value) for value in scenario_ids or []]
+        # The archive (admin only) is read just to accept an archived version ID; evaluations of an
+        # archived version join their scenario by the code OKK reports on each call.
         catalog, _ = await self.scenarios(department, include_inactive=bool(requested))
         index = {str(row.get("id")): row for row in catalog}
         effective, omitted = _select_visible(requested, set(index)) if requested else (list(index), 0)
@@ -3057,19 +3252,48 @@ class AnalyticsAdapter:
             department_id=department,
             employee_id=employee,
         )
+        # A scenario is every version under one code: a requested version stands for its scenario,
+        # shown by the current version when the account can read it.
+        version_codes = _scenario_versions_by_code(catalog, calls)
+        scenario_codes = list(dict.fromkeys(version_codes[value] for value in effective))
+        shown: dict[str, dict[str, Any]] = {}
+        for row in catalog:
+            code = version_codes[str(row.get("id"))]
+            if code in scenario_codes and (
+                code not in shown or (_is_current_version(row) and not _is_current_version(shown[code]))
+            ):
+                shown[code] = row
         groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        excluded: Counter[str] = Counter()
         for call in calls:
-            scenario_id = str(call.get("scenario_id") or "")
-            if scenario_id in effective and call.get("quality_score") is not None:
-                groups[scenario_id].append(call)
+            if call.get("quality_score") is None:
+                continue
+            code = _call_scenario_code(call, version_codes)
+            if code in shown:
+                groups[code].append(call)
+            elif code is None:
+                excluded["scenario_unknown"] += 1
+            elif not requested:
+                # Requested scenarios narrow the scope; without them every evaluation must land.
+                excluded["scenario_not_in_current_catalog"] += 1
         data = []
-        for scenario_id in effective:
-            rows = groups.get(scenario_id, [])
+        for code in scenario_codes:
+            rows = groups.get(code, [])
+            versions = Counter(str(row["scenario_id"]) if row.get("scenario_id") else None for row in rows)
+            current = {
+                version: version in index and _is_current_version(index[version]) for version in versions
+            }
             scores = [_number(row.get("quality_score")) for row in rows]
-            pass_rate, pass_rate_basis = _pass_rate(rows, index[scenario_id].get("passing_score"))
+            pass_rate, pass_rate_basis = _pass_rate(rows, _shared_passing_score(versions, index))
             data.append(
                 {
-                    "scenario": self._safe_scenario(index[scenario_id]),
+                    "scenario": self._safe_scenario(shown[code]),
+                    "versions": [
+                        {"scenario_id": version, "current": current[version], "evaluations": count}
+                        for version, count in sorted(
+                            versions.items(), key=lambda item: (not current[item[0]], -item[1], item[0] or "")
+                        )
+                    ],
                     "evaluations": len(scores),
                     "employees": len({str(row.get("employee_id")) for row in rows}),
                     "avg_score": round(sum(scores) / len(scores), 2) if scores else None,
@@ -3081,13 +3305,15 @@ class AnalyticsAdapter:
             )
         return await self.envelope(
             data,
-            status="partial" if not complete else ("ok" if data else "no_data"),
+            status="partial" if not complete or excluded else ("ok" if data else "no_data"),
             scope={
                 "scenario_ids": effective,
                 **self.department_scope(department_row),
                 "employee_id": employee,
                 "source_calls": len(calls),
                 "source_calls_total": total,
+                "excluded_evaluations": sum(excluded.values()),
+                "excluded_evaluation_reasons": dict(sorted(excluded.items())),
             },
             period=bounds,
             omitted=omitted,
@@ -3117,7 +3343,9 @@ class AnalyticsAdapter:
         department = str(department_row["id"]) if department_row else None
         employee = str(employee_row["id"]) if employee_row else None
         scenario = str(scenario_id) if scenario_id else None
-        catalog, _ = await self.scenarios(department, include_inactive=bool(scenario))
+        # The archive (admin only) gives an archived version's criteria their codes; for any other
+        # account those observations are reported as excluded, never dropped.
+        catalog, _ = await self.scenarios(department, include_inactive=True)
         scenario_row = next(
             (row for row in catalog if str(row.get("id")) == scenario),
             None,
@@ -3146,15 +3374,34 @@ class AnalyticsAdapter:
                     period=bounds,
                 )
             department = str(department_row["id"])
-        visible_criteria = {
-            str(item["id"]): item
-            for row in catalog
-            if not scenario or str(row.get("id")) == scenario
-            for item in self._criteria(row)
-        }
+        # Calls of the whole scope: OKK filters `scenario_id` by the exact version, which would leave
+        # out the evaluations made on the scenario's archived versions.
+        calls, total, complete = await self.calls(
+            start=bounds[0],
+            end=bounds[1],
+            department_id=department,
+            employee_id=employee,
+        )
+        version_codes = _scenario_versions_by_code(catalog, calls)
+        scenario_code = version_codes[scenario] if scenario_row is not None else None
+        # A criterion is one code within one scenario across all its versions; a criterion without
+        # a code stands alone under its ID. It is shown by the current version when there is one.
+        criterion_keys: dict[str, tuple[str, str]] = {}
+        shown: dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]] = {}
+        for version in catalog:
+            code = version_codes[str(version.get("id"))]
+            if scenario_code is not None and code != scenario_code:
+                continue
+            for item in self._criteria(version):
+                key = (code, str(item.get("code") or item["id"]))
+                criterion_keys[str(item["id"])] = key
+                if key not in shown or (
+                    _is_current_version(version) and not _is_current_version(shown[key][1])
+                ):
+                    shown[key] = (item, version)
         requested = [str(value) for value in criterion_ids or []]
         effective, omitted = (
-            _select_visible(requested, set(visible_criteria)) if requested else (list(visible_criteria), 0)
+            _select_visible(requested, set(criterion_keys)) if requested else (list(criterion_keys), 0)
         )
         if requested and not effective:
             return await self.envelope(
@@ -3168,38 +3415,57 @@ class AnalyticsAdapter:
                 period=bounds,
                 omitted=omitted,
             )
-        calls, total, complete = await self.calls(
-            start=bounds[0],
-            end=bounds[1],
-            department_id=department,
-            employee_id=employee,
-            scenario_id=scenario,
-        )
-
-        async def detail(call: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        effective_keys = {criterion_keys[value] for value in effective}
+        excluded: Counter[str] = Counter()
+        evaluated: list[dict[str, Any]] = []
+        for call in calls:
             if call.get("quality_score") is None:
-                return call, None
-            value = await self._bounded(lambda: self._get(f"/calls/{call['id']}"))
-            return call, value
-
-        detailed = await asyncio.gather(*(detail(call) for call in calls))
-        aggregate: dict[str, dict[str, Any]] = {}
-        for call, detail_row in detailed:
-            evaluation = (detail_row or {}).get("evaluation") or {}
-            for item in evaluation.get("items") or []:
-                criterion_id = str(item.get("checklist_item_id") or "")
-                if criterion_id not in effective:
+                continue
+            if scenario_code is not None:
+                code = _call_scenario_code(call, version_codes)
+                if code is None:
+                    excluded["scenario_unknown"] += 1
                     continue
+                if code != scenario_code:
+                    continue
+            evaluated.append(call)
+
+        async def detail(call: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+            return call, await self._bounded(lambda: self._get(f"/calls/{call['id']}"))
+
+        detailed = await asyncio.gather(*(detail(call) for call in evaluated))
+        aggregate: dict[tuple[str, str], dict[str, Any]] = {}
+        excluded_observations = 0
+        for call, detail_row in detailed:
+            items = ((detail_row or {}).get("evaluation") or {}).get("items") or []
+            if not items:
+                excluded["evaluation_items_unavailable"] += 1
+                continue
+            unreadable = 0
+            for item in items:
+                key = criterion_keys.get(str(item.get("checklist_item_id") or ""))
+                if key is None:
+                    # A version whose criteria this account cannot read (an archived one for a viewer).
+                    unreadable += 1
+                    continue
+                if key not in effective_keys:
+                    continue
+                criterion, version = shown[key]
                 row = aggregate.setdefault(
-                    criterion_id,
+                    key,
                     {
-                        "criterion": visible_criteria[criterion_id],
+                        "criterion": criterion,
+                        "scenario": {
+                            "id": str(version.get("id")),
+                            "code": _scenario_code(version.get("code")),
+                            "name": version.get("name"),
+                        },
                         "observations": 0,
                         "score_sum": 0.0,
                         "max_score_sum": 0.0,
                         "penalties": 0,
                         "employees": set(),
-                        "scenarios": set(),
+                        "scenario_versions": set(),
                         "last_observation": None,
                     },
                 )
@@ -3208,16 +3474,19 @@ class AnalyticsAdapter:
                 row["max_score_sum"] += _number(item.get("max_score"))
                 row["penalties"] += int(bool(item.get("is_penalty")))
                 row["employees"].add(str(call.get("employee_id")))
-                row["scenarios"].add(str(call.get("scenario_id")))
+                row["scenario_versions"].add(str(call.get("scenario_id")))
                 started = call.get("started_at")
                 if started and (row["last_observation"] is None or str(started) > row["last_observation"]):
                     row["last_observation"] = str(started)
+            if unreadable:
+                excluded["criteria_version_not_readable"] += 1
+                excluded_observations += unreadable
         data = []
         for row in aggregate.values():
             maximum = row.pop("max_score_sum")
             score = row.pop("score_sum")
             row["employees"] = len(row["employees"])
-            row["scenarios"] = len(row["scenarios"])
+            row["scenario_versions"] = len(row["scenario_versions"])
             row["avg_score_percent"] = round(score / maximum * 100, 2) if maximum else None
             data.append(row)
         data.sort(key=lambda row: (row["avg_score_percent"] is None, row["avg_score_percent"] or 0))
@@ -3225,9 +3494,10 @@ class AnalyticsAdapter:
         truncated = not complete or total > len(calls) or matching_criteria_total > limit
         return await self.envelope(
             data[:limit],
-            status="partial" if truncated else ("ok" if data else "no_data"),
+            status="partial" if truncated or excluded else ("ok" if data else "no_data"),
             scope={
                 "scenario_id": scenario,
+                "scenario_code": scenario_code,
                 "criterion_ids": effective,
                 **self.department_scope(department_row),
                 "employee_id": employee,
@@ -3236,6 +3506,9 @@ class AnalyticsAdapter:
                 "matching_criteria_total": matching_criteria_total,
                 "returned_criteria": min(matching_criteria_total, limit),
                 "criteria_limit": limit,
+                "excluded_evaluations": sum(excluded.values()),
+                "excluded_evaluation_reasons": dict(sorted(excluded.items())),
+                "excluded_observations": excluded_observations,
             },
             period=bounds,
             omitted=omitted,

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
+from unittest.mock import AsyncMock
+
 import pytest
 
+from okk_mcp.config import Settings
+from okk_mcp.server import create_mcp_server
 from scripts.smoke_release import (
-    DEPARTMENT_SCOPED_TOOLS,
-    EXPECTED_TOOLS,
-    SUPERVISOR_SCOPED_TOOLS,
     validate_connection_confirmation,
     validate_department_employee_grounding,
     validate_oauth_metadata,
@@ -13,55 +16,73 @@ from scripts.smoke_release import (
 )
 
 
-def _tool(name: str) -> dict:
-    properties = {}
-    if name in DEPARTMENT_SCOPED_TOOLS:
-        properties["department_ref"] = {"type": ["string", "null"]}
-    if name == "compare_departments":
-        properties["department_refs"] = {"type": ["array", "null"]}
-    if name in SUPERVISOR_SCOPED_TOOLS:
-        properties["supervisor_id"] = {"type": "string"}
-    return {
-        "name": name,
-        "annotations": {"readOnlyHint": True, "destructiveHint": False},
-        "inputSchema": {"type": "object", "properties": properties},
-        "_meta": {
-            "securitySchemes": [
-                {
-                    "type": "oauth2",
-                    "scopes": ["okk.transcripts.read"] if "transcript" in name else ["okk.statistics.read"],
-                }
-            ]
-        },
-    }
+def _registered_tools() -> list[dict]:
+    """The `tools/list` payload of the server this repository builds, as a client receives it."""
+    tools = asyncio.run(create_mcp_server(Settings(), AsyncMock()).list_tools())
+    return [tool.model_dump(mode="json", by_alias=True, exclude_none=True) for tool in tools]
 
 
-def test_release_smoke_requires_exact_safe_inventory():
-    validate_tool_inventory({"result": {"tools": [_tool(name) for name in EXPECTED_TOOLS]}})
+def _tool(tools: list[dict], name: str) -> dict:
+    return next(tool for tool in tools if tool["name"] == name)
+
+
+def test_release_smoke_accepts_the_inventory_the_server_registers():
+    # Before: the expected list missed `list_call_phone_records`, so the smoke failed on every
+    # real 28-tool gateway while its test compared the list with itself.
+    validate_tool_inventory({"result": {"tools": _registered_tools()}})
+
+
+def _drop_phone_tool(tools: list[dict]) -> None:
+    tools.remove(_tool(tools, "list_call_phone_records"))
+
+
+def _add_unexpected_write(tools: list[dict]) -> None:
+    tools.append({**_tool(tools, "get_access_context"), "name": "unexpected_write"})
+
+
+def _make_destructive(tools: list[dict]) -> None:
+    tools[0]["annotations"]["destructiveHint"] = True
+
+
+def _drop_named_department_filter(tools: list[dict]) -> None:
+    _tool(tools, "get_department_statistics")["inputSchema"]["properties"].pop("department_ref")
+
+
+def _drop_phone_department_filter(tools: list[dict]) -> None:
+    _tool(tools, "list_call_phone_records")["inputSchema"]["properties"].pop("department_ref")
+
+
+def _drop_transcript_scope(tools: list[dict]) -> None:
+    _tool(tools, "get_call_transcript")["_meta"]["securitySchemes"][0]["scopes"] = ["okk.statistics.read"]
+
+
+def _drop_phone_scope(tools: list[dict]) -> None:
+    _tool(tools, "list_call_phone_records")["_meta"]["securitySchemes"][0]["scopes"] = ["okk.statistics.read"]
+
+
+def _drop_supervisor_id(tools: list[dict]) -> None:
+    _tool(tools, "get_supervisor_call_statistics")["inputSchema"]["properties"].pop("supervisor_id")
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        _drop_phone_tool,
+        _add_unexpected_write,
+        _make_destructive,
+        _drop_named_department_filter,
+        _drop_phone_department_filter,
+        _drop_transcript_scope,
+        _drop_phone_scope,
+        _drop_supervisor_id,
+    ],
+)
+def test_release_smoke_rejects_drift_from_the_safe_inventory(drift: Callable[[list[dict]], None]):
+    tools = _registered_tools()
+    drift(tools)
+
     with pytest.raises(RuntimeError):
-        validate_tool_inventory({"result": {"tools": [_tool("unexpected_write")]}})
-    unsafe = [_tool(name) for name in EXPECTED_TOOLS]
-    unsafe[0]["annotations"]["destructiveHint"] = True
-    with pytest.raises(RuntimeError):
-        validate_tool_inventory({"result": {"tools": unsafe}})
-    missing_named_filter = [_tool(name) for name in EXPECTED_TOOLS]
-    next(tool for tool in missing_named_filter if tool["name"] == "get_department_statistics")["inputSchema"][
-        "properties"
-    ].pop("department_ref")
-    with pytest.raises(RuntimeError):
-        validate_tool_inventory({"result": {"tools": missing_named_filter}})
-    missing_transcript_scope = [_tool(name) for name in EXPECTED_TOOLS]
-    next(tool for tool in missing_transcript_scope if tool["name"] == "get_call_transcript")["_meta"][
-        "securitySchemes"
-    ][0]["scopes"] = ["okk.statistics.read"]
-    with pytest.raises(RuntimeError):
-        validate_tool_inventory({"result": {"tools": missing_transcript_scope}})
-    missing_supervisor_id = [_tool(name) for name in EXPECTED_TOOLS]
-    next(tool for tool in missing_supervisor_id if tool["name"] == "get_supervisor_call_statistics")[
-        "inputSchema"
-    ]["properties"].pop("supervisor_id")
-    with pytest.raises(RuntimeError):
-        validate_tool_inventory({"result": {"tools": missing_supervisor_id}})
+        validate_tool_inventory({"result": {"tools": tools}})
 
 
 def test_release_smoke_requires_a_definitive_connection_confirmation():

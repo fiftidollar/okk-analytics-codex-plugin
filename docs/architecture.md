@@ -1,16 +1,13 @@
 # Architecture
 
-The production 1.2.4 release adds offset transcript reads and a phone-history read path.
-The phone path uses the platform's indexed exact number filter and the gateway's
-live ACL checks; OAuth requires the separate `okk.phones.read` scope. It does
-not scan a bounded first page and call that a full count. Production runs
-platform PR120 and gateway 1.2.4 after the 2026-09-24 release.
+Production runs gateway 1.3.0 (public `/health` reported `1.3.0` on
+2026-10-20) against the production OKK API of the new OKK architecture; 1.3.1
+is prepared, not released. Release history is in [CHANGELOG.md](../CHANGELOG.md),
+release evidence in [deployment.md](deployment.md).
 
-The 1.2.3 release adds explicit department metric semantics and nullable plan
-totals with per-metric roster coverage. It introduces no new upstream endpoint,
-database access, paid model call, OAuth scope or tool. It retains the existing
-server roster filters and complete data fields. Production is verified on 1.2.3
-at runtime commit ce2d51d after explicit user approval on 2026-09-09.
+The phone-history path uses the platform's indexed exact number filter and the
+gateway's live ACL checks; OAuth requires the separate `okk.phones.read` scope.
+It does not scan a bounded first page and call that a full count.
 
 ```text
 Codex MCP client

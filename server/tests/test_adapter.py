@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from uuid import uuid4
 
 import pytest
@@ -655,7 +656,7 @@ async def test_employee_card_contains_growth_and_tasks_without_raw_reasoning():
             "employees": [],
         },
         f"/employees/{employee_id}/bitrix-metrics": {
-            "status": "ok",
+            "status": "ready",
             "total_open_deals": 3,
             "error_message": "internal integration debug must not leave adapter",
         },
@@ -678,6 +679,77 @@ async def test_employee_card_contains_growth_and_tasks_without_raw_reasoning():
     assert "Автор правки плана" not in serialized
     plan_call = next(params for path, params in platform.calls if path == "/call-plans/plan-fact")
     assert ("employee_id", employee_id) in plan_call and ("period", "custom") in plan_call
+
+
+def _new_okk_employee_card(*, call_plans: bool, crm: str = "no_bitrix_id") -> tuple[FakePlatform, str]:
+    """An employee card of the new OKK: no mentoring keys on the page, plans from the constructor."""
+    department_id, employee_id = str(uuid4()), str(uuid4())
+    employee = {
+        "id": employee_id,
+        "full_name": "Сотрудник",
+        "department_id": department_id,
+        "department": {"id": department_id, "name": "Сопровождение", "code": "csm"},
+        "is_active": True,
+    }
+
+    def plan_fact(_params):
+        if not call_plans:
+            raise OKKNotAvailable("no call plans")
+        return {"weeks": [{"week_start": "2026-10-19", "mode": None}], "items": [], "employees": []}
+
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Сопровождение", "code": "csm"}],
+            f"/employees/{employee_id}": employee,
+            f"/employees/{employee_id}/page-data": {"kpi": {"calls_total": 4}, "aggregated_strengths": []},
+            f"/employees/{employee_id}/summary": {"calls_total": 4},
+            "/call-plans/plan-fact": plan_fact,
+            f"/employees/{employee_id}/bitrix-metrics": {"status": crm},
+        },
+    )
+    return platform, employee_id
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("call_plans", "crm", "status"),
+    [
+        # Before: always `partial`, also when nothing was missing.
+        pytest.param(True, "no_bitrix_id", "ok", id="complete-not-linked"),
+        pytest.param(True, "ready", "ok", id="complete"),
+        pytest.param(False, "ready", "partial", id="no-call-plans"),
+        # A CRM snapshot that exists but is unusable is a missing part, not an empty one.
+        pytest.param(True, "not_synced", "partial", id="crm-not-synced"),
+        pytest.param(True, "error", "partial", id="crm-error"),
+        pytest.param(True, "being_rebuilt", "partial", id="crm-unknown-status"),
+    ],
+)
+async def test_employee_card_is_ok_only_when_every_part_loaded(call_plans, crm, status):
+    platform, employee_id = _new_okk_employee_card(call_plans=call_plans, crm=crm)
+
+    result = await adapter(platform).get_employee_card(employee_id)
+
+    assert result["status"] == status
+    assert result["data"]["mentoring_available"] is False
+
+
+@pytest.mark.anyio
+async def test_employee_card_reads_every_part_for_the_same_dates():
+    # Before: the summary got the named period (OKK's own range for `week`) while the page and the
+    # plan got Monday–today, so one card mixed two periods.
+    platform, employee_id = _new_okk_employee_card(call_plans=True)
+
+    result = await adapter(platform).get_employee_card(employee_id, period="week")
+
+    def dates(path: str) -> tuple[str | None, str | None, str | None]:
+        params = dict(next(params for called, params in platform.calls if called == path))
+        return params.get("period"), params.get("start_date"), params.get("end_date")
+
+    shown = (result["period"]["start"], result["period"]["end"])
+    assert dates(f"/employees/{employee_id}/summary") == ("custom", *shown)
+    assert dates("/call-plans/plan-fact") == ("custom", *shown)
+    assert dates(f"/employees/{employee_id}/page-data")[1:] == shown
 
 
 @pytest.mark.anyio
@@ -840,6 +912,335 @@ async def test_scenario_pass_rate_follows_the_norm_okk_reports(scenario_fields, 
     assert (row["pass_rate"], row["pass_rate_basis"]) == expected
 
 
+def _versioned_csm(
+    *, role: str, code: str = "csm_universal", unnamed_call: bool = False
+) -> tuple[FakePlatform, dict[str, str]]:
+    """CSM like the test stand on 20.10: the scenario was republished, and some calls of the
+    period were evaluated on the archived version (`csm_universal__legacy_…`). The archive is
+    readable only by an admin; every call row carries the business code OKK shows for it. Like
+    OKK, the archived code keeps only the first 21 characters of a longer code. `unnamed_call`
+    adds an evaluated call whose version nobody can read and OKK names without a code."""
+    ids = {name: str(uuid4()) for name in ("department", "current", "archived", "employee")}
+    ids.update(
+        {
+            f"{version}_{code}": str(uuid4())
+            for version in ("current", "archived")
+            for code in ("greeting", "next_step")
+        }
+    )
+
+    def version(version_name: str, code: str, *, active: bool) -> dict:
+        return {
+            "id": ids[version_name],
+            "department_id": ids["department"],
+            "name": "Сопровождение",
+            "code": code,
+            "is_active": active,
+            "calls_evaluated": 0,
+            "avg_score": None,
+            "categories": [
+                {
+                    "id": str(uuid4()),
+                    "name": "Разговор",
+                    "items": [
+                        {"id": ids[f"{version_name}_{item}"], "code": item, "name": item, "max_score": 10}
+                        for item in ("greeting", "next_step")
+                    ],
+                }
+            ],
+        }
+
+    current = version("current", code, active=True)
+    archived = version("archived", f"{code[:21]}__legacy_20261015093413861488", active=False)
+
+    def scenarios(params):
+        include_archive = ("include_inactive", "true") in params
+        assert not include_archive or role == "admin", "OKK answers 403 to a viewer asking for the archive"
+        return {"items": [current, archived] if include_archive else [current], "pages": 1}
+
+    employee = {
+        "id": ids["employee"],
+        "full_name": "Сотрудник",
+        "department": {"id": ids["department"], "name": "Сопровождение", "code": "csm"},
+    }
+
+    def call(version_name: str, score: int, status: str, items: tuple[int, int]) -> tuple[dict, dict]:
+        call_id = str(uuid4())
+        row = {
+            "id": call_id,
+            "employee_id": ids["employee"],
+            "employee": employee,
+            "scenario_id": ids[version_name],
+            "detected_scenario_code": code,
+            "scenario": {"id": ids[version_name], "name": "Сопровождение", "code": code},
+            "quality_score": score,
+            "quality_status": status,
+            "started_at": "2026-10-14T10:00:00+03:00",
+        }
+        detail = {
+            "evaluation": {
+                "items": [
+                    {"checklist_item_id": ids[f"{version_name}_{code}"], "score": value, "max_score": 10}
+                    for code, value in zip(("greeting", "next_step"), items, strict=True)
+                ]
+            }
+        }
+        return row, detail
+
+    evaluated = [
+        call("current", 90, "norm", (10, 8)),
+        call("current", 70, "below_norm", (10, 2)),
+        call("archived", 100, "norm", (10, 10)),
+        call("archived", 80, "norm", (0, 10)),
+    ]
+    rows = [row for row, _ in evaluated] + [
+        {
+            "id": str(uuid4()),
+            "employee_id": ids["employee"],
+            "employee": employee,
+            "scenario_id": None,
+            "quality_score": None,
+        }
+    ]
+    if unnamed_call:
+        rows.append(
+            {
+                "id": str(uuid4()),
+                "employee_id": ids["employee"],
+                "employee": employee,
+                "scenario_id": str(uuid4()),
+                "quality_score": 75,
+                "quality_status": "norm",
+            }
+        )
+
+    def calls(params):
+        # OKK filters `scenario_id` by the exact version: the archived version's calls stay out.
+        wanted = dict(params).get("scenario_id")
+        items = [row for row in rows if not wanted or row["scenario_id"] == wanted]
+        return {"items": items, "total": len(items), "pages": 1}
+
+    platform = FakePlatform(
+        role=role,
+        department_ids=(ids["department"],),
+        responses={
+            "/departments": [{"id": ids["department"], "name": "Сопровождение", "code": "csm"}],
+            "/scenarios": scenarios,
+            "/calls": calls,
+            **{f"/calls/{row['id']}": detail for row, detail in evaluated},
+            **{
+                f"/calls/{row['id']}/transcript": {"transcript": "Менеджер: договорились о следующем шаге."}
+                for row in rows
+            },
+        },
+    )
+    return platform, ids
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("role", "requested", "code"),
+    [
+        pytest.param("viewer", (), "csm_universal", id="viewer-without-the-archive"),
+        pytest.param("admin", (), "csm_universal", id="admin-without-filter"),
+        pytest.param("admin", ("current", "archived"), "csm_universal", id="admin-both-versions"),
+        pytest.param("admin", ("archived",), "csm_universal", id="admin-archived-version"),
+        # The archived row's own code is cut to `csm_universal_existin`; its calls show the full code.
+        pytest.param("admin", ("current",), "csm_universal_existing_clients", id="admin-long-code"),
+        pytest.param("admin", ("archived",), "csm_universal_existing_clients", id="admin-long-code-archived"),
+    ],
+)
+async def test_scenario_performance_counts_evaluations_of_every_scenario_version(role, requested, code):
+    # Before: only the current version's calls counted (2 of 4, avg 80, pass 50%) and the result said
+    # `ok`; with both ids an admin got two rows for one scenario.
+    platform, ids = _versioned_csm(role=role, code=code)
+
+    result = await adapter(platform).get_scenario_performance(
+        period="custom",
+        start_date="2026-10-01",
+        end_date="2026-10-20",
+        scenario_ids=[ids[name] for name in requested] or None,
+    )
+
+    [row] = result["data"]
+    assert result["status"] == "ok"
+    assert row["scenario"]["id"] == ids["current"]
+    assert (row["evaluations"], row["avg_score"], row["pass_rate"]) == (4, 85.0, 75.0)
+    assert {
+        (version["scenario_id"], version["current"], version["evaluations"]) for version in row["versions"]
+    } == {
+        (ids["current"], True, 2),
+        (ids["archived"], False, 2),
+    }
+    assert result["effective_scope"]["excluded_evaluations"] == 0
+
+
+@pytest.mark.anyio
+async def test_scenario_performance_reports_evaluations_it_cannot_attribute():
+    department_id, scenario_id = str(uuid4()), str(uuid4())
+    retired_version = str(uuid4())
+    calls = [
+        {"id": str(uuid4()), "scenario_id": scenario_id, "quality_score": 90, "quality_status": "norm"},
+        # A scenario that has no current version any more, and a score without any scenario.
+        {
+            "id": str(uuid4()),
+            "scenario_id": retired_version,
+            "scenario": {"id": retired_version, "name": "Старый", "code": "csm_old"},
+            "quality_score": 60,
+            "quality_status": "below_norm",
+        },
+        {"id": str(uuid4()), "scenario_id": None, "quality_score": 70, "quality_status": "norm"},
+    ]
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Сопровождение", "code": "csm"}],
+            "/scenarios": {
+                "items": [{"id": scenario_id, "department_id": department_id, "name": "CSM", "code": "csm"}],
+                "pages": 1,
+            },
+            "/calls": {"items": calls, "total": len(calls), "pages": 1},
+        },
+    )
+
+    result = await adapter(platform).get_scenario_performance(period="today")
+
+    assert result["status"] == "partial"
+    assert result["data"][0]["evaluations"] == 1
+    assert result["effective_scope"]["excluded_evaluations"] == 2
+    assert result["effective_scope"]["excluded_evaluation_reasons"] == {
+        "scenario_not_in_current_catalog": 1,
+        "scenario_unknown": 1,
+    }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("role", "scenario", "expected", "excluded", "code"),
+    [
+        # Before: the archived version's evaluations were dropped and the result said `ok`.
+        pytest.param(
+            "admin", None, {"greeting": (4, 75.0), "next_step": (4, 75.0)}, 0, "csm_universal", id="admin-all"
+        ),
+        pytest.param(
+            "admin",
+            "current",
+            {"greeting": (4, 75.0), "next_step": (4, 75.0)},
+            0,
+            "csm_universal",
+            id="admin-scenario",
+        ),
+        pytest.param(
+            "admin",
+            "archived",
+            {"greeting": (4, 75.0), "next_step": (4, 75.0)},
+            0,
+            "csm_universal",
+            id="admin-archived",
+        ),
+        pytest.param(
+            "admin",
+            "current",
+            {"greeting": (4, 75.0), "next_step": (4, 75.0)},
+            0,
+            "csm_universal_existing_clients",
+            id="admin-long-code",
+        ),
+        # A viewer cannot read the archived version's criteria: those observations are reported.
+        pytest.param(
+            "viewer",
+            None,
+            {"greeting": (2, 100.0), "next_step": (2, 50.0)},
+            2,
+            "csm_universal",
+            id="viewer-all",
+        ),
+        pytest.param(
+            "viewer",
+            "current",
+            {"greeting": (2, 100.0), "next_step": (2, 50.0)},
+            2,
+            "csm_universal",
+            id="viewer-scenario",
+        ),
+    ],
+)
+async def test_criterion_performance_joins_scenario_versions_by_criterion_code(
+    role, scenario, expected, excluded, code
+):
+    platform, ids = _versioned_csm(role=role, code=code)
+
+    result = await adapter(platform).get_criterion_performance(
+        period="custom",
+        start_date="2026-10-01",
+        end_date="2026-10-20",
+        scenario_id=ids[scenario] if scenario else None,
+    )
+
+    observed = {
+        row["criterion"]["code"]: (row["observations"], row["avg_score_percent"]) for row in result["data"]
+    }
+    assert observed == expected
+    assert all(row["scenario"]["id"] == ids["current"] for row in result["data"])
+    scope = result["effective_scope"]
+    assert scope["excluded_evaluations"] == excluded
+    assert scope["excluded_observations"] == 2 * excluded
+    if excluded:
+        assert result["status"] == "partial"
+        assert scope["excluded_evaluation_reasons"] == {"criteria_version_not_readable": excluded}
+    else:
+        assert result["status"] == "ok"
+
+
+async def _scenario_transcripts(
+    analytics: AnalyticsAdapter, tool: str, scenario_id: str
+) -> tuple[dict, list]:
+    scope = {
+        "period": "custom",
+        "start_date": "2026-10-01",
+        "end_date": "2026-10-20",
+        "scenario_id": scenario_id,
+    }
+    if tool == "list":
+        result = await analytics.list_call_transcripts(**scope)
+    else:
+        result = await analytics.search_call_transcripts("следующем шаге", **scope)
+    return result, [row["call"] for row in result["data"]["items"]]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("tool", ["list", "search"])
+@pytest.mark.parametrize(
+    ("role", "version"), [("viewer", "current"), ("admin", "current"), ("admin", "archived")]
+)
+async def test_call_transcripts_of_a_scenario_cover_every_scenario_version(tool, role, version):
+    # Before: `scenario_id` went to OKK `/calls`, which filters by the exact version, so the calls
+    # evaluated on the other version of the same scenario were missing.
+    platform, ids = _versioned_csm(role=role)
+
+    result, calls = await _scenario_transcripts(adapter(platform), tool, ids[version])
+
+    assert result["status"] == "ok"
+    assert sorted(call["scenario_id"] for call in calls) == sorted(
+        [ids["current"], ids["current"], ids["archived"], ids["archived"]]
+    )
+    assert result["effective_scope"]["excluded_calls"] == 0
+    assert all("scenario_id" not in dict(params) for path, params in platform.calls if path == "/calls")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("tool", ["list", "search"])
+async def test_call_transcripts_of_a_scenario_report_calls_they_cannot_place(tool):
+    platform, ids = _versioned_csm(role="viewer", unnamed_call=True)
+
+    result, calls = await _scenario_transcripts(adapter(platform), tool, ids["current"])
+
+    assert result["status"] == "partial"
+    assert len(calls) == 4
+    assert result["effective_scope"]["excluded_calls"] == 1
+    assert result["effective_scope"]["excluded_call_reasons"] == {"scenario_unknown": 1}
+
+
 def test_session_cipher_is_authenticated_and_models_store_hashes_not_raw_mcp_tokens():
     cipher = SessionCipher("x" * 32)
     sealed = cipher.seal("upstream-token")
@@ -906,7 +1307,11 @@ async def test_named_department_outside_acl_never_falls_back_to_visible_ord_popu
         ("get_criterion_performance", {"department_ref": "B2B"}),
     ],
 )
-async def test_every_department_scoped_tool_fails_closed_on_an_inaccessible_name(method_name, kwargs):
+# Before: an empty selector counted as "no filter" and returned every visible department.
+@pytest.mark.parametrize("selector", ["B2B", "", "   "], ids=["inaccessible", "empty", "blank"])
+async def test_every_department_scoped_tool_fails_closed_on_an_inaccessible_name(
+    method_name, kwargs, selector
+):
     ord_id = str(uuid4())
     platform = FakePlatform(
         department_ids=(ord_id,),
@@ -914,6 +1319,12 @@ async def test_every_department_scoped_tool_fails_closed_on_an_inaccessible_name
             "/departments": [{"id": ord_id, "name": "ORD", "code": "ord"}],
         },
     )
+    kwargs = {
+        key: ([selector] if key == "department_refs" else selector)
+        if key in ("department_ref", "department_refs")
+        else value
+        for key, value in kwargs.items()
+    }
 
     result = await getattr(adapter(platform), method_name)(**kwargs)
 
@@ -1414,6 +1825,36 @@ async def test_employee_population_cap_is_reported_as_partial_with_source_total(
 
 
 @pytest.mark.anyio
+async def test_scenario_catalog_does_not_present_counters_okk_no_longer_keeps():
+    # The new OKK leaves the legacy `calls_evaluated` / `avg_score` at 0 / null for every scenario;
+    # shown as metrics they read as "no evaluations". Counts come from get_scenario_performance.
+    department_id = str(uuid4())
+    scenario = {
+        "id": str(uuid4()),
+        "department_id": department_id,
+        "name": "Сопровождение",
+        "code": "csm_universal",
+        "is_active": True,
+        "calls_evaluated": 0,
+        "avg_score": None,
+    }
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Сопровождение", "code": "csm"}],
+            "/scenarios": {"items": [scenario], "pages": 1},
+        },
+    )
+
+    result = await adapter(platform).list_scenarios()
+
+    [item] = result["data"]["items"]
+    assert item["code"] == "csm_universal"
+    assert "calls_evaluated" not in item
+    assert "avg_score" not in item
+
+
+@pytest.mark.anyio
 async def test_scenario_search_and_historical_flag_are_actually_forwarded_for_admin():
     department_id = str(uuid4())
     active_id, archived_id = str(uuid4()), str(uuid4())
@@ -1459,7 +1900,7 @@ async def test_historical_crm_date_is_not_mislabeled_as_an_available_snapshot():
             "/departments": [{"id": department_id, "name": "B2B", "code": "b2b"}],
             "/employees": {"items": [employee], "total": 1, "pages": 1},
             f"/employees/{employee_id}/bitrix-metrics": {
-                "status": "ok",
+                "status": "ready",
                 "employee_id": employee_id,
                 "snapshot_date": "2026-07-18",
             },
@@ -1698,9 +2139,27 @@ async def test_phone_history_by_number_ending_sends_iso_dates_and_accepts_ending
 
 
 @pytest.mark.anyio
-async def test_crm_coverage_with_unavailable_employee_snapshots_is_partial():
+@pytest.mark.parametrize(
+    ("statuses", "status", "counts"),
+    [
+        # Before: only `ok`, a status OKK never sends, counted as a usable snapshot, so every
+        # department read 0 available and `partial`.
+        pytest.param(("ready", "ready"), "ok", (2, 0, 0, 0), id="ready"),
+        # Not linked to Bitrix: CRM does not apply to the employee, it is not a missing snapshot.
+        pytest.param(("ready", "no_bitrix_id"), "ok", (1, 1, 0, 0), id="not-linked"),
+        pytest.param(
+            ("ready", "not_synced", "error", "not_configured"), "partial", (1, 0, 3, 0), id="missing"
+        ),
+        pytest.param(("ready", "being_rebuilt"), "partial", (1, 0, 0, 1), id="unknown-status"),
+        pytest.param(("no_bitrix_id", "no_bitrix_id"), "no_data", (0, 2, 0, 0), id="nobody-linked"),
+        pytest.param(
+            ("not_configured", "not_configured"), "not_available", (0, 0, 2, 0), id="integration-off"
+        ),
+    ],
+)
+async def test_crm_statistics_classify_every_snapshot_status_okk_returns(statuses, status, counts):
     department_id = str(uuid4())
-    first_id, second_id = str(uuid4()), str(uuid4())
+    employee_ids = [str(uuid4()) for _ in statuses]
     employees = [
         {
             "id": employee_id,
@@ -1708,36 +2167,41 @@ async def test_crm_coverage_with_unavailable_employee_snapshots_is_partial():
             "department_id": department_id,
             "department": {"id": department_id, "name": "B2B", "code": "b2b"},
         }
-        for employee_id in (first_id, second_id)
+        for employee_id in employee_ids
     ]
     platform = FakePlatform(
         department_ids=(department_id,),
         responses={
             "/departments": [{"id": department_id, "name": "B2B", "code": "b2b"}],
-            "/employees": {"items": employees, "total": 2, "pages": 1},
-            f"/employees/{first_id}/bitrix-metrics": {
-                "status": "ok",
-                "employee_id": first_id,
-                "snapshot_date": "2026-07-18",
-            },
-            f"/employees/{second_id}/bitrix-metrics": {
-                "status": "no_bitrix_id",
-                "employee_id": second_id,
-                "snapshot_date": "2026-07-18",
+            "/employees": {"items": employees, "total": len(employees), "pages": 1},
+            **{
+                f"/employees/{employee_id}/bitrix-metrics": {
+                    "status": snapshot_status,
+                    "employee_id": employee_id,
+                    "snapshot_date": "2026-10-20",
+                    "total_open_deals": 3 if snapshot_status == "ready" else 0,
+                    "stage_counts": {"NEW": 3} if snapshot_status == "ready" else {},
+                }
+                for employee_id, snapshot_status in zip(employee_ids, statuses, strict=True)
             },
         },
     )
 
     result = await adapter(platform).get_crm_statistics(department_ref="b2b")
 
-    assert result["status"] == "partial"
-    assert result["data"]["coverage"] == {
-        "source_total": 2,
-        "source_complete": True,
-        "employees": 2,
-        "available": 1,
-        "unavailable": 1,
-    }
+    coverage = result["data"]["coverage"]
+    available, not_applicable, unavailable, unknown = counts
+    assert result["status"] == status
+    assert (
+        coverage["available"],
+        coverage["not_applicable"],
+        coverage["unavailable"],
+        coverage["unknown_status"],
+    ) == counts
+    assert coverage["by_status"] == dict(Counter(statuses))
+    # Counters come only from usable snapshots.
+    assert result["data"]["totals"].get("total_open_deals", 0) == 3 * available
+    assert result["data"]["stage_counts"] == ({"NEW": 3 * available} if available else {})
 
 
 @pytest.mark.anyio
@@ -1975,7 +2439,9 @@ async def test_list_call_transcripts_is_acl_scoped_and_projects_no_phone_or_audi
     calls_params = dict(next(params for path, params in platform.calls if path == "/calls"))
     assert calls_params["department_id"] == department_id
     assert calls_params["employee_id"] == employee_id
-    assert calls_params["scenario_id"] == scenario_id
+    # The scenario is applied by the gateway over all its versions, not by OKK's exact-version filter.
+    assert "scenario_id" not in calls_params
+    assert result["effective_scope"]["scenario_code"] == "discovery"
 
 
 @pytest.mark.anyio

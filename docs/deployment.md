@@ -1,6 +1,31 @@
 # Production deployment and release gate
 
-## 1.3.0 candidate (not released)
+## 1.3.1 candidate (not released)
+
+Fixes from a read-only check of 1.3.0 against the OKK test stand; no new
+upstream endpoint, OAuth scope or tool. Verified locally on 2026-10-20: the
+full test suite, Ruff lint and format, and a replay of saved read-only
+test-stand responses (CSM, 01.10–20.10) through the changed adapter:
+`get_scenario_performance` gives `csm_universal` 13 evaluations, 89.0 and
+76.9% (8 on the current version, 5 on the archived one), as OKK shows;
+`get_criterion_performance` gives 143 observations over 11 criteria for an
+admin, and for a CSM viewer 88 observations with 5 evaluations / 55
+observations reported as excluded (`partial`). Not verified: a deployed
+gateway.
+
+Release gate in addition to the steps below:
+
+- On the stand period with an archived scenario version, scenario and
+  criterion statistics equal the OKK numbers for admin and viewer accounts;
+  the viewer's result is `partial` with `criteria_version_not_readable`.
+- `get_employee_card` with `period=week` shows the same `period_summary`
+  dates as the OKK employee page for Monday–today.
+- The authenticated release smoke passes the 28-tool inventory.
+
+## 1.3.0 release (2026-10-20)
+
+Public `/health` reported `1.3.0` on 2026-10-20. The candidate notes below are
+kept as they were written before the release.
 
 Prerequisite: the OKK platform this gateway reads must already serve
 `GET /call-plans/plan-fact` (the plan constructor). Against an older platform
@@ -240,9 +265,12 @@ public OKK login API and does not mint OKK tokens.
    allowlist. Inject one foreign ID and one conflicting name in the adapter
    regression: the former must be absent, the latter must be normalized, and
    the result must be `partial` with non-zero diagnostic counters.
-9. Exercise all 27 tools. For the 21 non-transcript tools, search saved JSON
+9. Exercise all 28 tools (`server/scripts/smoke_release.py` checks the exact
+   inventory). For the 21 tools that are neither transcript tools nor
+   `list_call_phone_records`, search saved JSON
    for forbidden fields/values: password, phone, audio, transcript, prompt,
-   reasoning, script, Megafon, routing and pipeline. For the six transcript
+   reasoning, script, Megafon, routing and pipeline. The phone tool returns
+   numbers only under `okk.phones.read`. For the six transcript
    tools, verify text appears only under their documented transcript/preview/
    excerpt fields, while structured phone, audio, PBX/external IDs and internal
    processing fields remain absent. Test raw, diarized and segment formats,
@@ -276,7 +304,7 @@ public OKK login API and does not mint OKK tokens.
     `/.well-known/openai-apps-challenge` returns exactly that token as plain
     text, and verify `/userinfo` with a newly authorized `openid email` token
     returns only `sub`, normalized `email` and `email_verified=true`. Upload the
-    final skill tree, import `chatgpt-app-submission.json`, scan all 27 tools,
+    final skill tree, import `chatgpt-app-submission.json`, scan all 28 tools,
     and review the five positive and three negative cases before submission.
 
 ## Dokploy production compose

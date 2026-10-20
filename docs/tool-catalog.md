@@ -14,7 +14,7 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `list_employees` | Safe employee directory without credentials or phone fields; locally rechecked against live department membership |
 | `list_supervisors` | Live explicit-grant catalog for the private `Руководители` section |
 | `get_supervisor_call_statistics` | Basic call volume, duration, direction and day trend for one accessible transcription-only supervisor |
-| `get_employee_card` | KPI, plan/client/CRM, strengths, growth, focus and task windows |
+| `get_employee_card` | KPI, plan/client/CRM, strengths, growth and focus for one date range; task windows only on an older OKK API |
 | `compare_employees` | KPI, strengths, growth, focus and task-count comparison |
 | `get_call_statistics` | Call volume, evaluated count, scores, pass rate, duration and trend |
 | `list_call_phone_records` | ACL-scoped client phone page or exact all-status call count/existence by normalized number; requires `okk.phones.read` |
@@ -28,11 +28,11 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `get_client_statistics` | New/regular contacts, missed/no-answer, plus first/repeat touches and returns from repeat to first after the reset period for departments that track client touches |
 | `get_crm_statistics` | Bitrix deals, tasks, overdue, stages, funnels and employee coverage |
 | `get_growth_insights` | Employee and aggregate AI strengths/growth areas without raw reasoning |
-| `get_mentoring_statistics` | Active/recent completed task window, status/overdue/completion stats |
-| `list_scenarios` | Safe scenario catalog; archived rows are admin-only |
+| `get_mentoring_statistics` | `not_available` in the new OKK (`mentoring_not_kept_by_okk`); on an older OKK API the active/recent completed task window, status/overdue/completion stats |
+| `list_scenarios` | Safe scenario catalog; archived rows are admin-only. No evaluation counts: OKK no longer keeps the legacy `calls_evaluated` / `avg_score`, use `get_scenario_performance` |
 | `get_scenario_criteria` | Categories, maximum scores, scales, indicators and applicability |
-| `get_scenario_performance` | Evaluation count, employee coverage, score distribution and pass rate: share of evaluations at or above the norm; `pass_rate_basis` says which norm (`department_norm` — per-call `quality_status` from OKK; `scenario_threshold` — scenario `passing_score` on an older OKK API; `null` — unknown, never a guessed 100%) |
-| `get_criterion_performance` | Observation count, score %, penalties, coverage and recency |
+| `get_scenario_performance` | Per scenario (all its versions): evaluation count, per-version counts, employee coverage, score distribution and pass rate: share of evaluations at or above the norm; `pass_rate_basis` says which norm (`department_norm` — per-call `quality_status` from OKK; `scenario_threshold` — scenario `passing_score` on an older OKK API; `null` — unknown, never a guessed 100%) |
+| `get_criterion_performance` | Per criterion code within a scenario (all its versions): observation count, score %, penalties, coverage and recency |
 
 ## Department selection contract
 
@@ -49,8 +49,10 @@ exact after normalizing spaces and punctuation; a unique acronym derived from
 the currently displayed name is also accepted, but the resolver does not guess
 by substring. If a
 selector is absent from the visible scope, ambiguous, or conflicts with a
-simultaneously supplied UUID, the result is `not_available`. The gateway never
-falls back to all visible departments.
+simultaneously supplied UUID, the result is `not_available`. A supplied empty
+or blank `department_ref` names no department and is `not_available` too; to
+mean "no department filter", omit the field. The gateway never falls back to
+all visible departments.
 
 At the conversation layer, Codex matches the user's wording against the live
 catalog returned by `get_access_context`. If more than one current department
@@ -157,8 +159,15 @@ Employee populations expose `source_total`, `returned_population` and
 `source_complete`. Call-derived tools expose source-call counts. Configured
 caps return `partial`; they never claim a complete ranking. CRM exposes only
 the latest snapshot per employee and explicitly rejects an unavailable
-historical date instead of relabeling current data; unavailable employee
-snapshots also make coverage `partial`. Criterion output limits report the
+historical date instead of relabeling current data. Each employee snapshot
+is classified by its OKK status: `ready` — usable, the only one whose counters
+enter `totals`, `stage_counts` and `funnel_counts`; `no_bitrix_id` — the
+employee is not linked to Bitrix, CRM does not apply (`not_applicable`, not a
+gap); `not_configured`, `not_synced`, `error` — no usable snapshot
+(`unavailable`); any other value — `unknown_status`. `coverage` reports these
+counts and `by_status`. Unavailable or unknown snapshots make the result
+`partial`; no usable snapshot at all is `not_available`, or `no_data` when no
+employee is linked to Bitrix. Criterion output limits report the
 matching and returned counts and cannot silently truncate an `ok` result.
 
 Transcript search is deliberately bounded by `TRANSCRIPT_SEARCH_MAX_CALLS`.
@@ -181,6 +190,58 @@ The new OKK has no mentoring: `get_mentoring_statistics` answers
 `not_available` (`mentoring_not_kept_by_okk`), `get_employee_card` sets
 `mentoring_available=false` with null task lists, and `compare_employees`
 reports null task counts — never zero.
+
+`get_employee_card` reads the employee page, the period summary and the plan
+for the same explicit dates — the response `period` — as the OKK employee page
+does; a named period is never passed on for OKK to resolve differently. The
+card is `ok` when every part loaded and `partial` only for the bounded task
+window of an older OKK API or a platform without the call-plan API
+(`plan_fact.status=not_available`) or a CRM snapshot that is `unavailable` or
+`unknown_status` by the CRM classification above; `no_bitrix_id` is no gap.
+
+## Scenario versions
+
+OKK republishes a scenario as a new version under the same code and archives
+the replaced version under `<code>__legacy_<timestamp>`; an evaluation keeps the
+version it was made on. `get_scenario_performance`,
+`get_criterion_performance` and the `scenario_id` filter of
+`list_call_transcripts` / `search_call_transcripts` therefore treat a scenario
+as all its versions:
+
+- An evaluation joins its scenario by the version's code when the account can
+  read that version, otherwise by the code OKK shows on the call row (the code
+  scenario selection chose). Archived versions are readable only by an admin,
+  so for other accounts the call row decides. An archived version takes the
+  code OKK shows on its calls, because OKK cuts a code longer than 21
+  characters in the archived name.
+- A requested `scenario_ids` / `scenario_id` value stands for its whole
+  scenario, also when it names an archived version (admin). Each scenario row is
+  shown by its current version and lists `versions[]` with
+  `scenario_id`, `current` and `evaluations`.
+- Criteria are joined across versions by their criterion `code` within the
+  scenario; a criterion without a code stays separate under its ID. Each row
+  carries `scenario` (current version ID, code, name) and `scenario_versions`
+  (how many versions contributed).
+- An evaluation that cannot be attributed is never dropped silently:
+  `effective_scope.excluded_evaluations` counts it,
+  `excluded_evaluation_reasons` names why, and the result is `partial`.
+  Reasons: `scenario_unknown` (a score without a scenario),
+  `scenario_not_in_current_catalog` (no current visible scenario has that code,
+  e.g. a retired scenario; only without a scenario filter),
+  `criteria_version_not_readable` (the version's criteria are not readable for
+  this account — an archived version for a non-admin; `excluded_observations`
+  counts its criterion observations), `evaluation_items_unavailable` (OKK
+  returned no criterion results for a scored call).
+- The gateway never sends `scenario_id` to OKK `/calls`: OKK filters by the
+  exact version. It reads the scope (bounded by `ANALYTICS_MAX_CALLS`) and
+  takes the scenario's calls itself. For the transcript tools this means
+  `list_call_transcripts` pages those calls itself (`total_calls` counts them,
+  `data.source_complete=false` and `partial` when the scope was capped) and
+  `search_call_transcripts` applies `TRANSCRIPT_SEARCH_MAX_CALLS` to them.
+  A call on a version this account cannot read that OKK names without a code
+  is counted in `effective_scope.excluded_calls` /
+  `excluded_call_reasons` (`scenario_unknown`) and makes the result `partial`;
+  a call with no scenario version belongs to no scenario.
 
 Department records carry the norm as `quality_threshold` (new OKK API) or
 `passing_score` (older API). Scenario and criterion fields the platform no
