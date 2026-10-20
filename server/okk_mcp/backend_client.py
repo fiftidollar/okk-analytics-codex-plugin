@@ -179,6 +179,24 @@ def _call_scenario_code(call: dict[str, Any], version_codes: dict[str, str]) -> 
     return version_codes[version] if version in version_codes else _shown_call_code(call)
 
 
+# Statuses of OKK `/employees/{id}/bitrix-metrics` (module `bitrix_metrics`, the same in the older
+# API): `ready` — today's snapshot; `no_bitrix_id` — the employee is not linked to Bitrix, CRM does
+# not apply to them; the others — no usable snapshot: integration not configured, not synced yet
+# today, sync failed. Any other value is reported as unknown, never guessed.
+_CRM_SNAPSHOT_STATES = {
+    "ready": "available",
+    "no_bitrix_id": "not_applicable",
+    "not_configured": "unavailable",
+    "not_synced": "unavailable",
+    "error": "unavailable",
+}
+
+
+def _crm_snapshot_state(metrics: dict[str, Any]) -> str:
+    """`available`, `not_applicable`, `unavailable` or `unknown_status`."""
+    return _CRM_SNAPSHOT_STATES.get(str(metrics.get("status") or ""), "unknown_status")
+
+
 def _insight_text(value: Any) -> str | None:
     if isinstance(value, str):
         return value.strip() or None
@@ -1771,9 +1789,13 @@ class AnalyticsAdapter:
             ),
             "crm": self._safe_crm(crm),
         }
-        # `partial` only for what is really missing: the bounded task window of the older OKK API or
-        # a platform without call plans.
-        incomplete = mentoring_kept or plan.get("status") == "not_available"
+        # `partial` only for what is really missing: the bounded task window of the older OKK API, a
+        # platform without call plans, or a CRM snapshot that is not usable (not linked is no gap).
+        incomplete = (
+            mentoring_kept
+            or plan.get("status") == "not_available"
+            or _crm_snapshot_state(crm) in {"unavailable", "unknown_status"}
+        )
         return await self.envelope(
             data,
             status="partial" if incomplete else "ok",
@@ -2788,11 +2810,14 @@ class AnalyticsAdapter:
         totals: dict[str, float] = defaultdict(float)
         stages: Counter[str] = Counter()
         funnels: Counter[str] = Counter()
-        available = 0
+        states: Counter[str] = Counter()
         for row in rows:
             metrics = row["metrics"]
-            if metrics.get("status") == "ok":
-                available += 1
+            state = _crm_snapshot_state(metrics)
+            states[state] += 1
+            if state != "available":
+                # Only a usable snapshot carries counters; the others answer zeros that mean nothing.
+                continue
             for key in (
                 "total_open_deals",
                 "deals_without_tasks",
@@ -2813,19 +2838,28 @@ class AnalyticsAdapter:
                 "source_total": source_total,
                 "source_complete": complete,
                 "employees": len(rows),
-                "available": available,
-                "unavailable": len(rows) - available,
+                "available": states["available"],
+                "not_applicable": states["not_applicable"],
+                "unavailable": states["unavailable"],
+                "unknown_status": states["unknown_status"],
+                "by_status": dict(Counter(str(row["metrics"].get("status")) for row in rows)),
             },
             "totals": dict(totals),
             "stage_counts": dict(stages),
             "funnel_counts": dict(funnels),
             "employees": rows,
         }
+        missing = states["unavailable"] + states["unknown_status"]
+        if not states["available"]:
+            # Nobody linked to Bitrix is no data; snapshots that exist but are unusable are not zero.
+            status = "not_available" if missing else "no_data"
+        elif missing or not complete or requested_snapshot:
+            status = "partial"
+        else:
+            status = "ok"
         return await self.envelope(
             data,
-            status="partial"
-            if rows and (not complete or bool(requested_snapshot) or available < len(rows))
-            else ("ok" if rows else "no_data"),
+            status=status,
             scope={**self.department_scope(department_row), "employee_id": employee},
         )
 

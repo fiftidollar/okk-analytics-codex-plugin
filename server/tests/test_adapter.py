@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from uuid import uuid4
 
 import pytest
@@ -655,7 +656,7 @@ async def test_employee_card_contains_growth_and_tasks_without_raw_reasoning():
             "employees": [],
         },
         f"/employees/{employee_id}/bitrix-metrics": {
-            "status": "ok",
+            "status": "ready",
             "total_open_deals": 3,
             "error_message": "internal integration debug must not leave adapter",
         },
@@ -680,7 +681,7 @@ async def test_employee_card_contains_growth_and_tasks_without_raw_reasoning():
     assert ("employee_id", employee_id) in plan_call and ("period", "custom") in plan_call
 
 
-def _new_okk_employee_card(*, call_plans: bool) -> tuple[FakePlatform, str]:
+def _new_okk_employee_card(*, call_plans: bool, crm: str = "no_bitrix_id") -> tuple[FakePlatform, str]:
     """An employee card of the new OKK: no mentoring keys on the page, plans from the constructor."""
     department_id, employee_id = str(uuid4()), str(uuid4())
     employee = {
@@ -704,17 +705,28 @@ def _new_okk_employee_card(*, call_plans: bool) -> tuple[FakePlatform, str]:
             f"/employees/{employee_id}/page-data": {"kpi": {"calls_total": 4}, "aggregated_strengths": []},
             f"/employees/{employee_id}/summary": {"calls_total": 4},
             "/call-plans/plan-fact": plan_fact,
-            f"/employees/{employee_id}/bitrix-metrics": {"status": "no_bitrix_id"},
+            f"/employees/{employee_id}/bitrix-metrics": {"status": crm},
         },
     )
     return platform, employee_id
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(("call_plans", "status"), [(True, "ok"), (False, "partial")])
-async def test_employee_card_is_ok_only_when_every_part_loaded(call_plans, status):
-    # Before: always `partial`, also when nothing was missing.
-    platform, employee_id = _new_okk_employee_card(call_plans=call_plans)
+@pytest.mark.parametrize(
+    ("call_plans", "crm", "status"),
+    [
+        # Before: always `partial`, also when nothing was missing.
+        pytest.param(True, "no_bitrix_id", "ok", id="complete-not-linked"),
+        pytest.param(True, "ready", "ok", id="complete"),
+        pytest.param(False, "ready", "partial", id="no-call-plans"),
+        # A CRM snapshot that exists but is unusable is a missing part, not an empty one.
+        pytest.param(True, "not_synced", "partial", id="crm-not-synced"),
+        pytest.param(True, "error", "partial", id="crm-error"),
+        pytest.param(True, "being_rebuilt", "partial", id="crm-unknown-status"),
+    ],
+)
+async def test_employee_card_is_ok_only_when_every_part_loaded(call_plans, crm, status):
+    platform, employee_id = _new_okk_employee_card(call_plans=call_plans, crm=crm)
 
     result = await adapter(platform).get_employee_card(employee_id)
 
@@ -1808,7 +1820,7 @@ async def test_historical_crm_date_is_not_mislabeled_as_an_available_snapshot():
             "/departments": [{"id": department_id, "name": "B2B", "code": "b2b"}],
             "/employees": {"items": [employee], "total": 1, "pages": 1},
             f"/employees/{employee_id}/bitrix-metrics": {
-                "status": "ok",
+                "status": "ready",
                 "employee_id": employee_id,
                 "snapshot_date": "2026-07-18",
             },
@@ -2047,9 +2059,27 @@ async def test_phone_history_by_number_ending_sends_iso_dates_and_accepts_ending
 
 
 @pytest.mark.anyio
-async def test_crm_coverage_with_unavailable_employee_snapshots_is_partial():
+@pytest.mark.parametrize(
+    ("statuses", "status", "counts"),
+    [
+        # Before: only `ok`, a status OKK never sends, counted as a usable snapshot, so every
+        # department read 0 available and `partial`.
+        pytest.param(("ready", "ready"), "ok", (2, 0, 0, 0), id="ready"),
+        # Not linked to Bitrix: CRM does not apply to the employee, it is not a missing snapshot.
+        pytest.param(("ready", "no_bitrix_id"), "ok", (1, 1, 0, 0), id="not-linked"),
+        pytest.param(
+            ("ready", "not_synced", "error", "not_configured"), "partial", (1, 0, 3, 0), id="missing"
+        ),
+        pytest.param(("ready", "being_rebuilt"), "partial", (1, 0, 0, 1), id="unknown-status"),
+        pytest.param(("no_bitrix_id", "no_bitrix_id"), "no_data", (0, 2, 0, 0), id="nobody-linked"),
+        pytest.param(
+            ("not_configured", "not_configured"), "not_available", (0, 0, 2, 0), id="integration-off"
+        ),
+    ],
+)
+async def test_crm_statistics_classify_every_snapshot_status_okk_returns(statuses, status, counts):
     department_id = str(uuid4())
-    first_id, second_id = str(uuid4()), str(uuid4())
+    employee_ids = [str(uuid4()) for _ in statuses]
     employees = [
         {
             "id": employee_id,
@@ -2057,36 +2087,41 @@ async def test_crm_coverage_with_unavailable_employee_snapshots_is_partial():
             "department_id": department_id,
             "department": {"id": department_id, "name": "B2B", "code": "b2b"},
         }
-        for employee_id in (first_id, second_id)
+        for employee_id in employee_ids
     ]
     platform = FakePlatform(
         department_ids=(department_id,),
         responses={
             "/departments": [{"id": department_id, "name": "B2B", "code": "b2b"}],
-            "/employees": {"items": employees, "total": 2, "pages": 1},
-            f"/employees/{first_id}/bitrix-metrics": {
-                "status": "ok",
-                "employee_id": first_id,
-                "snapshot_date": "2026-07-18",
-            },
-            f"/employees/{second_id}/bitrix-metrics": {
-                "status": "no_bitrix_id",
-                "employee_id": second_id,
-                "snapshot_date": "2026-07-18",
+            "/employees": {"items": employees, "total": len(employees), "pages": 1},
+            **{
+                f"/employees/{employee_id}/bitrix-metrics": {
+                    "status": snapshot_status,
+                    "employee_id": employee_id,
+                    "snapshot_date": "2026-10-20",
+                    "total_open_deals": 3 if snapshot_status == "ready" else 0,
+                    "stage_counts": {"NEW": 3} if snapshot_status == "ready" else {},
+                }
+                for employee_id, snapshot_status in zip(employee_ids, statuses, strict=True)
             },
         },
     )
 
     result = await adapter(platform).get_crm_statistics(department_ref="b2b")
 
-    assert result["status"] == "partial"
-    assert result["data"]["coverage"] == {
-        "source_total": 2,
-        "source_complete": True,
-        "employees": 2,
-        "available": 1,
-        "unavailable": 1,
-    }
+    coverage = result["data"]["coverage"]
+    available, not_applicable, unavailable, unknown = counts
+    assert result["status"] == status
+    assert (
+        coverage["available"],
+        coverage["not_applicable"],
+        coverage["unavailable"],
+        coverage["unknown_status"],
+    ) == counts
+    assert coverage["by_status"] == dict(Counter(statuses))
+    # Counters come only from usable snapshots.
+    assert result["data"]["totals"].get("total_open_deals", 0) == 3 * available
+    assert result["data"]["stage_counts"] == ({"NEW": 3 * available} if available else {})
 
 
 @pytest.mark.anyio

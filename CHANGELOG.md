@@ -32,6 +32,17 @@ Fixes found by a read-only check of 1.3.0 against the OKK test stand.
   same explicit dates (before, the summary got the named period and OKK's own
   range for `week`). It answers `ok` when every part loaded instead of always
   `partial`.
+- CRM statistics read the snapshot statuses OKK actually returns. The gateway
+  counted a snapshot as usable only for `status == "ok"`, which OKK has never
+  sent (it writes `ready`, in the older API too), so every department showed 0
+  available snapshots and `partial`. Now `ready` is usable and the only source
+  of totals, stage and funnel counts; `no_bitrix_id` is "CRM does not apply"
+  (`not_applicable`), not a gap; `not_configured`, `not_synced` and `error` are
+  `unavailable`; any other value is `unknown_status`. `coverage` adds
+  `not_applicable`, `unknown_status` and `by_status`. With no usable snapshot
+  the result is `not_available` (or `no_data` when nobody is linked to
+  Bitrix). The employee card is `partial` when its CRM snapshot is
+  unavailable or unknown.
 - An empty `department_ref` fails closed as `not_available` like a blank or
   unknown one; before, it meant "no filter" and returned all departments.
 - Release smoke expects the 28 registered tools (it missed

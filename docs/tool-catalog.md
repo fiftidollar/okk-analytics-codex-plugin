@@ -159,8 +159,15 @@ Employee populations expose `source_total`, `returned_population` and
 `source_complete`. Call-derived tools expose source-call counts. Configured
 caps return `partial`; they never claim a complete ranking. CRM exposes only
 the latest snapshot per employee and explicitly rejects an unavailable
-historical date instead of relabeling current data; unavailable employee
-snapshots also make coverage `partial`. Criterion output limits report the
+historical date instead of relabeling current data. Each employee snapshot
+is classified by its OKK status: `ready` — usable, the only one whose counters
+enter `totals`, `stage_counts` and `funnel_counts`; `no_bitrix_id` — the
+employee is not linked to Bitrix, CRM does not apply (`not_applicable`, not a
+gap); `not_configured`, `not_synced`, `error` — no usable snapshot
+(`unavailable`); any other value — `unknown_status`. `coverage` reports these
+counts and `by_status`. Unavailable or unknown snapshots make the result
+`partial`; no usable snapshot at all is `not_available`, or `no_data` when no
+employee is linked to Bitrix. Criterion output limits report the
 matching and returned counts and cannot silently truncate an `ok` result.
 
 Transcript search is deliberately bounded by `TRANSCRIPT_SEARCH_MAX_CALLS`.
@@ -189,7 +196,8 @@ for the same explicit dates — the response `period` — as the OKK employee pa
 does; a named period is never passed on for OKK to resolve differently. The
 card is `ok` when every part loaded and `partial` only for the bounded task
 window of an older OKK API or a platform without the call-plan API
-(`plan_fact.status=not_available`). CRM keeps its own `crm.status`.
+(`plan_fact.status=not_available`) or a CRM snapshot that is `unavailable` or
+`unknown_status` by the CRM classification above; `no_bitrix_id` is no gap.
 
 ## Scenario versions
 
