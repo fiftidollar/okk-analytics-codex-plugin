@@ -680,6 +680,66 @@ async def test_employee_card_contains_growth_and_tasks_without_raw_reasoning():
     assert ("employee_id", employee_id) in plan_call and ("period", "custom") in plan_call
 
 
+def _new_okk_employee_card(*, call_plans: bool) -> tuple[FakePlatform, str]:
+    """An employee card of the new OKK: no mentoring keys on the page, plans from the constructor."""
+    department_id, employee_id = str(uuid4()), str(uuid4())
+    employee = {
+        "id": employee_id,
+        "full_name": "Сотрудник",
+        "department_id": department_id,
+        "department": {"id": department_id, "name": "Сопровождение", "code": "csm"},
+        "is_active": True,
+    }
+
+    def plan_fact(_params):
+        if not call_plans:
+            raise OKKNotAvailable("no call plans")
+        return {"weeks": [{"week_start": "2026-10-19", "mode": None}], "items": [], "employees": []}
+
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Сопровождение", "code": "csm"}],
+            f"/employees/{employee_id}": employee,
+            f"/employees/{employee_id}/page-data": {"kpi": {"calls_total": 4}, "aggregated_strengths": []},
+            f"/employees/{employee_id}/summary": {"calls_total": 4},
+            "/call-plans/plan-fact": plan_fact,
+            f"/employees/{employee_id}/bitrix-metrics": {"status": "no_bitrix_id"},
+        },
+    )
+    return platform, employee_id
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("call_plans", "status"), [(True, "ok"), (False, "partial")])
+async def test_employee_card_is_ok_only_when_every_part_loaded(call_plans, status):
+    # Before: always `partial`, also when nothing was missing.
+    platform, employee_id = _new_okk_employee_card(call_plans=call_plans)
+
+    result = await adapter(platform).get_employee_card(employee_id)
+
+    assert result["status"] == status
+    assert result["data"]["mentoring_available"] is False
+
+
+@pytest.mark.anyio
+async def test_employee_card_reads_every_part_for_the_same_dates():
+    # Before: the summary got the named period (OKK's own range for `week`) while the page and the
+    # plan got Monday–today, so one card mixed two periods.
+    platform, employee_id = _new_okk_employee_card(call_plans=True)
+
+    result = await adapter(platform).get_employee_card(employee_id, period="week")
+
+    def dates(path: str) -> tuple[str | None, str | None, str | None]:
+        params = dict(next(params for called, params in platform.calls if called == path))
+        return params.get("period"), params.get("start_date"), params.get("end_date")
+
+    shown = (result["period"]["start"], result["period"]["end"])
+    assert dates(f"/employees/{employee_id}/summary") == ("custom", *shown)
+    assert dates("/call-plans/plan-fact") == ("custom", *shown)
+    assert dates(f"/employees/{employee_id}/page-data")[1:] == shown
+
+
 @pytest.mark.anyio
 async def test_criterion_performance_aggregates_safe_items_only():
     department_id = str(uuid4())

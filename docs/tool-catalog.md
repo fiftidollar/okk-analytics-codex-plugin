@@ -182,6 +182,13 @@ The new OKK has no mentoring: `get_mentoring_statistics` answers
 `mentoring_available=false` with null task lists, and `compare_employees`
 reports null task counts — never zero.
 
+`get_employee_card` reads the employee page, the period summary and the plan
+for the same explicit dates — the response `period` — as the OKK employee page
+does; a named period is never passed on for OKK to resolve differently. The
+card is `ok` when every part loaded and `partial` only for the bounded task
+window of an older OKK API or a platform without the call-plan API
+(`plan_fact.status=not_available`). CRM keeps its own `crm.status`.
+
 ## Scenario versions
 
 OKK republishes a scenario as a new version under the same code and archives

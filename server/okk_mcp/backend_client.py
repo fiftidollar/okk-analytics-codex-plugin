@@ -1714,10 +1714,13 @@ class AnalyticsAdapter:
             if department_row is None:
                 return await self.envelope({}, status="not_available")
         bounds = _period_bounds(period, start_date, end_date)
-        common = _period_query(period, start_date, end_date)
+        # Every part of the card for the same explicit dates, as the OKK employee page asks: a named
+        # period would let OKK pick its own range for the summary.
         page_data, summary, (plan, _, _), crm = await asyncio.gather(
             self._page_data(employee_id, *bounds),
-            self._get(f"/employees/{employee_id}/summary", **common),
+            self._get(
+                f"/employees/{employee_id}/summary", period="custom", start_date=bounds[0], end_date=bounds[1]
+            ),
             self.optional_plan_fact(department_row, *bounds, [employee], employee_id=employee["id"]),
             self._get(f"/employees/{employee_id}/bitrix-metrics"),
         )
@@ -1745,9 +1748,12 @@ class AnalyticsAdapter:
             ),
             "crm": self._safe_crm(crm),
         }
+        # `partial` only for what is really missing: the bounded task window of the older OKK API or
+        # a platform without call plans.
+        incomplete = mentoring_kept or plan.get("status") == "not_available"
         return await self.envelope(
             data,
-            status="partial",
+            status="partial" if incomplete else "ok",
             scope={**self.department_scope(department_row), "employee_id": employee_id},
             period=bounds,
         )
