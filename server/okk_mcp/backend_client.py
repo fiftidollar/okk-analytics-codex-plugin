@@ -30,6 +30,9 @@ from okk_mcp.platform_client import (
 from okk_mcp.reporting import department_report_contract, plan_fact_report_contract, safe_plan_fact
 
 MSK = ZoneInfo("Europe/Moscow")
+# OKK phone search (`POST /calls/phone-lookup`): a whole number from 10 digits, its ending from 4.
+PHONE_WHOLE_NUMBER_MIN_DIGITS = 10
+PHONE_ENDING_MIN_DIGITS = 4
 LOGGER = logging.getLogger("okk_mcp.analytics_trace")
 UUID_IN_PATH = re.compile(
     r"/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
@@ -131,6 +134,27 @@ def _insight_text(value: Any) -> str | None:
     return None
 
 
+def _keeps_mentoring(page: dict[str, Any]) -> bool:
+    """The old OKK sent mentoring tasks with the employee page; the new one removed mentoring. A page
+    without the keys means "not kept", which must not read as "no tasks" or zero."""
+    return "mentoring_tasks" in page or "completed_tasks" in page
+
+
+_STRUCTURED_INSIGHTS = {"strengths": "strengths", "growth_areas": "growth_zones"}
+_TEXT_INSIGHTS = {"strengths": "aggregated_strengths", "growth_areas": "aggregated_improvements"}
+
+
+def _insight_labels(page: dict[str, Any], field: str) -> list[Any]:
+    """What to count across employees: criterion names from structured insights when OKK sends
+    them (`insights.summary`); its text lines carry each employee's own numbers and never match."""
+    insights = page.get("insights")
+    summary = insights.get("summary") if isinstance(insights, dict) else None
+    items = summary.get(_STRUCTURED_INSIGHTS[field]) if isinstance(summary, dict) else None
+    if isinstance(items, list):
+        return [item["name"] for item in items if isinstance(item, dict) and item.get("name")]
+    return page.get(_TEXT_INSIGHTS[field]) or []
+
+
 def _aware_datetime(value: Any) -> datetime | None:
     if not value:
         return None
@@ -206,9 +230,17 @@ def _normalized_phone_filter(value: str) -> str:
         digits = "7" + digits[1:]
     elif len(digits) == 10:
         digits = "7" + digits
-    if not 3 <= len(digits) <= 20:
+    # OKK searches a whole number from 10 digits and the number ending from 4; fewer is no search.
+    if not PHONE_ENDING_MIN_DIGITS <= len(digits) <= 20:
         raise ValueError("Invalid phone number")
     return digits
+
+
+def _phone_matches(phone: Any, searched: str) -> bool:
+    """A row answers the search: the same whole number, or for a short search, the same ending."""
+    if not isinstance(phone, str):
+        return False
+    return phone == searched if len(searched) >= PHONE_WHOLE_NUMBER_MIN_DIGITS else phone.endswith(searched)
 
 
 def _selector_key(value: Any) -> str:
@@ -311,9 +343,14 @@ class AnalyticsAdapter:
 
     async def _phone_lookup(self, **body: Any) -> Any:
         context = await self.context()
+        # The body goes out as JSON: period dates as ISO strings, not `date` objects.
         return await self.platform.phone_lookup_with_context(
             context,
-            {key: value for key, value in body.items() if value is not None},
+            {
+                key: value.isoformat() if isinstance(value, date) else value
+                for key, value in body.items()
+                if value is not None
+            },
         )
 
     async def _bounded(self, factory: Callable[[], Awaitable[Any]]) -> Any:
@@ -523,6 +560,8 @@ class AnalyticsAdapter:
             "description",
             "is_active",
             "min_call_duration",
+            # Department norm: `quality_threshold` in the new OKK API, `passing_score` in the old one.
+            "quality_threshold",
             "passing_score",
             "client_status_tracked",
             "client_touch_tracked",
@@ -550,7 +589,8 @@ class AnalyticsAdapter:
             else None,
             "position": row.get("position"),
             "is_active": bool(row.get("is_active", True)),
-            "focus_text": row.get("focus_text"),
+            # The saved mentoring focus went with mentoring in the new OKK: no field, not an empty one.
+            **({"focus_text": row.get("focus_text")} if "focus_text" in row else {}),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
         }
@@ -629,6 +669,8 @@ class AnalyticsAdapter:
 
     @staticmethod
     def _safe_scenario(row: dict[str, Any]) -> dict[str, Any]:
+        # Only fields OKK sends: the new API has no scenario `passing_score` (the norm is the
+        # department's), and a missing field must not read as "no threshold".
         return {
             key: row.get(key)
             for key in (
@@ -645,6 +687,7 @@ class AnalyticsAdapter:
                 "created_at",
                 "updated_at",
             )
+            if key in row
         }
 
     @staticmethod
@@ -670,6 +713,9 @@ class AnalyticsAdapter:
             "call_status": row.get("call_status"),
             "manual_tag": row.get("manual_tag"),
             "call_summary": row.get("call_summary"),
+            # The new OKK API: the norm verdict of the score and the client status (new / existing)
+            # instead of a client card.
+            **{key: row[key] for key in ("quality_status", "quality_threshold", "client_status") if key in row},
             "employee": {
                 "id": str(employee.get("id")),
                 "full_name": employee.get("full_name"),
@@ -794,6 +840,8 @@ class AnalyticsAdapter:
                                 "sort_order",
                                 "not_applicable_condition",
                             )
+                            # The new OKK API dropped `scoring_type` and `is_required`: omitted, not null.
+                            if key in item
                         },
                     }
                 )
@@ -1625,6 +1673,7 @@ class AnalyticsAdapter:
             self.optional_plan_fact(department_row, *bounds, [employee], employee_id=employee["id"]),
             self._get(f"/employees/{employee_id}/bitrix-metrics"),
         )
+        mentoring_kept = _keeps_mentoring(page_data)
         active = [self._safe_task(row) for row in page_data.get("mentoring_tasks") or []]
         completed = [self._safe_task(row) for row in page_data.get("completed_tasks") or []]
         data = {
@@ -1640,9 +1689,12 @@ class AnalyticsAdapter:
                 "week_start": page_data.get("week_start"),
                 "week_end": page_data.get("week_end"),
             },
-            "active_mentoring_tasks": active[:task_page_size],
-            "completed_mentoring_tasks": completed[:task_page_size],
-            "mentoring_history_window": {"active_limit": 5, "completed_limit": 10, "complete": False},
+            "mentoring_available": mentoring_kept,
+            "active_mentoring_tasks": active[:task_page_size] if mentoring_kept else None,
+            "completed_mentoring_tasks": completed[:task_page_size] if mentoring_kept else None,
+            "mentoring_history_window": (
+                {"active_limit": 5, "completed_limit": 10, "complete": False} if mentoring_kept else None
+            ),
             "crm": self._safe_crm(crm),
         }
         return await self.envelope(
@@ -1681,6 +1733,7 @@ class AnalyticsAdapter:
 
         async def load(employee_id: str) -> dict[str, Any]:
             page = await self._bounded(lambda: self._page_data(employee_id, *bounds))
+            mentoring_kept = _keeps_mentoring(page)
             return {
                 "employee": index[employee_id],
                 "kpi": page.get("kpi") or {},
@@ -1688,8 +1741,8 @@ class AnalyticsAdapter:
                 "growth_areas": page.get("aggregated_improvements") or [],
                 "weekly_focus": page.get("weekly_focus") or [],
                 "saved_focus": page.get("focus_text"),
-                "active_tasks": len(page.get("mentoring_tasks") or []),
-                "completed_tasks_recent": len(page.get("completed_tasks") or []),
+                "active_tasks": len(page.get("mentoring_tasks") or []) if mentoring_kept else None,
+                "completed_tasks_recent": len(page.get("completed_tasks") or []) if mentoring_kept else None,
             }
 
         data = await asyncio.gather(*(load(value) for value in effective))
@@ -2000,7 +2053,7 @@ class AnalyticsAdapter:
         # report their unfiltered count as the answer to an exact-number query.
         if any(
             "counterparty_phone_normalized" not in row
-            or (normalized_phone and row["counterparty_phone_normalized"] != normalized_phone)
+            or (normalized_phone and not _phone_matches(row["counterparty_phone_normalized"], normalized_phone))
             for row in rows
         ):
             return await self.envelope(
@@ -2030,6 +2083,11 @@ class AnalyticsAdapter:
         total = int(payload.get("total") or 0)
         data = {
             "items": items,
+            "phone_match": (
+                None
+                if not normalized_phone
+                else "whole_number" if len(normalized_phone) >= PHONE_WHOLE_NUMBER_MIN_DIGITS else "number_ending"
+            ),
             "matching_calls_total": total if normalized_phone and not omitted else None,
             "has_call": (total > 0) if normalized_phone and not omitted else None,
             "source_calls_total": total,
@@ -2715,24 +2773,26 @@ class AnalyticsAdapter:
         else:
             employees, complete, _, _ = await self.employees(department_id=department, include_inactive=False)
 
-        async def load(row: dict[str, Any]) -> dict[str, Any]:
+        async def load(row: dict[str, Any]) -> tuple[dict[str, Any], dict[str, list[Any]]]:
             page = await self._bounded(lambda: self._page_data(row["id"], *bounds))
-            return {
+            shown = {
                 "employee": row,
                 "strengths": page.get("aggregated_strengths") or [],
                 "growth_areas": page.get("aggregated_improvements") or [],
                 "weekly_focus": page.get("weekly_focus") or [],
                 "saved_focus": page.get("focus_text"),
             }
+            return shown, {field: _insight_labels(page, field) for field in _TEXT_INSIGHTS}
 
-        rows = await asyncio.gather(*(load(row) for row in employees))
+        loaded = await asyncio.gather(*(load(row) for row in employees))
+        rows = [shown for shown, _ in loaded]
 
         def employee_mentions(field: str) -> list[dict[str, Any]]:
             labels: dict[str, str] = {}
             mentions: dict[str, set[str]] = defaultdict(set)
-            for row in rows:
+            for row, counted in loaded:
                 employee_key = str(row["employee"]["id"])
-                for value in row[field]:
+                for value in counted[field]:
                     text = _insight_text(value)
                     if not text:
                         continue
@@ -2785,13 +2845,21 @@ class AnalyticsAdapter:
         else:
             employees, complete, _, _ = await self.employees(department_id=department, include_inactive=True)
 
-        async def load(row: dict[str, Any]) -> list[dict[str, Any]]:
+        async def load(row: dict[str, Any]) -> tuple[bool, list[dict[str, Any]]]:
             data = await self._bounded(lambda: self._page_data(row["id"], *bounds))
             tasks = (data.get("mentoring_tasks") or []) + (data.get("completed_tasks") or [])
-            return [{"employee": row, **self._safe_task(task)} for task in tasks]
+            return _keeps_mentoring(data), [{"employee": row, **self._safe_task(task)} for task in tasks]
 
-        nested = await asyncio.gather(*(load(row) for row in employees))
-        source_tasks = [task for group in nested for task in group]
+        loaded = await asyncio.gather(*(load(row) for row in employees))
+        if employees and not any(kept for kept, _ in loaded):
+            # The new OKK removed mentoring: say so instead of reporting an empty task window.
+            return await self.envelope(
+                {"reason": "mentoring_not_kept_by_okk"},
+                status="not_available",
+                scope={**self.department_scope(department_row), "employee_id": employee},
+                period=bounds,
+            )
+        source_tasks = [task for _, group in loaded for task in group]
         tasks: list[dict[str, Any]] = []
         unfilterable_timestamps = 0
         for task in source_tasks:

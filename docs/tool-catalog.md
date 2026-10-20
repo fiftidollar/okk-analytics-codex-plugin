@@ -101,9 +101,12 @@ and segment responses expose `next_start_char` / `next_start_segment`; repeat
 the request with that offset until null. Text chunks include `source_sha256`
 to detect a transcript changed between reads.
 
-`list_call_phone_records` uses the indexed upstream exact `phone_number` filter
+`list_call_phone_records` uses the indexed upstream `phone_number` filter
 through read-only `POST /calls/phone-lookup`; the number is in the JSON body,
-outside access-log URLs.
+outside access-log URLs. From 10 digits OKK matches the whole number, 4–9
+digits match the number ending (`phone_match`: `whole_number` or
+`number_ending`); fewer than 4 digits is not a search. Period dates go in the
+body as ISO strings.
 Its `matching_calls_total` counts all ACL-visible journal records for the number,
 including missed, short and in-process calls. `has_call` answers existence. The
 default `all` period sends no date bounds, so the full available journal is
@@ -167,11 +170,23 @@ segment output is projected to `speaker`, `text`, `start` and `end` only.
 
 Aggregate strengths and growth areas count distinct employees mentioning a
 normalized observation. Repeated or differently cased copies of the same
-observation inside one employee card do not inflate `employee_mentions`.
+observation inside one employee card do not inflate `employee_mentions`. When
+OKK sends structured insights (`insights.summary`), the criterion name is
+counted: the text lines of the new OKK carry each employee's own numbers.
 
-The current OKK employee-page API returns at most five active and ten completed
+The older OKK employee-page API returns at most five active and ten completed
 mentoring tasks per employee. Task tools therefore mark this window as
 `complete=false` and return `partial`; they never present it as full history.
+The new OKK has no mentoring: `get_mentoring_statistics` answers
+`not_available` (`mentoring_not_kept_by_okk`), `get_employee_card` sets
+`mentoring_available=false` with null task lists, and `compare_employees`
+reports null task counts — never zero.
+
+Department records carry the norm as `quality_threshold` (new OKK API) or
+`passing_score` (older API). Scenario and criterion fields the platform no
+longer sends (`passing_score`, `scoring_type`, `is_required`) are omitted, not
+null. Call rows of the new API carry `quality_status`, `quality_threshold` and
+`client_status` (new or existing client) instead of a client card.
 # Department reporting contract (1.2.3 candidate)
 
 `get_department_statistics.data.reporting_contract` supplies source policy,

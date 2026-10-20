@@ -41,6 +41,19 @@
   mix, the rate is `null`. Before, a scenario without `passing_score` compared
   every score with 0 and reported 100%. The new `pass_rate_basis` field names
   the norm used. This lets OKK drop the unused scenario threshold.
+- Works with the new OKK architecture API (production switch 10.2026; test
+  fixtures follow live test-stand response shapes): mentoring is gone in OKK, so the mentoring
+  tool answers `not_available` and the employee card and comparison report
+  mentoring as unavailable instead of empty windows and zero counts; growth
+  insights count the shared criterion name from `insights.summary`, because the
+  new text lines carry each employee's numbers; departments list their norm
+  (`quality_threshold`); scenario and criterion fields OKK no longer sends are
+  omitted instead of null; call rows add `quality_status`, `quality_threshold`
+  and `client_status`; phone history accepts the number-ending search of 4–9
+  digits (`phone_match`). Older OKK responses keep working as before.
+- Fix: `list_call_phone_records` with a period other than `all` put `date`
+  objects into the JSON body and failed (`TypeError`); dates now go as ISO
+  strings.
 
 ## 1.2.3 — 2026-09-09
 

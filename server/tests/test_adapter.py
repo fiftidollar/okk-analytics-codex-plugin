@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from uuid import uuid4
 
 import pytest
@@ -469,6 +470,21 @@ async def test_viewer_defense_in_depth_drops_departments_not_present_in_live_cla
 
     assert [row["id"] for row in result["data"]] == [visible_id]
     assert leaked_id not in str(result)
+
+
+@pytest.mark.anyio
+async def test_department_norm_of_the_new_okk_api_is_listed():
+    # The new OKK sends the department norm as `quality_threshold` (no `passing_score`): the
+    # projection dropped it, and departments were listed without their norm.
+    department_id = str(uuid4())
+    platform = FakePlatform(
+        role="admin",
+        responses={"/departments": [{"id": department_id, "name": "Сопровождение", "code": "csm", "quality_threshold": 80}]},
+    )
+
+    result = await adapter(platform).list_departments()
+
+    assert result["data"][0]["quality_threshold"] == 80
 
 
 @pytest.mark.anyio
@@ -1054,7 +1070,6 @@ async def test_department_card_by_name_returns_complete_department_sources_only(
             "department": {"id": b2b_id, "name": "B2B", "code": "b2b"},
             "position": None,
             "is_active": True,
-            "focus_text": None,
             "created_at": None,
             "updated_at": None,
         }
@@ -1553,6 +1568,117 @@ async def test_growth_mentions_count_unique_employees_not_duplicate_text_occurre
     result = await adapter(platform).get_growth_insights(department_ref="b2b", period="today")
 
     assert result["data"]["strengths"] == [{"text": "Discovery", "employee_mentions": 2}]
+
+
+@pytest.mark.anyio
+async def test_growth_mentions_count_criteria_when_okk_lines_carry_personal_numbers():
+    # The new OKK writes each employee's own numbers into the text lines: counted by line, every
+    # growth area had one mention. The shared criterion name lives in `insights.summary`.
+    department_id = str(uuid4())
+    first_id, second_id = str(uuid4()), str(uuid4())
+    employees = [
+        {
+            "id": employee_id,
+            "full_name": employee_id,
+            "department_id": department_id,
+            "department": {"id": department_id, "name": "Сопровождение", "code": "csm"},
+        }
+        for employee_id in (first_id, second_id)
+    ]
+
+    def page(missed: int, lost: str) -> dict:
+        return {
+            "aggregated_improvements": [f"Следующий шаг — недобор в {missed} из 4 звонков, теряет в среднем {lost} балла"],
+            "insights": {
+                "summary": {
+                    "growth_zones": [{"name": "Следующий шаг", "missed_calls": missed, "evaluated_calls": 4}],
+                    "strengths": [],
+                }
+            },
+        }
+
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Сопровождение", "code": "csm"}],
+            "/employees": {"items": employees, "total": 2, "pages": 1},
+            f"/employees/{first_id}/page-data": page(1, "6,0"),
+            f"/employees/{second_id}/page-data": page(3, "4,5"),
+        },
+    )
+
+    result = await adapter(platform).get_growth_insights(department_ref="csm", period="today")
+
+    assert result["data"]["growth_areas"] == [{"text": "Следующий шаг", "employee_mentions": 2}]
+
+
+@pytest.mark.anyio
+async def test_mentoring_removed_from_okk_reads_as_not_kept_not_as_zero():
+    # The new OKK has no mentoring: an employee page without the task keys is "not kept", while
+    # the old projection reported an empty task window and 0 active tasks.
+    department_id, employee_id = str(uuid4()), str(uuid4())
+    employee = {
+        "id": employee_id,
+        "full_name": "Employee",
+        "department_id": department_id,
+        "department": {"id": department_id, "name": "Сопровождение", "code": "csm"},
+    }
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Сопровождение", "code": "csm"}],
+            "/employees": {"items": [employee], "total": 1, "pages": 1},
+            f"/employees/{employee_id}": employee,
+            f"/employees/{employee_id}/page-data": {"kpi": {"calls_total": 5}, "aggregated_strengths": []},
+        },
+    )
+
+    statistics = await adapter(platform).get_mentoring_statistics(department_ref="csm", period="today")
+    compared = await adapter(platform).compare_employees(
+        employee_ids=[employee_id], department_ref="csm", period="today"
+    )
+
+    assert (statistics["status"], statistics["data"]["reason"]) == ("not_available", "mentoring_not_kept_by_okk")
+    assert (compared["data"][0]["active_tasks"], compared["data"][0]["completed_tasks_recent"]) == (None, None)
+
+
+@pytest.mark.anyio
+async def test_phone_history_by_number_ending_sends_iso_dates_and_accepts_ending_matches():
+    # The new OKK searches the number ending for 4–9 digits; a row with a longer number that ends
+    # with them is the answer, not a broken filter. Period dates leave as JSON strings: `date`
+    # objects in the body failed to serialize.
+    department_id, employee_id, call_id = (str(uuid4()) for _ in range(3))
+    call = {
+        "id": call_id,
+        "employee_id": employee_id,
+        "counterparty_phone_normalized": "79991234567",
+        "employee": {
+            "id": employee_id,
+            "full_name": "Сотрудник",
+            "department": {"id": department_id, "name": "Продажи", "code": "sales"},
+        },
+    }
+    bodies = []
+
+    def phone_rows(body):
+        bodies.append(json.loads(json.dumps(body)))
+        return {"items": [call], "total": 1, "page": 1, "page_size": 25, "pages": 1}
+
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Продажи", "code": "sales"}],
+            "/calls/phone-lookup": phone_rows,
+        },
+    )
+
+    result = await adapter(platform).list_call_phone_records(
+        phone_number="4567", department_ref="sales", period="custom", start_date="2026-10-01", end_date="2026-10-19"
+    )
+
+    assert (result["status"], result["data"]["phone_match"]) == ("ok", "number_ending")
+    assert result["data"]["matching_calls_total"] == 1
+    assert (bodies[0]["date_from"], bodies[0]["date_to"]) == ("2026-10-01", "2026-10-19")
 
 
 @pytest.mark.anyio
