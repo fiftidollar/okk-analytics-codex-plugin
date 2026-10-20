@@ -945,7 +945,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             "Сравнивает сценарии по числу оценок, охвату сотрудников, среднему/минимальному/максимальному баллу и "
             "pass rate — доле оценок не ниже нормы. pass_rate_basis: department_norm — норма отдела, сохранённая "
             "с оценкой (признак OKK у звонка); scenario_threshold — порог сценария (старый API OKK); null — "
-            "нормы нет или признаки смешаны, доля неизвестна."
+            "нормы нет или признаки смешаны, доля неизвестна. Сценарий — все его версии: оценки архивных "
+            "версий входят в строку сценария (versions[]). Оценки, которые нельзя отнести к сценарию, "
+            "перечислены в effective_scope.excluded_evaluations, и ответ тогда partial."
         ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE, SCENARIO_SCOPE),
@@ -975,7 +977,12 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Эффективность критериев",
-        description="Показывает самые сильные/слабые критерии: наблюдения, охват, средний балл/процент, штрафы и последнее наблюдение.",
+        description=(
+            "Показывает самые сильные/слабые критерии: наблюдения, охват, средний балл/процент, штрафы и "
+            "последнее наблюдение. Критерий — его код в сценарии по всем версиям сценария. Наблюдения, "
+            "которые нельзя отнести к критерию (например, критерии архивной версии недоступны аккаунту), "
+            "перечислены в effective_scope.excluded_*, и ответ тогда partial."
+        ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE, SCENARIO_SCOPE),
         structured_output=True,

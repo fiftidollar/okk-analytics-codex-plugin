@@ -840,6 +840,219 @@ async def test_scenario_pass_rate_follows_the_norm_okk_reports(scenario_fields, 
     assert (row["pass_rate"], row["pass_rate_basis"]) == expected
 
 
+def _versioned_csm(*, role: str) -> tuple[FakePlatform, dict[str, str]]:
+    """CSM like the test stand on 20.10: the scenario was republished, and some calls of the
+    period were evaluated on the archived version (`csm_universal__legacy_…`). The archive is
+    readable only by an admin; every call row carries the business code OKK shows for it."""
+    ids = {name: str(uuid4()) for name in ("department", "current", "archived", "employee")}
+    ids.update(
+        {
+            f"{version}_{code}": str(uuid4())
+            for version in ("current", "archived")
+            for code in ("greeting", "next_step")
+        }
+    )
+
+    def version(version_name: str, code: str, *, active: bool) -> dict:
+        return {
+            "id": ids[version_name],
+            "department_id": ids["department"],
+            "name": "Сопровождение",
+            "code": code,
+            "is_active": active,
+            "calls_evaluated": 0,
+            "avg_score": None,
+            "categories": [
+                {
+                    "id": str(uuid4()),
+                    "name": "Разговор",
+                    "items": [
+                        {"id": ids[f"{version_name}_{item}"], "code": item, "name": item, "max_score": 10}
+                        for item in ("greeting", "next_step")
+                    ],
+                }
+            ],
+        }
+
+    current = version("current", "csm_universal", active=True)
+    archived = version("archived", "csm_universal__legacy_20261015093413861488", active=False)
+
+    def scenarios(params):
+        include_archive = ("include_inactive", "true") in params
+        assert not include_archive or role == "admin", "OKK answers 403 to a viewer asking for the archive"
+        return {"items": [current, archived] if include_archive else [current], "pages": 1}
+
+    def call(version_name: str, score: int, status: str, items: tuple[int, int]) -> tuple[dict, dict]:
+        call_id = str(uuid4())
+        row = {
+            "id": call_id,
+            "employee_id": ids["employee"],
+            "scenario_id": ids[version_name],
+            "detected_scenario_code": "csm_universal",
+            "scenario": {"id": ids[version_name], "name": "Сопровождение", "code": "csm_universal"},
+            "quality_score": score,
+            "quality_status": status,
+            "started_at": "2026-10-14T10:00:00+03:00",
+        }
+        detail = {
+            "evaluation": {
+                "items": [
+                    {"checklist_item_id": ids[f"{version_name}_{code}"], "score": value, "max_score": 10}
+                    for code, value in zip(("greeting", "next_step"), items, strict=True)
+                ]
+            }
+        }
+        return row, detail
+
+    evaluated = [
+        call("current", 90, "norm", (10, 8)),
+        call("current", 70, "below_norm", (10, 2)),
+        call("archived", 100, "norm", (10, 10)),
+        call("archived", 80, "norm", (0, 10)),
+    ]
+    rows = [row for row, _ in evaluated] + [
+        {"id": str(uuid4()), "employee_id": ids["employee"], "scenario_id": None, "quality_score": None}
+    ]
+
+    def calls(params):
+        # OKK filters `scenario_id` by the exact version: the archived version's calls stay out.
+        wanted = dict(params).get("scenario_id")
+        items = [row for row in rows if not wanted or row["scenario_id"] == wanted]
+        return {"items": items, "total": len(items), "pages": 1}
+
+    platform = FakePlatform(
+        role=role,
+        department_ids=(ids["department"],),
+        responses={
+            "/departments": [{"id": ids["department"], "name": "Сопровождение", "code": "csm"}],
+            "/scenarios": scenarios,
+            "/calls": calls,
+            **{f"/calls/{row['id']}": detail for row, detail in evaluated},
+        },
+    )
+    return platform, ids
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("role", "requested"),
+    [
+        pytest.param("viewer", (), id="viewer-without-the-archive"),
+        pytest.param("admin", (), id="admin-without-filter"),
+        pytest.param("admin", ("current", "archived"), id="admin-both-versions"),
+        pytest.param("admin", ("archived",), id="admin-archived-version"),
+    ],
+)
+async def test_scenario_performance_counts_evaluations_of_every_scenario_version(role, requested):
+    # Before: only the current version's calls counted (2 of 4, avg 80, pass 50%) and the result said
+    # `ok`; with both ids an admin got two rows for one scenario.
+    platform, ids = _versioned_csm(role=role)
+
+    result = await adapter(platform).get_scenario_performance(
+        period="custom",
+        start_date="2026-10-01",
+        end_date="2026-10-20",
+        scenario_ids=[ids[name] for name in requested] or None,
+    )
+
+    [row] = result["data"]
+    assert result["status"] == "ok"
+    assert row["scenario"]["id"] == ids["current"]
+    assert (row["evaluations"], row["avg_score"], row["pass_rate"]) == (4, 85.0, 75.0)
+    assert {
+        (version["scenario_id"], version["current"], version["evaluations"]) for version in row["versions"]
+    } == {
+        (ids["current"], True, 2),
+        (ids["archived"], False, 2),
+    }
+    assert result["effective_scope"]["excluded_evaluations"] == 0
+
+
+@pytest.mark.anyio
+async def test_scenario_performance_reports_evaluations_it_cannot_attribute():
+    department_id, scenario_id = str(uuid4()), str(uuid4())
+    retired_version = str(uuid4())
+    calls = [
+        {"id": str(uuid4()), "scenario_id": scenario_id, "quality_score": 90, "quality_status": "norm"},
+        # A scenario that has no current version any more, and a score without any scenario.
+        {
+            "id": str(uuid4()),
+            "scenario_id": retired_version,
+            "scenario": {"id": retired_version, "name": "Старый", "code": "csm_old"},
+            "quality_score": 60,
+            "quality_status": "below_norm",
+        },
+        {"id": str(uuid4()), "scenario_id": None, "quality_score": 70, "quality_status": "norm"},
+    ]
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Сопровождение", "code": "csm"}],
+            "/scenarios": {
+                "items": [{"id": scenario_id, "department_id": department_id, "name": "CSM", "code": "csm"}],
+                "pages": 1,
+            },
+            "/calls": {"items": calls, "total": len(calls), "pages": 1},
+        },
+    )
+
+    result = await adapter(platform).get_scenario_performance(period="today")
+
+    assert result["status"] == "partial"
+    assert result["data"][0]["evaluations"] == 1
+    assert result["effective_scope"]["excluded_evaluations"] == 2
+    assert result["effective_scope"]["excluded_evaluation_reasons"] == {
+        "scenario_not_in_current_catalog": 1,
+        "scenario_unknown": 1,
+    }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("role", "scenario", "expected", "excluded"),
+    [
+        # Before: the archived version's evaluations were dropped and the result said `ok`.
+        pytest.param("admin", None, {"greeting": (4, 75.0), "next_step": (4, 75.0)}, 0, id="admin-all"),
+        pytest.param(
+            "admin", "current", {"greeting": (4, 75.0), "next_step": (4, 75.0)}, 0, id="admin-scenario"
+        ),
+        pytest.param(
+            "admin", "archived", {"greeting": (4, 75.0), "next_step": (4, 75.0)}, 0, id="admin-archived"
+        ),
+        # A viewer cannot read the archived version's criteria: those observations are reported.
+        pytest.param("viewer", None, {"greeting": (2, 100.0), "next_step": (2, 50.0)}, 2, id="viewer-all"),
+        pytest.param(
+            "viewer", "current", {"greeting": (2, 100.0), "next_step": (2, 50.0)}, 2, id="viewer-scenario"
+        ),
+    ],
+)
+async def test_criterion_performance_joins_scenario_versions_by_criterion_code(
+    role, scenario, expected, excluded
+):
+    platform, ids = _versioned_csm(role=role)
+
+    result = await adapter(platform).get_criterion_performance(
+        period="custom",
+        start_date="2026-10-01",
+        end_date="2026-10-20",
+        scenario_id=ids[scenario] if scenario else None,
+    )
+
+    observed = {
+        row["criterion"]["code"]: (row["observations"], row["avg_score_percent"]) for row in result["data"]
+    }
+    assert observed == expected
+    assert all(row["scenario"]["id"] == ids["current"] for row in result["data"])
+    scope = result["effective_scope"]
+    assert scope["excluded_evaluations"] == excluded
+    assert scope["excluded_observations"] == 2 * excluded
+    if excluded:
+        assert result["status"] == "partial"
+        assert scope["excluded_evaluation_reasons"] == {"criteria_version_not_readable": excluded}
+    else:
+        assert result["status"] == "ok"
+
+
 def test_session_cipher_is_authenticated_and_models_store_hashes_not_raw_mcp_tokens():
     cipher = SessionCipher("x" * 32)
     sealed = cipher.seal("upstream-token")

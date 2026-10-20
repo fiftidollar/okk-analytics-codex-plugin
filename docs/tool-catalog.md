@@ -31,8 +31,8 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `get_mentoring_statistics` | Active/recent completed task window, status/overdue/completion stats |
 | `list_scenarios` | Safe scenario catalog; archived rows are admin-only |
 | `get_scenario_criteria` | Categories, maximum scores, scales, indicators and applicability |
-| `get_scenario_performance` | Evaluation count, employee coverage, score distribution and pass rate: share of evaluations at or above the norm; `pass_rate_basis` says which norm (`department_norm` — per-call `quality_status` from OKK; `scenario_threshold` — scenario `passing_score` on an older OKK API; `null` — unknown, never a guessed 100%) |
-| `get_criterion_performance` | Observation count, score %, penalties, coverage and recency |
+| `get_scenario_performance` | Per scenario (all its versions): evaluation count, per-version counts, employee coverage, score distribution and pass rate: share of evaluations at or above the norm; `pass_rate_basis` says which norm (`department_norm` — per-call `quality_status` from OKK; `scenario_threshold` — scenario `passing_score` on an older OKK API; `null` — unknown, never a guessed 100%) |
+| `get_criterion_performance` | Per criterion code within a scenario (all its versions): observation count, score %, penalties, coverage and recency |
 
 ## Department selection contract
 
@@ -181,6 +181,36 @@ The new OKK has no mentoring: `get_mentoring_statistics` answers
 `not_available` (`mentoring_not_kept_by_okk`), `get_employee_card` sets
 `mentoring_available=false` with null task lists, and `compare_employees`
 reports null task counts — never zero.
+
+## Scenario versions
+
+OKK republishes a scenario as a new version under the same code and archives
+the replaced version under `<code>__legacy_<timestamp>`; an evaluation keeps the
+version it was made on. `get_scenario_performance` and
+`get_criterion_performance` therefore count a scenario as all its versions:
+
+- An evaluation joins its scenario by the version's code when the account can
+  read that version, otherwise by the code OKK shows on the call row (the code
+  scenario selection chose). Archived versions are readable only by an admin,
+  so for other accounts the call row decides.
+- A requested `scenario_ids` / `scenario_id` value stands for its whole
+  scenario, also when it names an archived version (admin). Each scenario row is
+  shown by its current version and lists `versions[]` with
+  `scenario_id`, `current` and `evaluations`.
+- Criteria are joined across versions by their criterion `code` within the
+  scenario; a criterion without a code stays separate under its ID. Each row
+  carries `scenario` (current version ID, code, name) and `scenario_versions`
+  (how many versions contributed).
+- An evaluation that cannot be attributed is never dropped silently:
+  `effective_scope.excluded_evaluations` counts it,
+  `excluded_evaluation_reasons` names why, and the result is `partial`.
+  Reasons: `scenario_unknown` (a score without a scenario),
+  `scenario_not_in_current_catalog` (no current visible scenario has that code,
+  e.g. a retired scenario; only without a scenario filter),
+  `criteria_version_not_readable` (the version's criteria are not readable for
+  this account — an archived version for a non-admin; `excluded_observations`
+  counts its criterion observations), `evaluation_items_unavailable` (OKK
+  returned no criterion results for a scored call).
 
 Department records carry the norm as `quality_threshold` (new OKK API) or
 `passing_score` (older API). Scenario and criterion fields the platform no
