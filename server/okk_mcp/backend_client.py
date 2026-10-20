@@ -711,7 +711,9 @@ class AnalyticsAdapter:
     @staticmethod
     def _safe_scenario(row: dict[str, Any]) -> dict[str, Any]:
         # Only fields OKK sends: the new API has no scenario `passing_score` (the norm is the
-        # department's), and a missing field must not read as "no threshold".
+        # department's), and a missing field must not read as "no threshold". The legacy
+        # `calls_evaluated` / `avg_score` are not projected: the new OKK leaves them at 0 / null,
+        # and evaluation counts come from get_scenario_performance.
         return {
             key: row.get(key)
             for key in (
@@ -723,8 +725,6 @@ class AnalyticsAdapter:
                 "passing_score",
                 "is_active",
                 "is_default",
-                "calls_evaluated",
-                "avg_score",
                 "created_at",
                 "updated_at",
             )

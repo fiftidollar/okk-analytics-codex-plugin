@@ -1627,6 +1627,36 @@ async def test_employee_population_cap_is_reported_as_partial_with_source_total(
 
 
 @pytest.mark.anyio
+async def test_scenario_catalog_does_not_present_counters_okk_no_longer_keeps():
+    # The new OKK leaves the legacy `calls_evaluated` / `avg_score` at 0 / null for every scenario;
+    # shown as metrics they read as "no evaluations". Counts come from get_scenario_performance.
+    department_id = str(uuid4())
+    scenario = {
+        "id": str(uuid4()),
+        "department_id": department_id,
+        "name": "Сопровождение",
+        "code": "csm_universal",
+        "is_active": True,
+        "calls_evaluated": 0,
+        "avg_score": None,
+    }
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Сопровождение", "code": "csm"}],
+            "/scenarios": {"items": [scenario], "pages": 1},
+        },
+    )
+
+    result = await adapter(platform).list_scenarios()
+
+    [item] = result["data"]["items"]
+    assert item["code"] == "csm_universal"
+    assert "calls_evaluated" not in item
+    assert "avg_score" not in item
+
+
+@pytest.mark.anyio
 async def test_scenario_search_and_historical_flag_are_actually_forwarded_for_admin():
     department_id = str(uuid4())
     active_id, archived_id = str(uuid4()), str(uuid4())

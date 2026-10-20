@@ -888,7 +888,10 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Список сценариев",
-        description="Безопасный каталог доступных активных и исторических сценариев без промптов, скриптов и маршрутизации.",
+        description=(
+            "Безопасный каталог доступных активных и исторических сценариев без промптов, скриптов и "
+            "маршрутизации. Число оценок и средний балл сценария — в get_scenario_performance."
+        ),
         annotations=READ_ONLY,
         meta=_security_meta(SCENARIO_SCOPE),
         structured_output=True,

@@ -29,7 +29,7 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `get_crm_statistics` | Bitrix deals, tasks, overdue, stages, funnels and employee coverage |
 | `get_growth_insights` | Employee and aggregate AI strengths/growth areas without raw reasoning |
 | `get_mentoring_statistics` | Active/recent completed task window, status/overdue/completion stats |
-| `list_scenarios` | Safe scenario catalog; archived rows are admin-only |
+| `list_scenarios` | Safe scenario catalog; archived rows are admin-only. No evaluation counts: OKK no longer keeps the legacy `calls_evaluated` / `avg_score`, use `get_scenario_performance` |
 | `get_scenario_criteria` | Categories, maximum scores, scales, indicators and applicability |
 | `get_scenario_performance` | Per scenario (all its versions): evaluation count, per-version counts, employee coverage, score distribution and pass rate: share of evaluations at or above the norm; `pass_rate_basis` says which norm (`department_norm` — per-call `quality_status` from OKK; `scenario_threshold` — scenario `passing_score` on an older OKK API; `null` — unknown, never a guessed 100%) |
 | `get_criterion_performance` | Per criterion code within a scenario (all its versions): observation count, score %, penalties, coverage and recency |
