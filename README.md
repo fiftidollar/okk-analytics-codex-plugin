@@ -6,19 +6,26 @@ and Claude Code never receive the password, and every result is restricted by
 the account's current role, department ACL and explicit private-supervisor
 grants.
 
-Release 1.2.4 is live in production. It repairs direct transcript reads,
+Release 1.2.4 repaired direct transcript reads,
 supports complete long transcripts through offset chunks, and adds an exact
 phone-history tool with the new `okk.phones.read` scope. The phone tool requires
 the matching platform read-only `POST /calls/phone-lookup` contract, now live
 on production and test-stand. The number travels in the
 JSON body, outside access-log URLs.
 
-Release 1.3.0 is prepared but not released. It reads weekly call plans from the
+Release 1.3.0 is live in production since 2026-10-20 (public `/health` reports
+`1.3.0`). It reads weekly call plans from the
 OKK plan constructor (`/call-plans/plan-fact`), so it must follow an OKK
 platform release that has that API; on an older platform only the plan section
 is reported as `not_available`. It also fixes the plugin packages to match what
 Codex 0.154 and Claude Code 2.1 actually load, and restricts new OAuth clients
 to return addresses on this computer or on known client sites.
+
+Release 1.3.1 is prepared but not released. Scenario and criterion statistics
+count evaluations of every scenario version and report anything they cannot
+attribute; the employee card reads all its parts for one date range; an empty
+department selector fails closed; the release smoke checks the real 28-tool
+inventory. See [CHANGELOG.md](CHANGELOG.md).
 
 The account must have a working local OKK password. An account provisioned only
 through HR/SSO needs a local OKK password set by the normal account-management

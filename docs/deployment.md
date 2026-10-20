@@ -1,6 +1,31 @@
 # Production deployment and release gate
 
-## 1.3.0 candidate (not released)
+## 1.3.1 candidate (not released)
+
+Fixes from a read-only check of 1.3.0 against the OKK test stand; no new
+upstream endpoint, OAuth scope or tool. Verified locally on 2026-10-20: the
+full test suite, Ruff lint and format, and a replay of saved read-only
+test-stand responses (CSM, 01.10–20.10) through the changed adapter:
+`get_scenario_performance` gives `csm_universal` 13 evaluations, 89.0 and
+76.9% (8 on the current version, 5 on the archived one), as OKK shows;
+`get_criterion_performance` gives 143 observations over 11 criteria for an
+admin, and for a CSM viewer 88 observations with 5 evaluations / 55
+observations reported as excluded (`partial`). Not verified: a deployed
+gateway.
+
+Release gate in addition to the steps below:
+
+- On the stand period with an archived scenario version, scenario and
+  criterion statistics equal the OKK numbers for admin and viewer accounts;
+  the viewer's result is `partial` with `criteria_version_not_readable`.
+- `get_employee_card` with `period=week` shows the same `period_summary`
+  dates as the OKK employee page for Monday–today.
+- The authenticated release smoke passes the 28-tool inventory.
+
+## 1.3.0 release (2026-10-20)
+
+Public `/health` reported `1.3.0` on 2026-10-20. The candidate notes below are
+kept as they were written before the release.
 
 Prerequisite: the OKK platform this gateway reads must already serve
 `GET /call-plans/plan-fact` (the plan constructor). Against an older platform
