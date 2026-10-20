@@ -1,6 +1,12 @@
 # Production deployment and release gate
 
-## 1.3.1 candidate (not released)
+## 1.3.1 — released 2026-10-20
+
+Deployed to the production Compose on 2026-10-20 (PR #5, `ae4c18d`). After the
+deployment: `/health` reported `1.3.1`, `/ready` reported `ready`, the OAuth
+protected-resource metadata was served, and `/mcp` without a token answered 401.
+A tool call from a signed-in client was not made by the release author.
+
 
 Fixes from a read-only check of 1.3.0 against the OKK test stand; no new
 upstream endpoint, OAuth scope or tool. Verified locally on 2026-10-20: the

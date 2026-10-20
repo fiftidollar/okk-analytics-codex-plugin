@@ -21,7 +21,7 @@ is reported as `not_available`. It also fixes the plugin packages to match what
 Codex 0.154 and Claude Code 2.1 actually load, and restricts new OAuth clients
 to return addresses on this computer or on known client sites.
 
-Release 1.3.1 is prepared but not released. Scenario and criterion statistics
+Release 1.3.1 is live since 2026-10-20 (public `/health` reports `1.3.1`). Scenario and criterion statistics
 count evaluations of every scenario version and report anything they cannot
 attribute; the employee card reads all its parts for one date range; an empty
 department selector fails closed; the release smoke checks the real 28-tool
@@ -274,10 +274,10 @@ well-known route returns only that token.
 
 This is a live production plugin, not a test-stand connector. Its public MCP URL
 is `https://okk-mcp.akfixdev.ru/mcp`, and its upstream is the production OKK API
-above. Release `1.3.0` is live: public `/health` reported `1.3.0` on
-`2026-10-20`. It registers 28 read-only tools, including the ACL-safe private
+above. Release `1.3.1` is live: public `/health` reported `1.3.1` on
+`2026-10-20` (`1.3.0` earlier that day). It registers 28 read-only tools, including the ACL-safe private
 Supervisors catalog, its dedicated call/transcript tools and the phone-history
-tool. Release `1.3.1` is prepared, not released. The verification evidence of
+tool. The verification evidence of
 each production release (roster grounding, report semantics, phone lookup) is
 recorded in [deployment.md](docs/deployment.md). Existing pre-`1.1.0` sessions
 must re-authorize before calling transcript tools. Repository/package state
