@@ -163,9 +163,11 @@ plugin at the test-stand API.
 ## Live production inventory
 
 - Public repository: `https://github.com/fiftidollar/okk-analytics-codex-plugin`.
-- Dokploy project/environment: OKK production, Compose `okk-analytics-mcp`
-  (`4vZgCU2D0Jj7LBv2_DA2k`).
-- Source: branch `main`, `docker-compose.dokploy.yml`.
+- Dokploy project/environment: «OKK (Grand Briar)» production, Compose
+  `okk-analytics-mcp` (`xSJhXno3g6xrjYavLSTa-`, stack `okk-analytics-mcp-gb-cqekoa`
+  on `31.128.41.185` since 2026-10-14; the old `4vZgCU2D0Jj7LBv2_DA2k` is retired).
+- Source: branch `main`, `docker-compose.dokploy.yml`. Auto-deploy is off: a push
+  to `main` does not deploy; the release deploys the Compose explicitly.
 - Public issuer/resource: `https://okk-mcp.akfixdev.ru` and
   `https://okk-mcp.akfixdev.ru/mcp`.
 - Dedicated PostgreSQL and authenticated Redis are private Compose services;
