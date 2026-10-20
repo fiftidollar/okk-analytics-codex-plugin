@@ -461,8 +461,9 @@ class AnalyticsAdapter:
         department_id: Any = None,
         department_ref: Any = None,
     ) -> tuple[dict[str, Any] | None, bool]:
-        """Resolve only against ACL-visible departments; never broaden a failed selector."""
-        selectors = [value for value in (department_id, department_ref) if value not in (None, "")]
+        """Resolve only against ACL-visible departments; never broaden a failed selector. A supplied
+        empty or blank selector names no department, so it fails closed like an unknown one."""
+        selectors = [value for value in (department_id, department_ref) if value is not None]
         if not selectors:
             return None, False
         departments = await self.departments()

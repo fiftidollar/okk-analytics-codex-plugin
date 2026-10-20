@@ -1179,7 +1179,11 @@ async def test_named_department_outside_acl_never_falls_back_to_visible_ord_popu
         ("get_criterion_performance", {"department_ref": "B2B"}),
     ],
 )
-async def test_every_department_scoped_tool_fails_closed_on_an_inaccessible_name(method_name, kwargs):
+# Before: an empty selector counted as "no filter" and returned every visible department.
+@pytest.mark.parametrize("selector", ["B2B", "", "   "], ids=["inaccessible", "empty", "blank"])
+async def test_every_department_scoped_tool_fails_closed_on_an_inaccessible_name(
+    method_name, kwargs, selector
+):
     ord_id = str(uuid4())
     platform = FakePlatform(
         department_ids=(ord_id,),
@@ -1187,6 +1191,12 @@ async def test_every_department_scoped_tool_fails_closed_on_an_inaccessible_name
             "/departments": [{"id": ord_id, "name": "ORD", "code": "ord"}],
         },
     )
+    kwargs = {
+        key: ([selector] if key == "department_refs" else selector)
+        if key in ("department_ref", "department_refs")
+        else value
+        for key, value in kwargs.items()
+    }
 
     result = await getattr(adapter(platform), method_name)(**kwargs)
 

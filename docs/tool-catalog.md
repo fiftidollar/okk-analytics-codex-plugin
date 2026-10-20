@@ -49,8 +49,10 @@ exact after normalizing spaces and punctuation; a unique acronym derived from
 the currently displayed name is also accepted, but the resolver does not guess
 by substring. If a
 selector is absent from the visible scope, ambiguous, or conflicts with a
-simultaneously supplied UUID, the result is `not_available`. The gateway never
-falls back to all visible departments.
+simultaneously supplied UUID, the result is `not_available`. A supplied empty
+or blank `department_ref` names no department and is `not_available` too; to
+mean "no department filter", omit the field. The gateway never falls back to
+all visible departments.
 
 At the conversation layer, Codex matches the user's wording against the live
 catalog returned by `get_access_context`. If more than one current department
