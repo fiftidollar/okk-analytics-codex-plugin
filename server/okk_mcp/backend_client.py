@@ -1235,7 +1235,7 @@ class AnalyticsAdapter:
                         "tool": "search_supervisor_call_transcripts",
                         "use_for": "full-text search across accessible supervisor transcripts",
                     },
-                    {"tool": "get_employee_card", "use_for": "one employee KPI, insights, mentoring and CRM"},
+                    {"tool": "get_employee_card", "use_for": "one employee KPI, plan, insights and CRM"},
                     {
                         "tool": "compare_employees",
                         "use_for": "employee comparison, optionally guarded by department",
@@ -1270,7 +1270,10 @@ class AnalyticsAdapter:
                     },
                     {"tool": "get_crm_statistics", "use_for": "latest Bitrix snapshots only"},
                     {"tool": "get_growth_insights", "use_for": "aggregated AI strengths and growth areas"},
-                    {"tool": "get_mentoring_statistics", "use_for": "bounded mentoring-task window"},
+                    {
+                        "tool": "get_mentoring_statistics",
+                        "use_for": "mentoring tasks of an older OKK API; the new OKK keeps none (not_available)",
+                    },
                     {"tool": "list_scenarios", "use_for": "visible scenario catalog"},
                     {"tool": "get_scenario_criteria", "use_for": "business criteria of one visible scenario"},
                     {
@@ -1302,7 +1305,11 @@ class AnalyticsAdapter:
                     "calls": "source_calls/source_calls_total and partial identify truncation",
                     "transcript_search": "scanned_calls/source_calls_total and source_complete identify bounded search",
                     "phone_calls": "matching_calls_total is the indexed full result count, not the returned page size",
-                    "mentoring": "active 5 and completed 10 tasks per employee; always a bounded window",
+                    "mentoring": (
+                        "the new OKK keeps no mentoring: not_available (mentoring_not_kept_by_okk), never zero "
+                        "tasks; an older OKK API exposes at most 5 active and 10 completed tasks per employee, "
+                        "always a bounded window"
+                    ),
                     "crm": "latest snapshot per employee only; requested historical dates are never mislabeled",
                     "historical_scenarios": "available only when the connected OKK role exposes them",
                 },

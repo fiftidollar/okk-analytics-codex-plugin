@@ -14,7 +14,7 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `list_employees` | Safe employee directory without credentials or phone fields; locally rechecked against live department membership |
 | `list_supervisors` | Live explicit-grant catalog for the private `Руководители` section |
 | `get_supervisor_call_statistics` | Basic call volume, duration, direction and day trend for one accessible transcription-only supervisor |
-| `get_employee_card` | KPI, plan/client/CRM, strengths, growth, focus and task windows |
+| `get_employee_card` | KPI, plan/client/CRM, strengths, growth and focus for one date range; task windows only on an older OKK API |
 | `compare_employees` | KPI, strengths, growth, focus and task-count comparison |
 | `get_call_statistics` | Call volume, evaluated count, scores, pass rate, duration and trend |
 | `list_call_phone_records` | ACL-scoped client phone page or exact all-status call count/existence by normalized number; requires `okk.phones.read` |
@@ -28,7 +28,7 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `get_client_statistics` | New/regular contacts, missed/no-answer, plus first/repeat touches and returns from repeat to first after the reset period for departments that track client touches |
 | `get_crm_statistics` | Bitrix deals, tasks, overdue, stages, funnels and employee coverage |
 | `get_growth_insights` | Employee and aggregate AI strengths/growth areas without raw reasoning |
-| `get_mentoring_statistics` | Active/recent completed task window, status/overdue/completion stats |
+| `get_mentoring_statistics` | `not_available` in the new OKK (`mentoring_not_kept_by_okk`); on an older OKK API the active/recent completed task window, status/overdue/completion stats |
 | `list_scenarios` | Safe scenario catalog; archived rows are admin-only. No evaluation counts: OKK no longer keeps the legacy `calls_evaluated` / `avg_score`, use `get_scenario_performance` |
 | `get_scenario_criteria` | Categories, maximum scores, scales, indicators and applicability |
 | `get_scenario_performance` | Per scenario (all its versions): evaluation count, per-version counts, employee coverage, score distribution and pass rate: share of evaluations at or above the norm; `pass_rate_basis` says which norm (`department_norm` — per-call `quality_status` from OKK; `scenario_threshold` — scenario `passing_score` on an older OKK API; `null` — unknown, never a guessed 100%) |

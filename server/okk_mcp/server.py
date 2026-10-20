@@ -248,7 +248,11 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Список отделов",
-        description="Возвращает доступные отделы и их KPI-настройки: пороги, минимальную длительность и недельный план.",
+        description=(
+            "Возвращает доступные отделы и их KPI-настройки: норму оценки (quality_threshold, в старом API "
+            "OKK — passing_score), минимальную длительность звонка и какие клиентские показатели ведёт отдел "
+            "(client_status_tracked, client_touch_tracked). План звонков — в get_plan_fact_statistics."
+        ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,
@@ -389,8 +393,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     @mcp.tool(
         title="Полная карточка сотрудника",
         description=(
-            "Возвращает KPI, план/факт, клиентские и CRM-метрики, AI-сильные стороны, зоны роста, "
-            "недельный/сохранённый фокус, активные и последние завершённые наставнические задачи."
+            "Возвращает KPI, план/факт, клиентские и CRM-метрики, AI-сильные стороны, зоны роста и "
+            "недельный фокус за один и тот же период. Наставничества в новом OKK нет: "
+            "mentoring_available=false, списки задач null."
         ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
@@ -855,7 +860,11 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Статистика наставнических задач",
-        description="Максимально доступная через текущий API история задач: рекомендации, статусы, сроки, просрочка, completion rate и скорость выполнения; ответ явно отмечает ограниченное окно истории.",
+        description=(
+            "Наставнические задачи. В новом OKK наставничества нет: ответ not_available "
+            "(mentoring_not_kept_by_okk), это не ноль задач. Старый API OKK отдавал ограниченное окно "
+            "истории: статусы, сроки, просрочка, completion rate и скорость выполнения."
+        ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,
