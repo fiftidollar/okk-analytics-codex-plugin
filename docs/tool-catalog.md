@@ -203,8 +203,10 @@ window of an older OKK API or a platform without the call-plan API
 
 OKK republishes a scenario as a new version under the same code and archives
 the replaced version under `<code>__legacy_<timestamp>`; an evaluation keeps the
-version it was made on. `get_scenario_performance` and
-`get_criterion_performance` therefore count a scenario as all its versions:
+version it was made on. `get_scenario_performance`,
+`get_criterion_performance` and the `scenario_id` filter of
+`list_call_transcripts` / `search_call_transcripts` therefore treat a scenario
+as all its versions:
 
 - An evaluation joins its scenario by the version's code when the account can
   read that version, otherwise by the code OKK shows on the call row (the code
@@ -230,6 +232,16 @@ version it was made on. `get_scenario_performance` and
   this account — an archived version for a non-admin; `excluded_observations`
   counts its criterion observations), `evaluation_items_unavailable` (OKK
   returned no criterion results for a scored call).
+- The gateway never sends `scenario_id` to OKK `/calls`: OKK filters by the
+  exact version. It reads the scope (bounded by `ANALYTICS_MAX_CALLS`) and
+  takes the scenario's calls itself. For the transcript tools this means
+  `list_call_transcripts` pages those calls itself (`total_calls` counts them,
+  `data.source_complete=false` and `partial` when the scope was capped) and
+  `search_call_transcripts` applies `TRANSCRIPT_SEARCH_MAX_CALLS` to them.
+  A call on a version this account cannot read that OKK names without a code
+  is counted in `effective_scope.excluded_calls` /
+  `excluded_call_reasons` (`scenario_unknown`) and makes the result `partial`;
+  a call with no scenario version belongs to no scenario.
 
 Department records carry the norm as `quality_threshold` (new OKK API) or
 `passing_score` (older API). Scenario and criterion fields the platform no

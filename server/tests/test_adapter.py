@@ -912,11 +912,14 @@ async def test_scenario_pass_rate_follows_the_norm_okk_reports(scenario_fields, 
     assert (row["pass_rate"], row["pass_rate_basis"]) == expected
 
 
-def _versioned_csm(*, role: str, code: str = "csm_universal") -> tuple[FakePlatform, dict[str, str]]:
+def _versioned_csm(
+    *, role: str, code: str = "csm_universal", unnamed_call: bool = False
+) -> tuple[FakePlatform, dict[str, str]]:
     """CSM like the test stand on 20.10: the scenario was republished, and some calls of the
     period were evaluated on the archived version (`csm_universal__legacy_…`). The archive is
     readable only by an admin; every call row carries the business code OKK shows for it. Like
-    OKK, the archived code keeps only the first 21 characters of a longer code."""
+    OKK, the archived code keeps only the first 21 characters of a longer code. `unnamed_call`
+    adds an evaluated call whose version nobody can read and OKK names without a code."""
     ids = {name: str(uuid4()) for name in ("department", "current", "archived", "employee")}
     ids.update(
         {
@@ -955,11 +958,18 @@ def _versioned_csm(*, role: str, code: str = "csm_universal") -> tuple[FakePlatf
         assert not include_archive or role == "admin", "OKK answers 403 to a viewer asking for the archive"
         return {"items": [current, archived] if include_archive else [current], "pages": 1}
 
+    employee = {
+        "id": ids["employee"],
+        "full_name": "Сотрудник",
+        "department": {"id": ids["department"], "name": "Сопровождение", "code": "csm"},
+    }
+
     def call(version_name: str, score: int, status: str, items: tuple[int, int]) -> tuple[dict, dict]:
         call_id = str(uuid4())
         row = {
             "id": call_id,
             "employee_id": ids["employee"],
+            "employee": employee,
             "scenario_id": ids[version_name],
             "detected_scenario_code": code,
             "scenario": {"id": ids[version_name], "name": "Сопровождение", "code": code},
@@ -984,8 +994,25 @@ def _versioned_csm(*, role: str, code: str = "csm_universal") -> tuple[FakePlatf
         call("archived", 80, "norm", (0, 10)),
     ]
     rows = [row for row, _ in evaluated] + [
-        {"id": str(uuid4()), "employee_id": ids["employee"], "scenario_id": None, "quality_score": None}
+        {
+            "id": str(uuid4()),
+            "employee_id": ids["employee"],
+            "employee": employee,
+            "scenario_id": None,
+            "quality_score": None,
+        }
     ]
+    if unnamed_call:
+        rows.append(
+            {
+                "id": str(uuid4()),
+                "employee_id": ids["employee"],
+                "employee": employee,
+                "scenario_id": str(uuid4()),
+                "quality_score": 75,
+                "quality_status": "norm",
+            }
+        )
 
     def calls(params):
         # OKK filters `scenario_id` by the exact version: the archived version's calls stay out.
@@ -1001,6 +1028,10 @@ def _versioned_csm(*, role: str, code: str = "csm_universal") -> tuple[FakePlatf
             "/scenarios": scenarios,
             "/calls": calls,
             **{f"/calls/{row['id']}": detail for row, detail in evaluated},
+            **{
+                f"/calls/{row['id']}/transcript": {"transcript": "Менеджер: договорились о следующем шаге."}
+                for row in rows
+            },
         },
     )
     return platform, ids
@@ -1159,6 +1190,55 @@ async def test_criterion_performance_joins_scenario_versions_by_criterion_code(
         assert scope["excluded_evaluation_reasons"] == {"criteria_version_not_readable": excluded}
     else:
         assert result["status"] == "ok"
+
+
+async def _scenario_transcripts(
+    analytics: AnalyticsAdapter, tool: str, scenario_id: str
+) -> tuple[dict, list]:
+    scope = {
+        "period": "custom",
+        "start_date": "2026-10-01",
+        "end_date": "2026-10-20",
+        "scenario_id": scenario_id,
+    }
+    if tool == "list":
+        result = await analytics.list_call_transcripts(**scope)
+    else:
+        result = await analytics.search_call_transcripts("следующем шаге", **scope)
+    return result, [row["call"] for row in result["data"]["items"]]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("tool", ["list", "search"])
+@pytest.mark.parametrize(
+    ("role", "version"), [("viewer", "current"), ("admin", "current"), ("admin", "archived")]
+)
+async def test_call_transcripts_of_a_scenario_cover_every_scenario_version(tool, role, version):
+    # Before: `scenario_id` went to OKK `/calls`, which filters by the exact version, so the calls
+    # evaluated on the other version of the same scenario were missing.
+    platform, ids = _versioned_csm(role=role)
+
+    result, calls = await _scenario_transcripts(adapter(platform), tool, ids[version])
+
+    assert result["status"] == "ok"
+    assert sorted(call["scenario_id"] for call in calls) == sorted(
+        [ids["current"], ids["current"], ids["archived"], ids["archived"]]
+    )
+    assert result["effective_scope"]["excluded_calls"] == 0
+    assert all("scenario_id" not in dict(params) for path, params in platform.calls if path == "/calls")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("tool", ["list", "search"])
+async def test_call_transcripts_of_a_scenario_report_calls_they_cannot_place(tool):
+    platform, ids = _versioned_csm(role="viewer", unnamed_call=True)
+
+    result, calls = await _scenario_transcripts(adapter(platform), tool, ids["current"])
+
+    assert result["status"] == "partial"
+    assert len(calls) == 4
+    assert result["effective_scope"]["excluded_calls"] == 1
+    assert result["effective_scope"]["excluded_call_reasons"] == {"scenario_unknown": 1}
 
 
 def test_session_cipher_is_authenticated_and_models_store_hashes_not_raw_mcp_tokens():
@@ -2359,7 +2439,9 @@ async def test_list_call_transcripts_is_acl_scoped_and_projects_no_phone_or_audi
     calls_params = dict(next(params for path, params in platform.calls if path == "/calls"))
     assert calls_params["department_id"] == department_id
     assert calls_params["employee_id"] == employee_id
-    assert calls_params["scenario_id"] == scenario_id
+    # The scenario is applied by the gateway over all its versions, not by OKK's exact-version filter.
+    assert "scenario_id" not in calls_params
+    assert result["effective_scope"]["scenario_code"] == "discovery"
 
 
 @pytest.mark.anyio

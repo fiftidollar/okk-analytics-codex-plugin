@@ -25,6 +25,15 @@ Fixes found by a read-only check of 1.3.0 against the OKK test stand.
   `criteria_version_not_readable`, `evaluation_items_unavailable`) and, for
   criteria, `excluded_observations`; the result is then `partial`. A
   non-admin cannot read archived criteria, so their observations land here.
+- The `scenario_id` filter of `list_call_transcripts` and
+  `search_call_transcripts` covers every version of the scenario. It went to
+  OKK `/calls`, which filters by the exact version, so calls evaluated on the
+  scenario's other versions were missing. The gateway now never sends
+  `scenario_id` to `/calls`: it reads the scope and takes the scenario's
+  calls itself (`list_call_transcripts` pages them, the search applies its
+  cap to them). Calls it cannot place are reported in
+  `effective_scope.excluded_calls` / `excluded_call_reasons` and make the
+  result `partial`; `effective_scope.scenario_code` names the scenario.
 - `list_scenarios` and other scenario projections no longer return
   `calls_evaluated` / `avg_score`: the new OKK leaves them at 0 / null. Use
   `get_scenario_performance`.
