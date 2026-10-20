@@ -24,6 +24,7 @@ EXPECTED_TOOLS = [
     "get_employee_card",
     "compare_employees",
     "get_call_statistics",
+    "list_call_phone_records",
     "list_call_transcripts",
     "get_call_transcript",
     "search_call_transcripts",
@@ -47,6 +48,7 @@ DEPARTMENT_SCOPED_TOOLS = {
     "get_employee_card",
     "compare_employees",
     "get_call_statistics",
+    "list_call_phone_records",
     "list_call_transcripts",
     "get_call_transcript",
     "search_call_transcripts",
@@ -73,6 +75,11 @@ def _rpc(method: str, params: dict[str, Any], request_id: int) -> dict[str, Any]
     return {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
 
 
+def _tool_scopes(tool: dict[str, Any]) -> set[str]:
+    schemes = (tool.get("_meta") or tool.get("meta") or {}).get("securitySchemes") or []
+    return set(schemes[0].get("scopes") or []) if schemes else set()
+
+
 def validate_tool_inventory(payload: dict[str, Any]) -> None:
     tools = payload.get("result", {}).get("tools", [])
     names = [tool.get("name") for tool in tools]
@@ -91,11 +98,10 @@ def validate_tool_inventory(payload: dict[str, Any]) -> None:
             raise RuntimeError("compare_departments cannot resolve named departments")
         if tool.get("name") in SUPERVISOR_SCOPED_TOOLS and "supervisor_id" not in properties:
             raise RuntimeError(f"Tool does not require a supervisor identity: {tool.get('name')}")
-        if "transcript" in str(tool.get("name")):
-            schemes = (tool.get("_meta") or tool.get("meta") or {}).get("securitySchemes") or []
-            scopes = set(schemes[0].get("scopes") or []) if schemes else set()
-            if "okk.transcripts.read" not in scopes:
-                raise RuntimeError(f"Transcript tool has no transcript scope: {tool.get('name')}")
+        if "transcript" in str(tool.get("name")) and "okk.transcripts.read" not in _tool_scopes(tool):
+            raise RuntimeError(f"Transcript tool has no transcript scope: {tool.get('name')}")
+        if tool.get("name") == "list_call_phone_records" and "okk.phones.read" not in _tool_scopes(tool):
+            raise RuntimeError("The phone tool has no phone scope")
 
 
 def validate_connection_confirmation(payload: dict[str, Any]) -> None:

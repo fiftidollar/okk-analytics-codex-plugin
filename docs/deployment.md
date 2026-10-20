@@ -240,9 +240,12 @@ public OKK login API and does not mint OKK tokens.
    allowlist. Inject one foreign ID and one conflicting name in the adapter
    regression: the former must be absent, the latter must be normalized, and
    the result must be `partial` with non-zero diagnostic counters.
-9. Exercise all 27 tools. For the 21 non-transcript tools, search saved JSON
+9. Exercise all 28 tools (`server/scripts/smoke_release.py` checks the exact
+   inventory). For the 21 tools that are neither transcript tools nor
+   `list_call_phone_records`, search saved JSON
    for forbidden fields/values: password, phone, audio, transcript, prompt,
-   reasoning, script, Megafon, routing and pipeline. For the six transcript
+   reasoning, script, Megafon, routing and pipeline. The phone tool returns
+   numbers only under `okk.phones.read`. For the six transcript
    tools, verify text appears only under their documented transcript/preview/
    excerpt fields, while structured phone, audio, PBX/external IDs and internal
    processing fields remain absent. Test raw, diarized and segment formats,
@@ -276,7 +279,7 @@ public OKK login API and does not mint OKK tokens.
     `/.well-known/openai-apps-challenge` returns exactly that token as plain
     text, and verify `/userinfo` with a newly authorized `openid email` token
     returns only `sub`, normalized `email` and `email_verified=true`. Upload the
-    final skill tree, import `chatgpt-app-submission.json`, scan all 27 tools,
+    final skill tree, import `chatgpt-app-submission.json`, scan all 28 tools,
     and review the five positive and three negative cases before submission.
 
 ## Dokploy production compose
