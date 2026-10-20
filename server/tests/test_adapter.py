@@ -900,10 +900,11 @@ async def test_scenario_pass_rate_follows_the_norm_okk_reports(scenario_fields, 
     assert (row["pass_rate"], row["pass_rate_basis"]) == expected
 
 
-def _versioned_csm(*, role: str) -> tuple[FakePlatform, dict[str, str]]:
+def _versioned_csm(*, role: str, code: str = "csm_universal") -> tuple[FakePlatform, dict[str, str]]:
     """CSM like the test stand on 20.10: the scenario was republished, and some calls of the
     period were evaluated on the archived version (`csm_universal__legacy_…`). The archive is
-    readable only by an admin; every call row carries the business code OKK shows for it."""
+    readable only by an admin; every call row carries the business code OKK shows for it. Like
+    OKK, the archived code keeps only the first 21 characters of a longer code."""
     ids = {name: str(uuid4()) for name in ("department", "current", "archived", "employee")}
     ids.update(
         {
@@ -934,8 +935,8 @@ def _versioned_csm(*, role: str) -> tuple[FakePlatform, dict[str, str]]:
             ],
         }
 
-    current = version("current", "csm_universal", active=True)
-    archived = version("archived", "csm_universal__legacy_20261015093413861488", active=False)
+    current = version("current", code, active=True)
+    archived = version("archived", f"{code[:21]}__legacy_20261015093413861488", active=False)
 
     def scenarios(params):
         include_archive = ("include_inactive", "true") in params
@@ -948,8 +949,8 @@ def _versioned_csm(*, role: str) -> tuple[FakePlatform, dict[str, str]]:
             "id": call_id,
             "employee_id": ids["employee"],
             "scenario_id": ids[version_name],
-            "detected_scenario_code": "csm_universal",
-            "scenario": {"id": ids[version_name], "name": "Сопровождение", "code": "csm_universal"},
+            "detected_scenario_code": code,
+            "scenario": {"id": ids[version_name], "name": "Сопровождение", "code": code},
             "quality_score": score,
             "quality_status": status,
             "started_at": "2026-10-14T10:00:00+03:00",
@@ -995,18 +996,21 @@ def _versioned_csm(*, role: str) -> tuple[FakePlatform, dict[str, str]]:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("role", "requested"),
+    ("role", "requested", "code"),
     [
-        pytest.param("viewer", (), id="viewer-without-the-archive"),
-        pytest.param("admin", (), id="admin-without-filter"),
-        pytest.param("admin", ("current", "archived"), id="admin-both-versions"),
-        pytest.param("admin", ("archived",), id="admin-archived-version"),
+        pytest.param("viewer", (), "csm_universal", id="viewer-without-the-archive"),
+        pytest.param("admin", (), "csm_universal", id="admin-without-filter"),
+        pytest.param("admin", ("current", "archived"), "csm_universal", id="admin-both-versions"),
+        pytest.param("admin", ("archived",), "csm_universal", id="admin-archived-version"),
+        # The archived row's own code is cut to `csm_universal_existin`; its calls show the full code.
+        pytest.param("admin", ("current",), "csm_universal_existing_clients", id="admin-long-code"),
+        pytest.param("admin", ("archived",), "csm_universal_existing_clients", id="admin-long-code-archived"),
     ],
 )
-async def test_scenario_performance_counts_evaluations_of_every_scenario_version(role, requested):
+async def test_scenario_performance_counts_evaluations_of_every_scenario_version(role, requested, code):
     # Before: only the current version's calls counted (2 of 4, avg 80, pass 50%) and the result said
     # `ok`; with both ids an admin got two rows for one scenario.
-    platform, ids = _versioned_csm(role=role)
+    platform, ids = _versioned_csm(role=role, code=code)
 
     result = await adapter(platform).get_scenario_performance(
         period="custom",
@@ -1069,27 +1073,59 @@ async def test_scenario_performance_reports_evaluations_it_cannot_attribute():
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("role", "scenario", "expected", "excluded"),
+    ("role", "scenario", "expected", "excluded", "code"),
     [
         # Before: the archived version's evaluations were dropped and the result said `ok`.
-        pytest.param("admin", None, {"greeting": (4, 75.0), "next_step": (4, 75.0)}, 0, id="admin-all"),
         pytest.param(
-            "admin", "current", {"greeting": (4, 75.0), "next_step": (4, 75.0)}, 0, id="admin-scenario"
+            "admin", None, {"greeting": (4, 75.0), "next_step": (4, 75.0)}, 0, "csm_universal", id="admin-all"
         ),
         pytest.param(
-            "admin", "archived", {"greeting": (4, 75.0), "next_step": (4, 75.0)}, 0, id="admin-archived"
+            "admin",
+            "current",
+            {"greeting": (4, 75.0), "next_step": (4, 75.0)},
+            0,
+            "csm_universal",
+            id="admin-scenario",
+        ),
+        pytest.param(
+            "admin",
+            "archived",
+            {"greeting": (4, 75.0), "next_step": (4, 75.0)},
+            0,
+            "csm_universal",
+            id="admin-archived",
+        ),
+        pytest.param(
+            "admin",
+            "current",
+            {"greeting": (4, 75.0), "next_step": (4, 75.0)},
+            0,
+            "csm_universal_existing_clients",
+            id="admin-long-code",
         ),
         # A viewer cannot read the archived version's criteria: those observations are reported.
-        pytest.param("viewer", None, {"greeting": (2, 100.0), "next_step": (2, 50.0)}, 2, id="viewer-all"),
         pytest.param(
-            "viewer", "current", {"greeting": (2, 100.0), "next_step": (2, 50.0)}, 2, id="viewer-scenario"
+            "viewer",
+            None,
+            {"greeting": (2, 100.0), "next_step": (2, 50.0)},
+            2,
+            "csm_universal",
+            id="viewer-all",
+        ),
+        pytest.param(
+            "viewer",
+            "current",
+            {"greeting": (2, 100.0), "next_step": (2, 50.0)},
+            2,
+            "csm_universal",
+            id="viewer-scenario",
         ),
     ],
 )
 async def test_criterion_performance_joins_scenario_versions_by_criterion_code(
-    role, scenario, expected, excluded
+    role, scenario, expected, excluded, code
 ):
-    platform, ids = _versioned_csm(role=role)
+    platform, ids = _versioned_csm(role=role, code=code)
 
     result = await adapter(platform).get_criterion_performance(
         period="custom",

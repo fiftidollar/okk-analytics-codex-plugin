@@ -201,7 +201,9 @@ version it was made on. `get_scenario_performance` and
 - An evaluation joins its scenario by the version's code when the account can
   read that version, otherwise by the code OKK shows on the call row (the code
   scenario selection chose). Archived versions are readable only by an admin,
-  so for other accounts the call row decides.
+  so for other accounts the call row decides. An archived version takes the
+  code OKK shows on its calls, because OKK cuts a code longer than 21
+  characters in the archived name.
 - A requested `scenario_ids` / `scenario_id` value stands for its whole
   scenario, also when it names an archived version (admin). Each scenario row is
   shown by its current version and lists `versions[]` with

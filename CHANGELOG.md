@@ -15,6 +15,8 @@ Fixes found by a read-only check of 1.3.0 against the OKK test stand.
   by their criterion `code` within the scenario, rows add `scenario` and
   `scenario_versions` (replacing `scenarios`), and criterion projections
   include `code`. A requested archived version ID stands for its scenario.
+  An archived version takes the code OKK shows on its calls, because OKK cuts
+  a code longer than 21 characters in the archived name.
   `get_criterion_performance` with `scenario_id` no longer asks OKK for the
   calls of one exact version.
 - Evaluations that cannot be attributed are reported, never dropped:

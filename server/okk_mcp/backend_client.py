@@ -124,12 +124,13 @@ def _pass_rate(rows: list[dict[str, Any]], passing_score: Any) -> tuple[float | 
 
 
 # OKK republishes a scenario as a new version under the same code and archives the replaced one
-# under `<code>__legacy_<20-digit UTC timestamp>`; evaluations keep the version they were made on.
+# under `<code>__legacy_<20-digit UTC timestamp>`, cutting a code longer than 21 characters to fit;
+# evaluations keep the version they were made on.
 _ARCHIVED_SCENARIO_CODE = re.compile(r"(?P<code>.+)__legacy_\d{20}")
 
 
 def _scenario_code(code: Any) -> str | None:
-    """The business code shared by every version of a scenario."""
+    """The business code shared by every version of a scenario (an archived code may be cut)."""
     text = str(code or "").strip()
     archived = _ARCHIVED_SCENARIO_CODE.fullmatch(text)
     return (archived.group("code") if archived else text) or None
@@ -139,10 +140,28 @@ def _is_current_version(row: dict[str, Any]) -> bool:
     return row.get("is_active") is not False
 
 
-def _scenario_versions_by_code(catalog: list[dict[str, Any]]) -> dict[str, str]:
-    """Scenario version ID → business code for the catalog rows the account can read. A row
-    without a code stands alone under its own ID."""
-    return {str(row.get("id")): _scenario_code(row.get("code")) or str(row.get("id")) for row in catalog}
+def _shown_call_code(call: dict[str, Any]) -> str | None:
+    """The scenario code OKK shows for a call: the one scenario selection chose, else the version
+    code without the archive suffix."""
+    nested = call.get("scenario") if isinstance(call.get("scenario"), dict) else {}
+    return _scenario_code(call.get("detected_scenario_code") or nested.get("code"))
+
+
+def _scenario_versions_by_code(catalog: list[dict[str, Any]], calls: list[dict[str, Any]]) -> dict[str, str]:
+    """Scenario version ID → business code for the catalog rows the account can read. An archived
+    version takes the code OKK shows on its calls, because its own code may be cut; a row without
+    any code stands alone under its own ID."""
+    shown_on_calls: dict[str, str] = {}
+    for call in calls:
+        code = _shown_call_code(call)
+        if call.get("scenario_id") and code:
+            shown_on_calls.setdefault(str(call["scenario_id"]), code)
+    return {
+        str(row.get("id")): (None if _is_current_version(row) else shown_on_calls.get(str(row.get("id"))))
+        or _scenario_code(row.get("code"))
+        or str(row.get("id"))
+        for row in catalog
+    }
 
 
 def _shared_passing_score(versions: Iterable[str | None], index: dict[str, dict[str, Any]]) -> Any:
@@ -154,14 +173,10 @@ def _shared_passing_score(versions: Iterable[str | None], index: dict[str, dict[
 
 def _call_scenario_code(call: dict[str, Any], version_codes: dict[str, str]) -> str | None:
     """The scenario a call was evaluated on: its version from the catalog when the account can read
-    it, otherwise the code OKK shows for the call — the one scenario selection chose, else the
-    version code without the archive suffix (an archived version is readable only by an admin).
-    `None` — the call names no scenario."""
+    it, otherwise the code OKK shows for the call (an archived version is readable only by an
+    admin). `None` — the call names no scenario."""
     version = str(call.get("scenario_id") or "")
-    if version in version_codes:
-        return version_codes[version]
-    nested = call.get("scenario") if isinstance(call.get("scenario"), dict) else {}
-    return _scenario_code(call.get("detected_scenario_code") or nested.get("code"))
+    return version_codes[version] if version in version_codes else _shown_call_code(call)
 
 
 def _insight_text(value: Any) -> str | None:
@@ -3111,9 +3126,15 @@ class AnalyticsAdapter:
             )
             if department_row is not None:
                 department = str(department_row["id"])
+        calls, total, complete = await self.calls(
+            start=bounds[0],
+            end=bounds[1],
+            department_id=department,
+            employee_id=employee,
+        )
         # A scenario is every version under one code: a requested version stands for its scenario,
         # shown by the current version when the account can read it.
-        version_codes = _scenario_versions_by_code(catalog)
+        version_codes = _scenario_versions_by_code(catalog, calls)
         scenario_codes = list(dict.fromkeys(version_codes[value] for value in effective))
         shown: dict[str, dict[str, Any]] = {}
         for row in catalog:
@@ -3122,12 +3143,6 @@ class AnalyticsAdapter:
                 code not in shown or (_is_current_version(row) and not _is_current_version(shown[code]))
             ):
                 shown[code] = row
-        calls, total, complete = await self.calls(
-            start=bounds[0],
-            end=bounds[1],
-            department_id=department,
-            employee_id=employee,
-        )
         groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
         excluded: Counter[str] = Counter()
         for call in calls:
@@ -3239,7 +3254,15 @@ class AnalyticsAdapter:
                     period=bounds,
                 )
             department = str(department_row["id"])
-        version_codes = _scenario_versions_by_code(catalog)
+        # Calls of the whole scope: OKK filters `scenario_id` by the exact version, which would leave
+        # out the evaluations made on the scenario's archived versions.
+        calls, total, complete = await self.calls(
+            start=bounds[0],
+            end=bounds[1],
+            department_id=department,
+            employee_id=employee,
+        )
+        version_codes = _scenario_versions_by_code(catalog, calls)
         scenario_code = version_codes[scenario] if scenario_row is not None else None
         # A criterion is one code within one scenario across all its versions; a criterion without
         # a code stands alone under its ID. It is shown by the current version when there is one.
@@ -3273,14 +3296,6 @@ class AnalyticsAdapter:
                 omitted=omitted,
             )
         effective_keys = {criterion_keys[value] for value in effective}
-        # Calls of the whole scope: OKK filters `scenario_id` by the exact version, which would leave
-        # out the evaluations made on the scenario's archived versions.
-        calls, total, complete = await self.calls(
-            start=bounds[0],
-            end=bounds[1],
-            department_id=department,
-            employee_id=employee,
-        )
         excluded: Counter[str] = Counter()
         evaluated: list[dict[str, Any]] = []
         for call in calls:
