@@ -1,8 +1,8 @@
 # Architecture
 
-Production runs gateway 1.3.0 (public `/health` reported `1.3.0` on
-2026-10-20) against the production OKK API of the new OKK architecture; 1.3.1
-is prepared, not released. Release history is in [CHANGELOG.md](../CHANGELOG.md),
+Production runs gateway 1.3.1 (public `/health` reported `1.3.1` on
+2026-10-20) against the production OKK API of the new OKK architecture.
+Release history is in [CHANGELOG.md](../CHANGELOG.md),
 release evidence in [deployment.md](deployment.md).
 
 The phone-history path uses the platform's indexed exact number filter and the

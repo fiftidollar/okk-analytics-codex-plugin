@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.3.1 — prepared 2026-10-20, not released
+## 1.3.1 — released 2026-10-20
 
 Fixes found by a read-only check of 1.3.0 against the OKK test stand.
 
