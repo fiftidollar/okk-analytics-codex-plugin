@@ -28,10 +28,11 @@ from okk_mcp.runtime import platform_client
 from okk_mcp.security import (
     ALLOWED_SCOPES,
     random_token,
+    redirect_destination,
     redirect_origin,
     token_hash,
     valid_pkce_challenge,
-    validate_redirect_uri,
+    validate_registered_redirect_uri,
     validate_scopes,
     verify_pkce,
 )
@@ -128,6 +129,7 @@ async def protected_resource_metadata(settings: Settings = Depends(get_settings)
 async def register_client(
     request: Request,
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ):
     try:
         payload = await request.json()
@@ -137,7 +139,12 @@ async def register_client(
     if not isinstance(redirect_uris, list) or not redirect_uris or len(redirect_uris) > 20:
         return _oauth_error("invalid_redirect_uri", "redirect_uris is required")
     try:
-        redirects = list(dict.fromkeys(validate_redirect_uri(str(uri)) for uri in redirect_uris))
+        redirects = list(
+            dict.fromkeys(
+                validate_registered_redirect_uri(str(uri), settings.oauth_redirect_hosts)
+                for uri in redirect_uris
+            )
+        )
         scope = validate_scopes(payload.get("scope"))
     except ValueError as exc:
         return _oauth_error(str(exc), "Unsupported client metadata")
@@ -244,6 +251,13 @@ def _render_login(
     error: str | None = None,
 ) -> HTMLResponse:
     error_html = f'<div class="error">{html.escape(error)}</div>' if error else ""
+    destination, known_destination = redirect_destination(redirect_uri, settings.oauth_redirect_hosts)
+    destination_html = (
+        ""
+        if known_destination
+        else '<div class="error">Этот адрес возврата не относится к известным приложениям. '
+        "Не входите, если не начинали подключение сами.</div>"
+    )
     transcript_scope = ", транскрипции доступных звонков" if "okk.transcripts.read" in scope.split() else ""
     phone_scope = ", номера клиентов и поиск звонков по номеру" if "okk.phones.read" in scope.split() else ""
     body = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
@@ -253,14 +267,14 @@ def _render_login(
 main{{min-height:100vh;display:grid;place-items:center;padding:24px}}.card{{width:min(440px,100%);background:var(--card);padding:32px;border-radius:18px;box-shadow:0 16px 48px #17202a18}}
 h1{{margin:0 0 8px}}p{{color:var(--muted)}}label{{display:block;font-weight:650;margin:14px 0 6px}}input{{width:100%;padding:12px 14px;border:1px solid #cbd3dc;border-radius:10px;font:inherit}}
 button{{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;background:var(--brand);color:#fff;font:700 16px system-ui}}.scope,.next{{font-size:14px;background:#f7f9fb;padding:12px 14px;border-radius:10px;margin-top:18px}}.next{{background:#eef6ff}}.error{{color:var(--danger);background:#fef3f2;padding:10px 12px;border-radius:10px}}</style></head>
-<body><main><section class="card"><h1>Вход в ОКК</h1><p>Подключение приложения <strong>{html.escape(client_name)}</strong></p>{error_html}
+<body><main><section class="card"><h1>Вход в ОКК</h1><p>Подключение приложения <strong>{html.escape(client_name)}</strong>. После входа браузер вернёт вас <strong>{html.escape(destination)}</strong>.</p>{destination_html}{error_html}
 <form method="post" action="/authorize"><input type="hidden" name="authorization_request" value="{html.escape(signed_request, quote=True)}"><input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}">
 <label for="email">Логин (email)</label><input id="email" name="email" type="email" autocomplete="username" maxlength="200" required autofocus>
 <label for="password">Пароль</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required>
 <div class="scope">Только чтение: статистика, карточки сотрудников, наставничество, сценарии и критерии{transcript_scope}{phone_scope} — строго в пределах прав аккаунта.</div>
 <button type="submit">Войти и разрешить доступ</button></form>
-<div class="next"><strong>Что произойдёт дальше</strong><br>Браузер передаст вход обратно в Codex. Вернитесь в Codex и выберите «Проверить подключение OKK»: сообщение «OKK подключён» с ролью и отделами означает, что вход действительно завершён.</div>
-<p><small>MCP-шлюз сразу передаёт пароль в штатный API ОКК, не сохраняет его и никогда не передаёт Codex.</small></p></section></main></body></html>"""
+<div class="next"><strong>Что произойдёт дальше</strong><br>Браузер передаст вход обратно в приложение, из которого вы начали подключение (Codex, Claude Code или ChatGPT). Вернитесь в него и попросите «Проверить подключение OKK»: сообщение «OKK подключён» с ролью и отделами означает, что вход действительно завершён.</div>
+<p><small>MCP-шлюз сразу передаёт пароль в штатный API ОКК, не сохраняет его и никогда не передаёт приложению.</small></p></section></main></body></html>"""
     response = HTMLResponse(body)
     _security_headers(response, allow_form=True, redirect_uri=redirect_uri)
     return response

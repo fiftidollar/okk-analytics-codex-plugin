@@ -24,8 +24,8 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `list_supervisor_call_transcripts` | Private-supervisor call catalog, transcript availability and bounded previews |
 | `get_supervisor_call_transcript` | Raw/diarized text or safe speaker segments for one call belonging to an accessible supervisor |
 | `search_supervisor_call_transcripts` | Bounded phrase/term search across one accessible supervisor's transcripts |
-| `get_plan_fact_statistics` | Total/inbound/outbound/new/regular plans and daily rows |
-| `get_client_statistics` | New/regular contacts, missed/no-answer, plus B2B first/repeat touches and returns from repeat to first after 30 days |
+| `get_plan_fact_statistics` | Weekly call-plan items (direction × clients × counting) with plan and fact for the period, per department or one employee |
+| `get_client_statistics` | New/regular contacts, missed/no-answer, plus first/repeat touches and returns from repeat to first after the reset period for departments that track client touches |
 | `get_crm_statistics` | Bitrix deals, tasks, overdue, stages, funnels and employee coverage |
 | `get_growth_insights` | Employee and aggregate AI strengths/growth areas without raw reasoning |
 | `get_mentoring_statistics` | Active/recent completed task window, status/overdue/completion stats |
@@ -101,9 +101,12 @@ and segment responses expose `next_start_char` / `next_start_segment`; repeat
 the request with that offset until null. Text chunks include `source_sha256`
 to detect a transcript changed between reads.
 
-`list_call_phone_records` uses the indexed upstream exact `phone_number` filter
+`list_call_phone_records` uses the indexed upstream `phone_number` filter
 through read-only `POST /calls/phone-lookup`; the number is in the JSON body,
-outside access-log URLs.
+outside access-log URLs. From 10 digits OKK matches the whole number, 4–9
+digits match the number ending (`phone_match`: `whole_number` or
+`number_ending`); fewer than 4 digits is not a search. Period dates go in the
+body as ISO strings.
 Its `matching_calls_total` counts all ACL-visible journal records for the number,
 including missed, short and in-process calls. `has_call` answers existence. The
 default `all` period sends no date bounds, so the full available journal is
@@ -167,11 +170,23 @@ segment output is projected to `speaker`, `text`, `start` and `end` only.
 
 Aggregate strengths and growth areas count distinct employees mentioning a
 normalized observation. Repeated or differently cased copies of the same
-observation inside one employee card do not inflate `employee_mentions`.
+observation inside one employee card do not inflate `employee_mentions`. When
+OKK sends structured insights (`insights.summary`), the criterion name is
+counted: the text lines of the new OKK carry each employee's own numbers.
 
-The current OKK employee-page API returns at most five active and ten completed
+The older OKK employee-page API returns at most five active and ten completed
 mentoring tasks per employee. Task tools therefore mark this window as
 `complete=false` and return `partial`; they never present it as full history.
+The new OKK has no mentoring: `get_mentoring_statistics` answers
+`not_available` (`mentoring_not_kept_by_okk`), `get_employee_card` sets
+`mentoring_available=false` with null task lists, and `compare_employees`
+reports null task counts — never zero.
+
+Department records carry the norm as `quality_threshold` (new OKK API) or
+`passing_score` (older API). Scenario and criterion fields the platform no
+longer sends (`passing_score`, `scoring_type`, `is_required`) are omitted, not
+null. Call rows of the new API carry `quality_status`, `quality_threshold` and
+`client_status` (new or existing client) instead of a client card.
 # Department reporting contract (1.2.3 candidate)
 
 `get_department_statistics.data.reporting_contract` supplies source policy,
@@ -181,7 +196,38 @@ population; `total_calls` is duration-qualified, while `calls_evaluated` require
 an actual KPI score. Average duration does not require a score. Average quality
 must not be recomputed by averaging employee means.
 
-`get_plan_fact_statistics.data.totals` and the department `plan_fact` preserve
-null when no plan is set for a metric; assigned zero remains zero. `coverage`
-reports employees with/without a plan per metric, using the visible roster as
-the denominator. A sum with missing assignments is not a complete team target.
+# Weekly call plan (1.3.0)
+
+Plans come from the OKK call-plan constructor (`GET /call-plans/plan-fact`).
+A department has one plan per week in one of two modes: `department` (one plan
+for the whole department; the fact counts every employee's calls) or
+`employees` (personal plans; the department plan is their sum). A plan is a
+list of items; each item is direction (`all`/`outbound`/`inbound`) × clients
+(`all`/`new`/`existing`) × counting (`connected` — the telephony reports the
+call was answered; `successful` — a live manager–client conversation;
+`successful_from_min` — successful and not shorter than
+`min_call_duration_seconds`; `evaluated` — only scored calls) × number of
+calls. Items count different calls and are never added together.
+
+For a period that covers part of a week, OKK splits the weekly plan across the
+working days Monday–Friday (the remainder goes to the first days); a whole week
+carries the whole plan. The gateway returns OKK's numbers as is and does not
+recompute plans or facts.
+
+`get_plan_fact_statistics` returns `data.departments[]` — one entry per
+requested department (or every visible department when neither a department
+nor an employee is given) with `mode` (`department`, `employees`, `mixed` for
+a period whose weeks differ, `null` when no plan exists), `weeks`, `items` and
+personal `employees[].items`. `get_department_statistics.data.plan_fact` and
+`get_employee_card.data.plan_fact` carry the same department entry; in an
+employee card under a department plan, `contribution` is that employee's calls
+inside the department fact.
+
+- `mode=null` means no plan was set; it is not a zero plan.
+- `fact=null` with `fact_state=no_client_base` means OKK had no monthly client
+  base for new/existing classification; it is unavailable, not zero.
+- `changed=true` means the item was edited after the week started. The edit
+  history and its authors are not exposed.
+- If the connected OKK platform has no call-plan API, composite reports keep
+  their other sections and return `plan_fact.status=not_available`;
+  `get_plan_fact_statistics` skips such departments and reports `partial`.

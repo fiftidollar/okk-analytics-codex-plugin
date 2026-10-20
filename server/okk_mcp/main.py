@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from sqlalchemy import text
 
+from okk_mcp import __version__
 from okk_mcp.backend_client import BackendClient
 from okk_mcp.config import get_settings
 from okk_mcp.db import close_db, session_factory
@@ -41,7 +42,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="OKK Analytics MCP",
-    version="1.2.4",
+    version=__version__,
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
@@ -60,7 +61,7 @@ async def service_home():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "okk-analytics-mcp", "version": "1.2.4"}
+    return {"status": "ok", "service": "okk-analytics-mcp", "version": __version__}
 
 
 @app.get("/ready")

@@ -13,6 +13,13 @@ the matching platform read-only `POST /calls/phone-lookup` contract, now live
 on production and test-stand. The number travels in the
 JSON body, outside access-log URLs.
 
+Release 1.3.0 is prepared but not released. It reads weekly call plans from the
+OKK plan constructor (`/call-plans/plan-fact`), so it must follow an OKK
+platform release that has that API; on an older platform only the plan section
+is reported as `not_available`. It also fixes the plugin packages to match what
+Codex 0.154 and Claude Code 2.1 actually load, and restricts new OAuth clients
+to return addresses on this computer or on known client sites.
+
 The account must have a working local OKK password. An account provisioned only
 through HR/SSO needs a local OKK password set by the normal account-management
 process first; the plugin never authenticates through the HR platform.
@@ -30,23 +37,33 @@ the Codex/Claude Code plugin packages.
 - Full employee-card view available through the current OKK API: KPI, plan/fact,
   client and CRM metrics, AI strengths, growth areas, weekly/saved focus, active
   tasks and recent completed tasks.
-- Client statistics include the B2B 30-day cycle: acting clients, new first
+- Client statistics include, for departments that track client touches
+  (`client_touch_tracked` in OKK), the touch cycle: acting clients, new first
   touches, new repeat touches and the subset reactivated from repeat back into
-  first touch after at least 30 days without a valid call. A number must enter
-  repeat touch before that reset is possible. Phone rows are available only
-  through the dedicated `okk.phones.read` call tool.
+  first touch after `new_client_touch_reset_days` without a valid call. A number
+  must enter repeat touch before that reset is possible. Phone rows are
+  available only through the dedicated `okk.phones.read` call tool.
+- Weekly call plans from the OKK plan constructor: plan items (direction ×
+  clients × counting), plan and fact for any period, per department or one
+  employee.
 - Scenario catalog and complete business criterion configuration without
   prompts or scripts, plus scenario/criterion performance aggregation.
 - OAuth Authorization Code + PKCE S256, dynamic client registration, refresh
-  rotation/reuse detection and revocation.
+  rotation/reuse detection and revocation. A new client may only register
+  return addresses on this computer (Codex, Claude Code) or on the sites listed
+  in `MCP_OAUTH_REDIRECT_HOSTS` (default `chatgpt.com`, `claude.ai`,
+  `claude.com`); the login page names where the browser will return.
 - Cookie-independent authorization form with a signed short-lived CSRF nonce,
   plus recovery for older in-flight forms while their OAuth request is valid.
   The gateway then redirects directly to the exact callback registered by
   the client; Codex or Claude Code owns the local listener, token exchange and
   completion state.
-- Native remote-MCP packaging for both clients: Codex receives its explicit
-  `oauth_resource`, while Claude Code uses standard HTTP MCP discovery and its
-  `/mcp` OAuth flow.
+- Native remote-MCP packaging for both clients from one plugin folder. Codex
+  reads the root `plugin.json` (AgentPlugin format, OpenAI settings under
+  `extensions["com.openai"]`) and `mcp.json`; Claude Code reads
+  `.claude-plugin/plugin.json` and `.mcp.json`. Both discover OAuth from the
+  gateway's protected-resource metadata; no client secret or extra OAuth
+  field is shipped.
 - Live `/auth/me` verification on every MCP request.
 - Admin/viewer/empty-ACL semantics and neutral inaccessible-ID responses.
 - A separate `Руководители` contract driven by live explicit OKK grants. An
@@ -101,9 +118,9 @@ docs/                    Architecture, tools, security and deployment runbooks
    ```
 
 5. For a local marketplace checkout, update both
-   `plugins/okk-analytics/.mcp.codex.json` and
-   `plugins/okk-analytics/.mcp.json` to your HTTPS gateway URL, then install the
-   **OKK Analytics** entry in the client being tested.
+   `plugins/okk-analytics/mcp.json` (Codex) and
+   `plugins/okk-analytics/.mcp.json` (Claude Code) to your HTTPS gateway URL,
+   then install the **OKK Analytics** entry in the client being tested.
 
 ## Install in Codex
 
@@ -239,7 +256,7 @@ the OKK API. See
 Create the release as **With MCP → Universal** with
 `https://okk-mcp.akfixdev.ru/mcp`, and upload the final
 `plugins/okk-analytics/skills/okk-analytics/` bundle to the same draft. The
-portal must scan all 27 tools and retain the exact five positive and three
+portal must scan all 28 tools and retain the exact five positive and three
 negative cases from `chatgpt-app-submission.json`. OAuth discovery advertises
 `openid` and `email`; `/userinfo` returns only the live account subject and
 verified email for workspace domain policy. Domain ownership is proved by

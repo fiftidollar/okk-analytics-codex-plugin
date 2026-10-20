@@ -183,24 +183,31 @@ def validate_department_report_semantics(payload: dict[str, Any]) -> None:
         "summary.calls_evaluated",
         "summary.avg_duration",
         "summary.average_score",
-        "plan_fact.totals",
+        "plan_fact.mode",
+        "plan_fact.items.counting",
+        "plan_fact.items.fact",
     ):
         if not isinstance(definitions.get(key), str) or not definitions[key]:
             raise RuntimeError(f"Department report has no metric definition: {key}")
-    plan = data.get("plan_fact") or {}
-    rows = plan.get("employees") or []
-    expected = (structured.get("employee_roster_grounding") or {}).get("employee_count", 0)
-    for key in ("plan_total", "plan_outbound", "plan_inbound", "plan_outbound_new", "plan_outbound_regular"):
-        if key not in (plan.get("totals") or {}):
-            raise RuntimeError("Plan totals omit an availability value")
-        values = [row[key] for row in rows if row.get(key) is not None]
-        if plan["totals"][key] != (sum(values) if values else None):
-            raise RuntimeError("Plan totals replace unset values or disagree with source rows")
-        coverage = (plan.get("coverage") or {}).get(key) or {}
-        if coverage.get("employees_with_plan") != len(values) or coverage.get(
-            "employees_without_plan"
-        ) != expected - len(values):
-            raise RuntimeError("Plan coverage disagrees with the live roster")
+    validate_plan_fact(data.get("plan_fact") or {})
+
+
+def validate_plan_fact(plan: dict[str, Any]) -> None:
+    """План-факт: явная недоступность, без подмены неизвестного факта нулём и без истории правок."""
+    if plan.get("status") == "not_available":
+        return
+    if "mode" not in plan or not isinstance(plan.get("items"), list):
+        raise RuntimeError("Department report has no plan/fact section")
+    if plan["mode"] is None and plan["items"]:
+        raise RuntimeError("Plan items are reported for a period without a plan")
+    personal = [item for entry in plan.get("employees") or [] for item in entry.get("items") or []]
+    for item in [*plan["items"], *personal]:
+        if not isinstance(item.get("plan"), int) or isinstance(item.get("plan"), bool):
+            raise RuntimeError("Plan item has no plan value")
+        if (item.get("fact") is None) != (item.get("fact_state") != "ready"):
+            raise RuntimeError("Plan item replaces an unavailable fact")
+        if "changes" in item:
+            raise RuntimeError("Plan item exposes the edit history")
 
 
 def validate_oauth_metadata(

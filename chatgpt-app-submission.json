@@ -1,5 +1,5 @@
 {
-  "$schema": "https://developers.openai.com/apps-sdk/schemas/chatgpt-app-submission.v1.json",
+  "$schema": "https://developers.openai.com/plugins/schemas/chatgpt-app-submission.v1.json",
   "schema_version": 1,
   "app_info": {
     "display_name": "OKK Analytics",
@@ -104,6 +104,14 @@
         "destructive_justification": "Cannot place, edit, delete, reprocess, or otherwise change calls."
       }
     },
+    "list_call_phone_records": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Lists client numbers and exact call counts from existing ACL-scoped OKK call records; requires the separate phone-read permission.",
+        "open_world_justification": "Phone records are limited to calls in the authenticated user's private OKK department and supervisor grants.",
+        "destructive_justification": "Cannot place calls, edit numbers, or change call records."
+      }
+    },
     "list_call_transcripts": {
       "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
       "justifications": {
@@ -155,7 +163,7 @@
     "get_plan_fact_statistics": {
       "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
       "justifications": {
-        "read_only_justification": "Retrieves existing daily plans and plan-versus-actual aggregates without changing targets.",
+        "read_only_justification": "Retrieves existing weekly call-plan items and their plan-versus-actual values for the period without changing plans.",
         "open_world_justification": "Plan data is limited to the authenticated user's private OKK scope.",
         "destructive_justification": "Cannot create, update, or delete plans or actual results."
       }

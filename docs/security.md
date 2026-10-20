@@ -63,9 +63,11 @@ The single phone exception is `list_call_phone_records`, gated by both
 normalized number from calls in the caller's live department or explicit
 supervisor scope. The upstream indexed exact filter supplies the count. A
 gateway guard rejects a platform response that ignores the filter.
-The B2B touch-cycle extension follows the same rule: the client-statistics tool
-may expose aggregate counts and the fixed reset-window metadata, but never a
+The client touch-cycle extension follows the same rule: the client-statistics
+tool may expose aggregate counts and the reset-window metadata, but never a
 phone, per-number transition row or hidden manager/client identity.
+Call plans expose plan items, plan and fact only; the plan edit history and
+its authors are dropped before the response leaves the gateway.
 
 Transcript content is a narrowly scoped exception. Only the six dedicated
 ordinary/supervisor transcript tools may serialize it, and all require both
@@ -97,6 +99,15 @@ criteria-only GET endpoint should replace this compatibility path.
 - Authorization Code only, PKCE S256 required.
 - Exact registered redirect URI matching.
 - HTTPS redirects, except RFC 8252 loopback HTTP clients.
+- Registration is open (DCR), so a new client may register only loopback
+  return addresses (Codex, Claude Code) or HTTPS addresses on the exact hosts in
+  `MCP_OAUTH_REDIRECT_HOSTS` (default `chatgpt.com,claude.ai,claude.com`).
+  Without this, anyone could register a client named «Codex» with their own
+  return address, send a user the gateway's genuine login link and receive that
+  user's authorization code. Clients registered before 1.3.0 keep their stored
+  addresses; for them the login page names the return host and warns when it
+  is not a known client site. The login page always states where the browser
+  will return.
 - The credential form submits only to the gateway. Its `form-action` CSP also
   includes the injection-safe origin of the exact validated callback because
   Chromium enforces the directive across the final redirect. No wildcard or

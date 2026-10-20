@@ -1,7 +1,39 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 — prepared 2026-10-14, not released
 
+- Plugin packages match what the clients actually load (checked by installing
+  into isolated homes of Codex CLI 0.154.0 and Claude Code 2.1.118): Codex
+  reads the root AgentPlugin `plugin.json` and `mcp.json`, Claude Code reads
+  `.claude-plugin/plugin.json` and `.mcp.json`. Removed `.mcp.codex.json`: no
+  client read it, so its `oauth_resource` never applied. `mcp.json` stays
+  limited to `type` and `url` because Codex 0.154 drops a server entry with any
+  other field. The version lives once per manifest and equals the gateway
+  version; the Claude marketplace entry no longer repeats it.
+- Codex listing: `shortDescription` within 30 characters and `supportURL`.
+- ChatGPT submission file: `$schema` now points to the current
+  `plugins/schemas/chatgpt-app-submission.v1.json`, and the missing
+  `list_call_phone_records` tool is listed; a test keeps the file equal to the
+  server's tool inventory.
+- Security: new OAuth clients may register only loopback return addresses or
+  HTTPS addresses on `MCP_OAUTH_REDIRECT_HOSTS` (default `chatgpt.com`,
+  `claude.ai`, `claude.com`). The login page names where the browser will
+  return and warns about an unknown site. Previously anyone could register a
+  client named «Codex» with their own return address.
+- Read call plans from the OKK call-plan constructor (`/call-plans/plan-fact`)
+  instead of the removed per-employee `/plans` API. `get_plan_fact_statistics`
+  now returns plan items per department (direction × clients × counting, plan
+  and fact for the period, plan mode and weeks); the department report and the
+  employee card embed the same structure. Unknown facts stay `null`, the edit
+  history and its authors are not exposed. Requires an OKK platform with the
+  call-plan API; on an older platform composite reports mark only the plan
+  section `not_available`.
+- Department records expose `client_status_tracked` and `client_touch_tracked`
+  instead of the retired `weekly_call_plan`. Client-touch metrics are described
+  per department (`client_touch_metrics_applicable`, reset days from OKK)
+  instead of being tied to a B2B department code; the catalog names them
+  `new_client_first_touch`, `new_client_repeat_touch` and
+  `new_client_reactivated_first_touch`.
 - Scenario pass rate follows the norm OKK decides per call (`quality_status`:
   `norm` / `below_norm`, the department norm stored with the evaluation)
   instead of comparing scores with the scenario `passing_score`. An older OKK
@@ -9,6 +41,19 @@
   mix, the rate is `null`. Before, a scenario without `passing_score` compared
   every score with 0 and reported 100%. The new `pass_rate_basis` field names
   the norm used. This lets OKK drop the unused scenario threshold.
+- Works with the new OKK architecture API (production switch 10.2026; test
+  fixtures follow live test-stand response shapes): mentoring is gone in OKK, so the mentoring
+  tool answers `not_available` and the employee card and comparison report
+  mentoring as unavailable instead of empty windows and zero counts; growth
+  insights count the shared criterion name from `insights.summary`, because the
+  new text lines carry each employee's numbers; departments list their norm
+  (`quality_threshold`); scenario and criterion fields OKK no longer sends are
+  omitted instead of null; call rows add `quality_status`, `quality_threshold`
+  and `client_status`; phone history accepts the number-ending search of 4–9
+  digits (`phone_match`). Older OKK responses keep working as before.
+- Fix: `list_call_phone_records` with a period other than `all` put `date`
+  objects into the JSON body and failed (`TypeError`); dates now go as ISO
+  strings.
 
 ## 1.2.3 — 2026-09-09
 

@@ -77,12 +77,17 @@ identity, basic call volume/duration/direction and transcript data only. It does
 not expose or manufacture department membership, evaluation scores, scenarios,
 clients, CRM, AI growth observations or mentoring tasks.
 
-`get_client_statistics` projects the platform summary counters for the B2B
-30-day touch cycle. Existing, new-first and new-repeat call counts are
-mutually exclusive; the reactivated-after-30-days counter is a documented
-subset of first touches and contains only resets from the previous repeat-touch
-state. The gateway does not recompute chronology and does not receive or
-serialize the underlying phone rows.
+`get_client_statistics` projects the platform summary counters for the client
+touch cycle of departments that track touches (OKK decides this per department
+and reports `client_touch_metrics_applicable` and the reset period). Existing,
+new-first and new-repeat call counts are mutually exclusive; the reactivated
+counter is a documented subset of first touches and contains only resets from
+the previous repeat-touch state. The gateway does not recompute chronology and
+does not receive or serialize the underlying phone rows.
+
+Call plans come from the OKK plan constructor (`/call-plans/plan-fact`); the
+gateway passes plan items, plan and fact through without recomputing them,
+drops the edit history and grounds personal items against the live roster.
 
 On the first OKK request in a new task, the bundled skill calls
 `get_access_context`. A successful call returns `authenticated=true`, the role
@@ -124,36 +129,55 @@ events; responses themselves are never persisted by the gateway.
 This is deliberately not HR/SSO authorization. Users provisioned by HR still
 need a usable local OKK password for `/auth/login`.
 
-## Codex plugin contract
+## Plugin packaging contract
 
-The community package follows the same remote-MCP declaration used by official
-account plugins: `.mcp.json` contains the HTTPS MCP URL and an `oauth_resource`
-that exactly matches the server's protected-resource metadata. Marketplace
-policy is `ON_INSTALL`, so Codex starts OAuth while installing the plugin.
+One folder, `plugins/okk-analytics/`, serves Codex and Claude Code. Each client
+reads only its own files; the rest are ignored by it. Verified on 2026-10-14 by
+installing the package into isolated homes of Codex CLI 0.154.0 and Claude Code
+2.1.118:
 
-The package includes `.app.json` for the registered OpenAI connector, alongside
-the portable root `plugin.json`/`mcp.json`, legacy Codex manifest and Claude
-Code MCP declaration. A package file is not evidence that ChatGPT has loaded
+| File | Read by | Purpose |
+|---|---|---|
+| `plugin.json` (`$schema` AgentPlugin 1.0.0) | Codex | Identity; OpenAI settings in `extensions["com.openai"]` (`interface`, `apps`) |
+| `mcp.json` | Codex | The remote server: only `type: streamable-http` and `url` |
+| `.codex-plugin/plugin.json` | older Codex | Compatibility copy; Codex ignores it while the root `plugin.json` has `extensions["com.openai"]` |
+| `.app.json` | ChatGPT / Codex apps | Mapping to the registered OpenAI connector |
+| `.claude-plugin/plugin.json` | Claude Code | Identity, version and skills path |
+| `.mcp.json` | Claude Code | The remote server: `type: http` and `url` |
+| `commands/` | Claude Code | `/okk-analytics:check-connection` |
+| `skills/okk-analytics/SKILL.md` | both | Shared workflow |
+
+Constraints found by those installs:
+
+- Codex 0.154 silently drops a server from `mcp.json` when its entry has any
+  field besides `type` and `url` — including the documented
+  `extensions["com.openai"].auth` block. The OAuth resource is therefore not
+  declared in the package: Codex and Claude Code discover it from the
+  protected-resource metadata, and the gateway binds a token to
+  `MCP_RESOURCE_URL` when the client omits `resource`. The former
+  `.mcp.codex.json` with `oauth_resource` was never read and is removed.
+- Claude Code reads `.mcp.json` and ignores `mcp.json`, so the server is not
+  registered twice.
+- The version lives in each `plugin.json` and equals the gateway
+  `okk_mcp.__version__`; the Claude marketplace entry carries no second copy.
+  `server/tests/test_package.py` checks all of this.
+
+Marketplace policy for Codex is `ON_INSTALL`, so Codex starts OAuth while
+installing the plugin. A package file is not evidence that ChatGPT has loaded
 that skill or refreshed its connector metadata; verify the installed client.
-
-## Claude Code plugin contract
-
-The same plugin directory also contains a Claude Code manifest and the shared
-skill. The repository-level `.claude-plugin/marketplace.json` publishes it as
-`okk-analytics@alpes-community`. Claude Code reads the standard root
-`.mcp.json`, connects to the same production Streamable HTTP endpoint, discovers
-the OAuth authorization server from the protected-resource challenge and uses
-dynamic client registration with PKCE. No local MCP process, API key or copied
-credential is required.
 
 Dynamic registration includes optional client metadata only when it has a
 value. In particular, an absent `client_uri` is omitted instead of emitted as
 JSON `null`, because strict OAuth clients validate a present field as a URI
-string.
+string. Both clients use the same tools, live ACL checks and safe projections;
+the packaging files do not fork analytics logic.
 
-Codex keeps a separate `.mcp.codex.json` only because its package declares the
-protected OAuth resource explicitly. Both clients use the same tools, live ACL
-checks and safe projections; the packaging files do not fork analytics logic.
+Not adopted yet, each needing a check with live ChatGPT, Codex and Claude
+clients against a non-production gateway first: RFC 9207 `iss` in the
+authorization response (it changes the callback URLs Codex and ChatGPT
+register), Client ID Metadata Documents, and scope step-up through
+`mcp/www_authenticate` so phone and transcript scopes can be requested only
+when needed.
 
 ## Scaling
 

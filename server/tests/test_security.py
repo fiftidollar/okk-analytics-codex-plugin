@@ -24,6 +24,7 @@ from okk_mcp.security import (
     redirect_origin,
     token_hash,
     validate_redirect_uri,
+    validate_registered_redirect_uri,
     validate_scopes,
     verify_pkce,
 )
@@ -83,6 +84,80 @@ def test_redirect_uri_rejects_unsafe_values(uri):
 )
 def test_redirect_origin_is_csp_safe_and_keeps_the_exact_port(uri, origin):
     assert redirect_origin(uri) == origin
+
+
+KNOWN_HOSTS = Settings().oauth_redirect_hosts
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "http://127.0.0.1:3210/callback/codex",
+        "http://localhost:3210/callback",
+        "http://[::1]:3210/callback",
+        "https://chatgpt.com/connector_platform_oauth_redirect",
+        "https://chatgpt.com/connector/oauth/abc",
+        "https://claude.ai/api/mcp/auth_callback",
+        "https://CLAUDE.com/api/mcp/auth_callback",
+    ],
+)
+def test_new_client_may_return_to_this_computer_or_a_known_client_site(uri):
+    assert validate_registered_redirect_uri(uri, KNOWN_HOSTS) == uri
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "https://evil.example/callback",
+        "https://chatgpt.com.evil.example/callback",
+        "https://evil-chatgpt.com/callback",
+        "https://sub.claude.ai/callback",
+        "http://example.com/callback",
+    ],
+)
+def test_new_client_cannot_register_a_foreign_return_address(uri):
+    with pytest.raises(ValueError):
+        validate_registered_redirect_uri(uri, KNOWN_HOSTS)
+
+
+def test_registration_with_a_foreign_return_address_stores_nothing():
+    class JsonRequest:
+        async def json(self):
+            return {"client_name": "Codex", "redirect_uris": ["https://evil.example/callback"]}
+
+    db = SimpleNamespace(add=AsyncMock(), flush=AsyncMock())
+    response = asyncio.run(oauth.register_client(request=JsonRequest(), db=db, settings=Settings()))
+
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "invalid_redirect_uri"
+    db.add.assert_not_called()
+
+
+def test_redirect_host_allowlist_is_configurable():
+    settings = Settings(mcp_oauth_redirect_hosts=" Example.org. , ")
+    assert settings.oauth_redirect_hosts == frozenset({"example.org"})
+    assert validate_registered_redirect_uri("https://example.org/cb", settings.oauth_redirect_hosts)
+
+
+def test_login_page_names_the_return_destination_and_warns_about_unknown_sites():
+    common = {
+        "settings": Settings(),
+        "client_name": "Codex",
+        "signed_request": "signed",
+        "csrf_token": "csrf",
+        "scope": "okk.statistics.read",
+    }
+    local = oauth._render_login(redirect_uri="http://127.0.0.1:3210/callback", **common).body.decode()
+    chatgpt = oauth._render_login(
+        redirect_uri="https://chatgpt.com/connector/oauth/x", **common
+    ).body.decode()
+    foreign = oauth._render_login(redirect_uri="https://evil.example/cb", **common).body.decode()
+
+    assert "в приложение на этом компьютере" in local
+    assert "<strong>chatgpt.com</strong>" in chatgpt
+    assert "<strong>evil.example</strong>" in foreign
+    assert "не относится к известным приложениям" in foreign
+    assert "не относится к известным приложениям" not in local + chatgpt
 
 
 def test_scopes_are_allowlisted_and_canonicalized():

@@ -156,7 +156,8 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             "department_ref before naming people and disclose incomplete coverage. "
             "Use the returned reporting_contract metric definitions: successful calls, calls "
             "above the duration threshold and calls with a quality score are different populations. "
-            "A null plan is unset, not zero; inspect plan coverage before claiming team plan completion. "
+            "A plan with mode=null is unset, not zero; report each plan item separately and treat "
+            "fact=null as unavailable, not zero. "
             "When a disputed person is absent after a fresh lookup, state that no matching accessible "
             "OKK record was found; do not offer uploaded files as replacement OKK evidence. "
             "The private Supervisors section is separate from departments and is discovered "
@@ -734,7 +735,12 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Статистика план/факт",
-        description="Возвращает дневные планы и план/факт по общим, входящим, исходящим, новым и регулярным звонкам. Имена в ответе канонизированы по employee_roster_grounding; не добавляйте людей вне этого списка.",
+        description=(
+            "Недельный план звонков отдела и факт за период: по каждому пункту плана — направление, "
+            "клиенты, что засчитывается, план на дни периода и факт. Без отдела и сотрудника — все "
+            "видимые отделы. Пункты не складываются между собой; fact=null — нет данных, не ноль. "
+            "Имена канонизированы по employee_roster_grounding; не добавляйте людей вне этого списка."
+        ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,
@@ -765,8 +771,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         title="Статистика клиентов",
         description=(
             "Максимальная статистика новых/действующих клиентов, эффективных контактов, "
-            "недозвонов и пропущенных, а для B2B — первых/повторных касаний и возвратов "
-            "из повторного в первое касание после 30 дней."
+            "недозвонов и пропущенных, а для отделов, которые ведут касания "
+            "(client_touch_metrics_applicable=true), — первых/повторных касаний и возвратов "
+            "из повторного в первое касание после new_client_touch_reset_days дней."
         ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),

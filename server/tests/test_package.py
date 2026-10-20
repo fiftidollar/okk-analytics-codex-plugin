@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 
+from okk_mcp import __version__
 from okk_mcp.config import Settings
+from okk_mcp.server import create_mcp_server
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -14,19 +18,23 @@ def test_plugin_and_marketplace_point_to_the_standalone_package():
     plugin = ROOT / "plugins/okk-analytics"
     manifest = json.loads((plugin / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
     marketplace = json.loads((ROOT / ".agents/plugins/marketplace.json").read_text(encoding="utf-8"))
-    mcp = json.loads((plugin / ".mcp.codex.json").read_text(encoding="utf-8"))
     portable = json.loads((plugin / "plugin.json").read_text(encoding="utf-8"))
     portable_mcp = json.loads((plugin / "mcp.json").read_text(encoding="utf-8"))
     apps = json.loads((plugin / ".app.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "okk-analytics"
-    assert manifest["version"] == "1.2.4"
+    assert manifest["version"] == __version__
     assert "mcpServers" not in manifest
     assert manifest["apps"] == "./.app.json"
+    # Codex читает корневой plugin.json (формат AgentPlugin); .codex-plugin — копия для старых
+    # клиентов, поэтому обе обязаны совпадать.
     assert portable["$schema"].endswith("/plugin.schema.json")
     assert portable["name"] == manifest["name"]
     assert portable["version"] == manifest["version"]
     assert portable["extensions"]["com.openai"]["apps"] == "./.app.json"
     assert portable["extensions"]["com.openai"]["interface"] == manifest["interface"]
+    # Codex 0.154 молча отбрасывает сервер, у которого есть поля кроме type и url
+    # (`extensions`, `oauth_resource`), поэтому mcp.json держим минимальным.
+    assert not (plugin / ".mcp.codex.json").exists()
     assert portable_mcp == {
         "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
         "mcpServers": {
@@ -48,6 +56,9 @@ def test_plugin_and_marketplace_point_to_the_standalone_package():
     assert manifest["license"] == "MIT"
     assert manifest["interface"]["privacyPolicyURL"].endswith("/PRIVACY.md")
     assert manifest["interface"]["termsOfServiceURL"].endswith("/TERMS.md")
+    assert manifest["interface"]["supportURL"].endswith("/okk-analytics-codex-plugin/issues")
+    assert len(manifest["interface"]["displayName"]) <= 30
+    assert len(manifest["interface"]["shortDescription"]) <= 30
     assert len(manifest["interface"]["defaultPrompt"]) == 3
     for key in ("composerIcon", "logo", "logoDark"):
         asset = plugin / manifest["interface"][key]
@@ -64,11 +75,6 @@ def test_plugin_and_marketplace_point_to_the_standalone_package():
         "installation": "AVAILABLE",
         "authentication": "ON_INSTALL",
     }
-    assert mcp["mcpServers"]["okk-analytics"] == {
-        "type": "http",
-        "url": "https://okk-mcp.akfixdev.ru/mcp",
-        "oauth_resource": "https://okk-mcp.akfixdev.ru/mcp",
-    }
 
 
 def test_claude_code_marketplace_reuses_the_shared_skill_and_standard_http_mcp():
@@ -82,7 +88,9 @@ def test_claude_code_marketplace_reuses_the_shared_skill_and_standard_http_mcp()
     assert marketplace["owner"] == {"name": "Alpes"}
     assert marketplace["plugins"][0]["name"] == "okk-analytics"
     assert marketplace["plugins"][0]["source"] == "./plugins/okk-analytics"
-    assert marketplace["plugins"][0]["version"] == manifest["version"] == "1.2.4"
+    # Версию Claude Code берёт из plugin.json; вторая копия в каталоге только расходилась бы.
+    assert "version" not in marketplace["plugins"][0]
+    assert manifest["version"] == __version__
     assert manifest["name"] == "okk-analytics"
     assert manifest["skills"] == "./skills/"
     assert mcp == {
@@ -168,10 +176,14 @@ def test_submission_matrix_has_exactly_five_positive_and_three_negative_cases():
 
 def test_chatgpt_submission_bundle_covers_every_tool_and_exact_test_counts():
     submission = json.loads((ROOT / "chatgpt-app-submission.json").read_text(encoding="utf-8"))
+    tools = asyncio.run(create_mcp_server(Settings(), AsyncMock()).list_tools())
+    assert submission["$schema"] == (
+        "https://developers.openai.com/plugins/schemas/chatgpt-app-submission.v1.json"
+    )
     assert submission["schema_version"] == 1
     assert submission["app_info"]["display_name"] == "OKK Analytics"
     assert len(submission["app_info"]["subtitle"]) <= 30
-    assert len(submission["tools"]) == 27
+    assert set(submission["tools"]) == {tool.name for tool in tools}
     assert len(submission["test_cases"]) == 5
     assert len(submission["negative_test_cases"]) == 3
     for name, tool in submission["tools"].items():
