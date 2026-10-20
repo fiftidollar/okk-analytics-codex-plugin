@@ -274,21 +274,11 @@ well-known route returns only that token.
 
 This is a live production plugin, not a test-stand connector. Its public MCP URL
 is `https://okk-mcp.akfixdev.ru/mcp`, and its upstream is the production OKK API
-above. Release `1.2.2` is live from runtime commit `337002b` with 27 read-only
-tools, including the ACL-safe private Supervisors catalog and its dedicated
-call/transcript tools. On `2026-09-09`, the production Compose completed
-successfully; health reported `1.2.2`, OAuth and protected-resource metadata
-were available, unauthenticated MCP returned the expected `401`, and the full
-authenticated release smoke passed under an account with three departments
-and three explicitly granted supervisors. An unknown named department returned
-neutral `not_available`. Department reports are now grounded to the complete
-live employee roster: production DB, MCP output and a real ChatGPT Web report
-matched on all 14 ORD employee UUID/name pairs and their monthly averages, with
-zero foreign records. Existing pre-`1.1.0` sessions must re-authorize before
-calling transcript tools.
-# Reporting release
-
-1.2.3 is deployed with explicit metric definitions and nullable plan
-totals/coverage. Production verification and post-deploy browser evidence
-are recorded in [deployment.md](docs/deployment.md). Repository/package state
+above. Release `1.3.0` is live: public `/health` reported `1.3.0` on
+`2026-10-20`. It registers 28 read-only tools, including the ACL-safe private
+Supervisors catalog, its dedicated call/transcript tools and the phone-history
+tool. Release `1.3.1` is prepared, not released. The verification evidence of
+each production release (roster grounding, report semantics, phone lookup) is
+recorded in [deployment.md](docs/deployment.md). Existing pre-`1.1.0` sessions
+must re-authorize before calling transcript tools. Repository/package state
 alone is not proof of client installation.
