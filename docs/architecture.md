@@ -179,9 +179,13 @@ when needed.
 ## Scaling
 
 MCP transport is stateless Streamable HTTP. OAuth/session state is shared in
-PostgreSQL; login throttles are shared in Redis. Upstream refresh rotation is
-serialized with a database row lock so concurrent worker processes do not reuse
-the same rotating OKK refresh token. No sticky sessions are required.
+PostgreSQL; login and registration throttles are shared in Redis. Each MCP
+request reloads the live OKK user without a database lock or open transaction,
+so parallel tool calls of one person run in parallel. Only the rotation of the
+OKK refresh token is serialized with a row lock — held across the OKK refresh
+call, because OKK ends its session when a rotating refresh token is used twice;
+a request that waited for the lock finds the token already renewed. No sticky
+sessions are required.
 
 Expensive cross-employee and criterion aggregation uses bounded concurrency.
 `ANALYTICS_MAX_CALLS` and `ANALYTICS_MAX_EMPLOYEES` cap a single request; a

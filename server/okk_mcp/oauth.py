@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 import secrets
 import time
 import uuid
@@ -23,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from okk_mcp.config import Settings, get_settings
 from okk_mcp.db import get_db, session_factory
 from okk_mcp.models import OAuthAuthorizationCode, OAuthClient, OAuthToken
-from okk_mcp.platform_client import OKKAuthenticationError, OKKUnavailable
+from okk_mcp.platform_client import AccountContext, OKKAuthenticationError, OKKUnavailable
 from okk_mcp.runtime import platform_client
 from okk_mcp.security import (
     ALLOWED_SCOPES,
@@ -66,6 +67,7 @@ def _authorization_metadata(settings: Settings) -> dict[str, Any]:
         "token_endpoint": f"{settings.issuer_url}/token",
         "registration_endpoint": f"{settings.issuer_url}/register",
         "revocation_endpoint": f"{settings.issuer_url}/revoke",
+        "revocation_endpoint_auth_methods_supported": ["none"],
         "userinfo_endpoint": f"{settings.issuer_url}/userinfo",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
@@ -125,12 +127,32 @@ async def protected_resource_metadata(settings: Settings = Depends(get_settings)
     return _protected_resource_metadata(settings)
 
 
+async def _check_registration_rate_limit(request: Request, settings: Settings) -> None:
+    """Registration is open to everyone (clients register themselves), so it is bounded per address."""
+
+    host = request.client.host if request.client else "unknown"
+    key = f"okk:mcp:register:ip:{host}:{int(time.time() // 3600)}"
+    client = redis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        async with client.pipeline(transaction=True) as pipe:
+            pipe.incr(key)
+            pipe.expire(key, 7200)
+            count, _ = await pipe.execute()
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail="Registration is temporarily unavailable") from exc
+    finally:
+        await client.aclose()
+    if int(count) > settings.mcp_registrations_per_hour:
+        raise HTTPException(status_code=429, detail="Too many client registrations")
+
+
 @router.post("/register")
 async def register_client(
     request: Request,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    await _check_registration_rate_limit(request, settings)
     try:
         payload = await request.json()
     except Exception:
@@ -141,7 +163,7 @@ async def register_client(
     try:
         redirects = list(
             dict.fromkeys(
-                validate_registered_redirect_uri(str(uri), settings.oauth_redirect_hosts)
+                validate_registered_redirect_uri(str(uri), settings.oauth_redirect_uris)
                 for uri in redirect_uris
             )
         )
@@ -174,7 +196,9 @@ async def register_client(
     )
 
 
-async def _load_client(db: AsyncSession, client_id: str, redirect_uri: str) -> OAuthClient:
+async def _load_client(
+    db: AsyncSession, client_id: str, redirect_uri: str, settings: Settings
+) -> OAuthClient:
     client = (
         await db.execute(
             select(OAuthClient).where(
@@ -187,9 +211,20 @@ async def _load_client(db: AsyncSession, client_id: str, redirect_uri: str) -> O
         not client
         or (client.expires_at and client.expires_at <= _now())
         or redirect_uri not in client.redirect_uris
+        or not _allowed_redirect(redirect_uri, settings)
     ):
         raise HTTPException(status_code=400, detail="Invalid OAuth client or redirect URI")
     return client
+
+
+def _allowed_redirect(redirect_uri: str, settings: Settings) -> bool:
+    """The current allowlist also binds clients registered under an older, wider rule."""
+
+    try:
+        validate_registered_redirect_uri(redirect_uri, settings.oauth_redirect_uris)
+    except ValueError:
+        return False
+    return True
 
 
 def _serializer(settings: Settings) -> URLSafeTimedSerializer:
@@ -251,7 +286,7 @@ def _render_login(
     error: str | None = None,
 ) -> HTMLResponse:
     error_html = f'<div class="error">{html.escape(error)}</div>' if error else ""
-    destination, known_destination = redirect_destination(redirect_uri, settings.oauth_redirect_hosts)
+    destination, known_destination = redirect_destination(redirect_uri, settings.oauth_redirect_uris)
     destination_html = (
         ""
         if known_destination
@@ -271,7 +306,7 @@ button{{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;back
 <form method="post" action="/authorize"><input type="hidden" name="authorization_request" value="{html.escape(signed_request, quote=True)}"><input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}">
 <label for="email">Логин (email)</label><input id="email" name="email" type="email" autocomplete="username" maxlength="200" required autofocus>
 <label for="password">Пароль</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required>
-<div class="scope">Только чтение: статистика, карточки сотрудников, наставничество, сценарии и критерии{transcript_scope}{phone_scope} — строго в пределах прав аккаунта.</div>
+<div class="scope">Только чтение: статистика, карточки сотрудников, сценарии и критерии{transcript_scope}{phone_scope} — строго в пределах прав аккаунта.</div>
 <button type="submit">Войти и разрешить доступ</button></form>
 <div class="next"><strong>Что произойдёт дальше</strong><br>Браузер передаст вход обратно в приложение, из которого вы начали подключение (Codex, Claude Code или ChatGPT). Вернитесь в него и попросите «Проверить подключение OKK»: сообщение «OKK подключён» с ролью и отделами означает, что вход действительно завершён.</div>
 <p><small>MCP-шлюз сразу передаёт пароль в штатный API ОКК, не сохраняет его и никогда не передаёт приложению.</small></p></section></main></body></html>"""
@@ -289,7 +324,7 @@ async def _refresh_authorization_form(
 ) -> HTMLResponse:
     try:
         auth_request = _serializer(settings).loads(authorization_request, max_age=600)
-        client = await _load_client(db, auth_request["client_id"], auth_request["redirect_uri"])
+        client = await _load_client(db, auth_request["client_id"], auth_request["redirect_uri"], settings)
     except (BadSignature, SignatureExpired):
         return _render_authorization_error("Срок действия запроса на авторизацию истёк.")
     except (KeyError, TypeError, HTTPException):
@@ -327,7 +362,7 @@ async def authorize(
         )
     if response_type != "code" or not valid_pkce_challenge(code_challenge, code_challenge_method):
         raise HTTPException(status_code=400, detail="Authorization Code with PKCE S256 is required")
-    client = await _load_client(db, client_id, redirect_uri)
+    client = await _load_client(db, client_id, redirect_uri, settings)
     try:
         requested_scope = validate_scopes(scope or client.scope)
     except ValueError:
@@ -399,7 +434,7 @@ async def authorize_login(
             settings=settings,
             error="Сеанс входа был обновлён. Введите логин и пароль ещё раз.",
         )
-    client = await _load_client(db, auth_request["client_id"], auth_request["redirect_uri"])
+    client = await _load_client(db, auth_request["client_id"], auth_request["redirect_uri"], settings)
     await _check_login_rate_limit(request, email, settings)
     try:
         account_session = await platform_client.authenticate(email, password)
@@ -534,6 +569,8 @@ async def token_endpoint(
         ):
             return _oauth_error("invalid_grant", "Authorization code is invalid or expired")
         stored.consumed_at = _now()
+        if client.first_authorized_at is None:
+            client.first_authorized_at = stored.consumed_at
         raw_access, raw_refresh, _ = _add_token_pair(
             db,
             client_id=client_id,
@@ -558,6 +595,9 @@ async def token_endpoint(
         if not stored or stored.client_id != client_id or stored.expires_at <= _now():
             return _oauth_error("invalid_grant", "Refresh token is invalid or expired")
         if stored.consumed_at is not None:
+            retried = await _retried_rotation(db, stored, settings)
+            if retried is not None:
+                return _token_response(*retried, settings)
             await db.execute(
                 update(OAuthToken)
                 .where(OAuthToken.family_id == stored.family_id, OAuthToken.revoked_at.is_(None))
@@ -594,9 +634,39 @@ async def token_endpoint(
             settings=settings,
         )
         stored.replaced_by_hash = next_hash
+        stored.successor_sealed = platform_client.cipher.seal(
+            json.dumps({"access": raw_access, "refresh": raw_refresh})
+        )
         await db.flush()
         return _token_response(raw_access, raw_refresh, requested_scope, settings)
     return _oauth_error("unsupported_grant_type", "Unsupported grant type")
+
+
+async def _retried_rotation(
+    db: AsyncSession, stored: OAuthToken, settings: Settings
+) -> tuple[str, str, str] | None:
+    """The same pair again for a refresh repeated within seconds: the client lost the answer,
+    or two of its processes refreshed at once.
+
+    Only while the issued refresh token is unused and not revoked. Later, or once the chain moved
+    on, a used refresh token is treated as stolen and the whole family is revoked.
+    """
+
+    if not stored.successor_sealed or not stored.replaced_by_hash or stored.consumed_at is None:
+        return None
+    if _now() - stored.consumed_at > timedelta(seconds=settings.mcp_refresh_retry_seconds):
+        return None
+    successor = (
+        await db.execute(
+            select(OAuthToken)
+            .where(OAuthToken.token_hash == stored.replaced_by_hash, OAuthToken.token_type == "refresh")
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if not successor or successor.consumed_at is not None or successor.revoked_at is not None:
+        return None
+    pair = json.loads(platform_client.cipher.open(stored.successor_sealed))
+    return pair["access"], pair["refresh"], successor.scope
 
 
 @router.post("/revoke")
@@ -621,6 +691,21 @@ async def revoke_token(
         else:
             stored.revoked_at = _now()
     return Response(status_code=200, headers={"Cache-Control": "no-store"})
+
+
+def _account_claims(context: AccountContext | None) -> dict[str, Any]:
+    """Live OKK account for the request; empty while OKK is unavailable."""
+
+    if context is None:
+        return {}
+    return {
+        "okk_user_id": context.user_id,
+        "email": context.email,
+        "role": context.role,
+        "department_ids": list(context.department_ids),
+        # Internal request context only; never serialized into MCP output.
+        "_upstream_access_token": context.access_token,
+    }
 
 
 class OKKTokenVerifier(TokenVerifier):
@@ -649,8 +734,12 @@ class OKKTokenVerifier(TokenVerifier):
             resource, session_id = stored.resource, stored.session_id
         try:
             context = await platform_client.live_context(session_id)
-        except (OKKAuthenticationError, OKKUnavailable):
+        except OKKAuthenticationError:
             return None
+        except OKKUnavailable:
+            # Our token is valid; OKK is down. A 401 here would send the client to sign in again,
+            # so the request goes on and the tool reports that OKK is temporarily unavailable.
+            context = None
         return AccessToken(
             token=token,
             client_id=client_id,
@@ -658,14 +747,7 @@ class OKKTokenVerifier(TokenVerifier):
             expires_at=int(expires_at.timestamp()),
             resource=resource,
             subject=str(session_id),
-            claims={
-                "okk_user_id": context.user_id,
-                "email": context.email,
-                "role": context.role,
-                "department_ids": list(context.department_ids),
-                # Internal request context only; never serialized into MCP output.
-                "_upstream_access_token": context.access_token,
-            },
+            claims=_account_claims(context),
         )
 
 
@@ -690,6 +772,8 @@ async def userinfo(request: Request, settings: Settings = Depends(get_settings))
     if not {"openid", "email"}.issubset(set(verified.scopes)):
         return _oauth_error("insufficient_scope", "openid and email scopes are required", 403)
     claims = verified.claims or {}
+    if not claims:
+        return _oauth_error("temporarily_unavailable", "OKK is temporarily unavailable", 503)
     email = str(claims.get("email") or "").strip().lower()
     subject = str(claims.get("okk_user_id") or verified.subject or "")
     if not email or not subject:

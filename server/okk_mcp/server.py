@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import ToolAnnotations
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import AnyHttpUrl, BaseModel, Field
 
 from okk_mcp.backend_client import BackendClient, BackendUnavailable
@@ -30,6 +32,20 @@ Period = Literal[
     "all",
     "custom",
 ]
+PeriodParam = Annotated[
+    Period | None,
+    Field(
+        description=(
+            "Named period in Moscow time; week, month, quarter and year run from their first day "
+            "to today. Omit it when start_date and end_date are given."
+        )
+    ),
+]
+StartDate = Annotated[
+    date | None,
+    Field(description="First day of a custom range, YYYY-MM-DD. Give it with end_date instead of period."),
+]
+EndDate = Annotated[date | None, Field(description="Last day of a custom range, YYYY-MM-DD, inclusive.")]
 TaskStatus = Literal["pending", "in_progress", "completed", "cancelled"]
 TranscriptFormat = Literal["raw", "diarized", "segments"]
 TranscriptMatchMode = Literal["phrase", "all_terms", "any_terms"]
@@ -68,7 +84,7 @@ class EmployeeRosterGrounding(BaseModel):
 
 
 class AnalyticsEnvelope(BaseModel):
-    status: Literal["ok", "partial", "no_data", "not_available", "temporarily_unavailable"]
+    status: Literal["ok", "partial", "no_data", "not_available"]
     access_context: AccessContext | None = None
     effective_scope: dict[str, Any] = Field(default_factory=dict)
     period: PeriodRange | None = None
@@ -77,6 +93,24 @@ class AnalyticsEnvelope(BaseModel):
     employee_roster_grounding: EmployeeRosterGrounding | None = None
     data: dict[str, Any] | list[dict[str, Any]] = Field(default_factory=dict)
 
+
+# The tool returns CallToolResult so the text copy of the envelope is compact; the output schema
+# and its validation still come from AnalyticsEnvelope.
+ToolResult = Annotated[CallToolResult, AnalyticsEnvelope]
+
+# Response size limits. Claude Code warns above ~10k tokens and moves results over 50,000
+# characters into a file; Codex cuts results to the model's budget. A full transcript is read
+# in chunks (next_start_char), so one chunk stays well below both limits.
+PREVIEW_MAX_CHARS = 500
+PAGE_MAX_ITEMS = 50
+TranscriptChunkChars = Annotated[
+    int,
+    Field(
+        ge=1000,
+        le=30000,
+        description="Characters of text (or of segments) in this chunk; read the rest from next_start_*.",
+    ),
+]
 
 READ_ONLY = ToolAnnotations(
     readOnlyHint=True,
@@ -104,28 +138,46 @@ def _security_meta(*scopes: str) -> dict[str, Any]:
 
 def _require_scopes(*required: str) -> None:
     token = get_access_token()
-    if not token or not set(required).issubset(set(token.scopes)):
-        raise PermissionError("The OKK connection does not grant the required read scope")
+    missing = sorted(set(required) - set(token.scopes if token else ()))
+    if missing:
+        raise PermissionError(
+            f"This OKK connection was granted without {', '.join(missing)}. Reconnect OKK Analytics "
+            "and allow that access on the OKK login page."
+        )
 
 
 def _period_params(
-    period: Period,
-    start_date: str | None,
-    end_date: str | None,
+    period: Period | None,
+    start_date: date | None,
+    end_date: date | None,
+    *,
+    default: Period = "month",
 ) -> dict[str, Any]:
-    if period == "custom" and (not start_date or not end_date):
-        raise ValueError("custom period requires start_date and end_date in YYYY-MM-DD format")
-    return {"period": period, "start_date": start_date, "end_date": end_date}
+    """Period by name or by dates. Dates are never dropped silently: they make the range custom."""
+
+    if start_date is None and end_date is None:
+        if period == "custom":
+            raise ValueError("period=custom needs start_date and end_date, e.g. 2026-09-01 and 2026-09-30.")
+        return {"period": period or default, "start_date": None, "end_date": None}
+    if start_date is None or end_date is None:
+        raise ValueError("Give both start_date and end_date (YYYY-MM-DD), e.g. 2026-09-01 and 2026-09-30.")
+    if period not in (None, "custom"):
+        raise ValueError(f"Give either period={period} or start_date/end_date, not both.")
+    if end_date < start_date:
+        raise ValueError("end_date must be on or after start_date.")
+    return {"period": "custom", "start_date": start_date.isoformat(), "end_date": end_date.isoformat()}
 
 
-async def _read(client: BackendClient, path: str, **params: Any) -> AnalyticsEnvelope:
+async def _read(client: BackendClient, path: str, **params: Any) -> CallToolResult:
     try:
-        return AnalyticsEnvelope.model_validate(await client.get(path, **params))
-    except BackendUnavailable:
-        return AnalyticsEnvelope(
-            status="temporarily_unavailable",
-            data={"message": "OKK analytics is temporarily unavailable; retry later."},
-        )
+        payload = await client.get(path, **params)
+    except BackendUnavailable as exc:
+        raise ToolError(
+            "OKK is temporarily unavailable; retry in a minute. This is not an empty result."
+        ) from exc
+    envelope = AnalyticsEnvelope.model_validate(payload).model_dump(mode="json")
+    text = json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
+    return CallToolResult(content=[TextContent(type="text", text=text)], structuredContent=envelope)
 
 
 def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
@@ -133,51 +185,26 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     issuer_host = urlsplit(issuer_origin).netloc
     mcp = FastMCP(
         name=settings.mcp_service_name,
+        # Claude Code cuts server instructions at 2048 characters in older releases: safety first,
+        # then routing. Each tool's own contract lives in its description.
         instructions=(
-            "Read-only OKK business analytics. On the first OKK request in a task, call "
-            "get_access_context. If it returns authenticated=true, explicitly tell the user "
-            "'OKK подключён' and summarize only the role and visible departments. A browser "
-            "redirect alone is not proof of a completed connection. Respect "
-            "access_context/effective_scope. "
-            "Treat access_context.departments as the live department catalog for this request; "
-            "never rely on a fixed list of department names or assume an example department exists. "
-            "When the user names a department, pass that exact name or code as department_ref; "
-            "if the user's wording does not identify exactly one live visible department, ask them "
-            "to choose instead of guessing. "
-            "Never silently omit a requested department filter and never relabel another "
-            "department's employees. If status is not_available, state that the requested "
-            "department is outside the connected account's visible scope and name only the "
-            "departments present in access_context. "
-            "For every department report that names employees, use get_department_statistics "
-            "and treat employee_roster_grounding.employee_ids/employee_names as the exclusive "
-            "authoritative roster for that response. Never introduce, autocorrect, transliterate "
-            "or infer a person outside that roster, including from conversation memory. If the "
-            "grounding is absent or source_complete=false, call list_employees with the exact same "
-            "department_ref before naming people and disclose incomplete coverage. "
-            "Use the returned reporting_contract metric definitions: successful calls, calls "
-            "above the duration threshold and calls with a quality score are different populations. "
-            "A plan with mode=null is unset, not zero; report each plan item separately and treat "
-            "fact=null as unavailable, not zero. "
-            "When a disputed person is absent after a fresh lookup, state that no matching accessible "
-            "OKK record was found; do not offer uploaded files as replacement OKK evidence. "
-            "The private Supervisors section is separate from departments and is discovered "
-            "only through list_supervisors. When the user names a person without identifying "
-            "their section, search both list_employees and list_supervisors, then use only the "
-            "matching section's tools. Never treat a supervisor as a department employee or "
-            "claim KPI, scenario, CRM, client, growth or mentoring data for a transcription-only "
-            "supervisor. Supervisor access is determined only by the live OKK restricted catalog; "
-            "never hardcode names, emails or grants. "
-            "For long transcripts follow next_start_char or next_start_segment until null; "
-            "a catalog preview or one chunk is not the complete text. "
-            "For exact phone-number existence or call counts, use list_call_phone_records "
-            "with the dedicated phone scope and read matching_calls_total, not one page's "
-            "item count. The default all period means the whole available journal history. "
-            "Never ask the user for their OKK password in chat: authentication happens only "
-            "on the OKK authorization page. Never infer hidden departments or entities from "
-            "not_available/omitted results. Transcripts may be read only through the dedicated "
-            "transcript tools and only for calls in the connected account's current ACL. Do not "
-            "copy transcript text into operational logs. Do not request audio, prompts, raw "
-            "reasoning, routing, pipeline, Megafon administration or write operations."
+            "Read-only analytics of the OKK call-quality system (ОКК): calls, departments, employees, "
+            "scores, KPI, plans, clients, CRM, scenarios, transcripts.\n"
+            "Safety: never ask for the OKK password in chat; sign-in happens only on the OKK page. "
+            "Never guess hidden departments or people from not_available. Do not copy transcript "
+            "text into logs or files unless the user asks for a file. Audio, prompts, AI reasoning, "
+            "processing internals and any changes are out of scope.\n"
+            "Start each task with get_access_context. When authenticated=true, tell the user "
+            "'OKK подключён' with the role and visible departments.\n"
+            "Departments: pass the user's department name or code as department_ref exactly as in "
+            "access_context.departments. If it matches no single visible department, ask the user "
+            "to choose. Never drop or widen a requested filter.\n"
+            "People: name only employees from employee_roster_grounding of the same response, never "
+            "from memory. If it is incomplete, call list_employees with the same department_ref. "
+            "For a name without a section, search list_employees and list_supervisors. Supervisors "
+            "are a private section: call volume and transcripts only, through their own tools.\n"
+            "Numbers: no_data, not_available, null and partial are not zero; say what is missing.\n"
+            "Periods: give period, or start_date and end_date (YYYY-MM-DD) for any other range."
         ),
         token_verifier=OKKTokenVerifier(settings.resource_url),
         auth=AuthSettings(
@@ -202,7 +229,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,
     )
-    async def get_access_context() -> AnalyticsEnvelope:
+    async def get_access_context() -> ToolResult:
         _require_scopes(STAT_SCOPE)
         return await _read(client, "/mcp-read/access-context")
 
@@ -213,7 +240,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,
     )
-    async def get_statistics_catalog() -> AnalyticsEnvelope:
+    async def get_statistics_catalog() -> ToolResult:
         _require_scopes(STAT_SCOPE)
         return await _read(client, "/mcp-read/statistics-catalog")
 
@@ -225,17 +252,17 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         structured_output=True,
     )
     async def get_overview_statistics(
-        period: Period = "month",
+        period: PeriodParam = None,
         department_id: UUID | None = None,
         department_ref: str | None = Field(
             default=None,
             max_length=200,
             description="Exact code or full name from the current access_context.departments catalog.",
         ),
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: StartDate = None,
+        end_date: EndDate = None,
         top_limit: int = Field(default=20, ge=1, le=50),
-    ) -> AnalyticsEnvelope:
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE)
         return await _read(
             client,
@@ -257,13 +284,13 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,
     )
-    async def list_departments() -> AnalyticsEnvelope:
+    async def list_departments() -> ToolResult:
         _require_scopes(STAT_SCOPE)
         return await _read(client, "/mcp-read/departments")
 
     @mcp.tool(
         title="Статистика отдела",
-        description="Полная карточка одного доступного отдела: KPI, план/факт, рейтинг сотрудников и дневные тренды. При запросе пользователя по названию или коду используйте department_ref; недоступный отдел возвращает not_available без данных другого отдела. В отчёте разрешено называть только сотрудников из employee_roster_grounding.employee_names: это авторитетный живой состав отдела, а все upstream-строки вне него отфильтрованы.",
+        description="Полная карточка одного доступного отдела: KPI, план/факт, рейтинг сотрудников и дневные тренды. При запросе пользователя по названию или коду используйте department_ref; недоступный отдел возвращает not_available без данных другого отдела. В отчёте разрешено называть только сотрудников из employee_roster_grounding.employee_names: это авторитетный живой состав отдела, а все upstream-строки вне него отфильтрованы. Смысл показателей — data.reporting_contract: успешные звонки, звонки от минимальной длительности и оценённые звонки — разные множества.",
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,
@@ -275,10 +302,10 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             max_length=200,
             description="Exact code or full name from the current access_context.departments catalog.",
         ),
-        period: Period = "month",
-        start_date: str | None = None,
-        end_date: str | None = None,
-    ) -> AnalyticsEnvelope:
+        period: PeriodParam = None,
+        start_date: StartDate = None,
+        end_date: EndDate = None,
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE)
         if not department_id and not department_ref:
             raise ValueError("department_id or department_ref is required")
@@ -304,10 +331,10 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             max_length=100,
             description="Exact visible department codes or names.",
         ),
-        period: Period = "month",
-        start_date: str | None = None,
-        end_date: str | None = None,
-    ) -> AnalyticsEnvelope:
+        period: PeriodParam = None,
+        start_date: StartDate = None,
+        end_date: EndDate = None,
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE)
         return await _read(
             client,
@@ -335,7 +362,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         include_inactive: bool = False,
         page: int = Field(default=1, ge=1),
         page_size: int = Field(default=50, ge=1, le=100),
-    ) -> AnalyticsEnvelope:
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE)
         return await _read(
             client,
@@ -361,7 +388,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     )
     async def list_supervisors(
         search: str | None = Field(default=None, max_length=200),
-    ) -> AnalyticsEnvelope:
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE)
         return await _read(client, "/mcp-read/supervisors", search=search)
 
@@ -378,10 +405,10 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     )
     async def get_supervisor_call_statistics(
         supervisor_id: UUID,
-        period: Period = "month",
-        start_date: str | None = None,
-        end_date: str | None = None,
-    ) -> AnalyticsEnvelope:
+        period: PeriodParam = None,
+        start_date: StartDate = None,
+        end_date: EndDate = None,
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE)
         return await _read(
             client,
@@ -394,8 +421,8 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         title="Полная карточка сотрудника",
         description=(
             "Возвращает KPI, план/факт, клиентские и CRM-метрики, AI-сильные стороны, зоны роста и "
-            "недельный фокус за один и тот же период. Наставничества в новом OKK нет: "
-            "mentoring_available=false, списки задач null."
+            "недельный фокус за один и тот же период. Наставнических задач OKK не хранит: "
+            "mentoring_available=false, списки задач null — это не ноль."
         ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
@@ -409,24 +436,22 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             max_length=200,
             description="Optional department guard by exact visible code or name.",
         ),
-        period: Period = "month",
-        start_date: str | None = None,
-        end_date: str | None = None,
-        task_page_size: int = Field(default=100, ge=1, le=100),
-    ) -> AnalyticsEnvelope:
+        period: PeriodParam = None,
+        start_date: StartDate = None,
+        end_date: EndDate = None,
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE)
         return await _read(
             client,
             f"/mcp-read/employee-card/{employee_id}",
             department_id=department_id,
             department_ref=department_ref,
-            task_page_size=task_page_size,
             **_period_params(period, start_date, end_date),
         )
 
     @mcp.tool(
         title="Сравнение сотрудников",
-        description="Сравнивает до 20 доступных сотрудников по KPI, сильным сторонам, зонам роста, фокусу и задачам.",
+        description="Сравнивает до 20 доступных сотрудников по KPI, сильным сторонам, зонам роста и недельному фокусу.",
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
         structured_output=True,
@@ -439,10 +464,10 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             max_length=200,
             description="Optional department guard by exact visible code or name.",
         ),
-        period: Period = "month",
-        start_date: str | None = None,
-        end_date: str | None = None,
-    ) -> AnalyticsEnvelope:
+        period: PeriodParam = None,
+        start_date: StartDate = None,
+        end_date: EndDate = None,
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE)
         return await _read(
             client,
@@ -461,15 +486,15 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         structured_output=True,
     )
     async def get_call_statistics(
-        period: Period = "month",
+        period: PeriodParam = None,
         department_id: UUID | None = None,
         department_ref: str | None = Field(
             default=None, max_length=200, description="Exact visible department code or name."
         ),
         employee_id: UUID | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
-    ) -> AnalyticsEnvelope:
+        start_date: StartDate = None,
+        end_date: EndDate = None,
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE)
         return await _read(
             client,
@@ -484,7 +509,8 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         title="Звонки по номеру телефона",
         description=(
             "Показывает номера клиентов и точное число доступных звонков по заданному номеру "
-            "за период. Без номера возвращает страницу журнала с номерами. Считает все записи "
+            "за период: число — matching_calls_total, а не длина страницы. Без номера возвращает "
+            "страницу журнала с номерами. Считает все записи "
             "звонков, включая пропущенные, короткие и ещё обрабатываемые; сохраняет ACL "
             "отдела, сотрудника и персонального раздела руководителей. По умолчанию ищет "
             "за всю доступную историю, а не только за текущий месяц."
@@ -495,16 +521,21 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     )
     async def list_call_phone_records(
         phone_number: str | None = Field(default=None, min_length=3, max_length=40),
-        period: Period = "all",
+        period: Annotated[
+            Period | None,
+            Field(
+                description="Named period; default all — the whole journal history. Omit it for a date range."
+            ),
+        ] = None,
         department_id: UUID | None = None,
         department_ref: str | None = Field(default=None, max_length=200),
         employee_id: UUID | None = None,
         supervisor_id: UUID | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: StartDate = None,
+        end_date: EndDate = None,
         page: int = Field(default=1, ge=1),
         page_size: int = Field(default=25, ge=1, le=100),
-    ) -> AnalyticsEnvelope:
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE, PHONE_SCOPE)
         return await _read(
             client,
@@ -516,7 +547,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             supervisor_id=supervisor_id,
             page=page,
             page_size=page_size,
-            **_period_params(period, start_date, end_date),
+            **_period_params(period, start_date, end_date, default="all"),
         )
 
     @mcp.tool(
@@ -533,20 +564,20 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         structured_output=True,
     )
     async def list_call_transcripts(
-        period: Period = "month",
+        period: PeriodParam = None,
         department_id: UUID | None = None,
         department_ref: str | None = Field(
             default=None, max_length=200, description="Exact visible department code or name."
         ),
         employee_id: UUID | None = None,
         scenario_id: UUID | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: StartDate = None,
+        end_date: EndDate = None,
         transcript_format: TranscriptFormat = "diarized",
-        preview_chars: int = Field(default=300, ge=0, le=2000),
+        preview_chars: int = Field(default=300, ge=0, le=PREVIEW_MAX_CHARS),
         page: int = Field(default=1, ge=1),
-        page_size: int = Field(default=25, ge=1, le=100),
-    ) -> AnalyticsEnvelope:
+        page_size: int = Field(default=25, ge=1, le=PAGE_MAX_ITEMS),
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE, TRANSCRIPT_SCOPE)
         return await _read(
             client,
@@ -578,8 +609,8 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     async def get_call_transcript(
         call_id: UUID,
         transcript_format: TranscriptFormat = "diarized",
-        max_chars: int = Field(default=16000, ge=1000, le=500000),
-        max_segments: int = Field(default=2000, ge=1, le=10000),
+        max_chars: TranscriptChunkChars = 16000,
+        max_segments: int = Field(default=500, ge=1, le=2000),
         start_char: int = Field(default=0, ge=0),
         start_segment: int = Field(default=0, ge=0),
         department_id: UUID | None = None,
@@ -587,7 +618,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             default=None, max_length=200, description="Optional exact visible department guard."
         ),
         employee_id: UUID | None = None,
-    ) -> AnalyticsEnvelope:
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE, TRANSCRIPT_SCOPE)
         return await _read(
             client,
@@ -615,19 +646,19 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     )
     async def search_call_transcripts(
         query: str = Field(min_length=2, max_length=500),
-        period: Period = "month",
+        period: PeriodParam = None,
         department_id: UUID | None = None,
         department_ref: str | None = Field(
             default=None, max_length=200, description="Exact visible department code or name."
         ),
         employee_id: UUID | None = None,
         scenario_id: UUID | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: StartDate = None,
+        end_date: EndDate = None,
         match_mode: TranscriptMatchMode = "phrase",
-        context_chars: int = Field(default=240, ge=40, le=2000),
-        limit: int = Field(default=25, ge=1, le=100),
-    ) -> AnalyticsEnvelope:
+        context_chars: int = Field(default=240, ge=40, le=PREVIEW_MAX_CHARS),
+        limit: int = Field(default=25, ge=1, le=PAGE_MAX_ITEMS),
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE, TRANSCRIPT_SCOPE)
         return await _read(
             client,
@@ -656,14 +687,14 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     )
     async def list_supervisor_call_transcripts(
         supervisor_id: UUID,
-        period: Period = "month",
-        start_date: str | None = None,
-        end_date: str | None = None,
+        period: PeriodParam = None,
+        start_date: StartDate = None,
+        end_date: EndDate = None,
         transcript_format: TranscriptFormat = "diarized",
-        preview_chars: int = Field(default=300, ge=0, le=2000),
+        preview_chars: int = Field(default=300, ge=0, le=PREVIEW_MAX_CHARS),
         page: int = Field(default=1, ge=1),
-        page_size: int = Field(default=25, ge=1, le=100),
-    ) -> AnalyticsEnvelope:
+        page_size: int = Field(default=25, ge=1, le=PAGE_MAX_ITEMS),
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE, TRANSCRIPT_SCOPE)
         return await _read(
             client,
@@ -691,11 +722,11 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         supervisor_id: UUID,
         call_id: UUID,
         transcript_format: TranscriptFormat = "diarized",
-        max_chars: int = Field(default=16000, ge=1000, le=500000),
-        max_segments: int = Field(default=2000, ge=1, le=10000),
+        max_chars: TranscriptChunkChars = 16000,
+        max_segments: int = Field(default=500, ge=1, le=2000),
         start_char: int = Field(default=0, ge=0),
         start_segment: int = Field(default=0, ge=0),
-    ) -> AnalyticsEnvelope:
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE, TRANSCRIPT_SCOPE)
         return await _read(
             client,
@@ -721,13 +752,13 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     async def search_supervisor_call_transcripts(
         supervisor_id: UUID,
         query: str = Field(min_length=2, max_length=500),
-        period: Period = "month",
-        start_date: str | None = None,
-        end_date: str | None = None,
+        period: PeriodParam = None,
+        start_date: StartDate = None,
+        end_date: EndDate = None,
         match_mode: TranscriptMatchMode = "phrase",
-        context_chars: int = Field(default=240, ge=40, le=2000),
-        limit: int = Field(default=25, ge=1, le=100),
-    ) -> AnalyticsEnvelope:
+        context_chars: int = Field(default=240, ge=40, le=PREVIEW_MAX_CHARS),
+        limit: int = Field(default=25, ge=1, le=PAGE_MAX_ITEMS),
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE, TRANSCRIPT_SCOPE)
         return await _read(
             client,
@@ -745,7 +776,8 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         description=(
             "Недельный план звонков отдела и факт за период: по каждому пункту плана — направление, "
             "клиенты, что засчитывается, план на дни периода и факт. Без отдела и сотрудника — все "
-            "видимые отделы. Пункты не складываются между собой; fact=null — нет данных, не ноль. "
+            "видимые отделы. Пункты не складываются между собой; mode=null — план не задан, fact=null — нет "
+            "данных, и то и другое не ноль. "
             "Имена канонизированы по employee_roster_grounding; не добавляйте людей вне этого списка."
         ),
         annotations=READ_ONLY,
@@ -760,7 +792,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             default=None, max_length=200, description="Exact visible department code or name."
         ),
         employee_id: UUID | None = None,
-    ) -> AnalyticsEnvelope:
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE)
         if end_date < start_date:
             raise ValueError("end_date must be on or after start_date")
@@ -787,15 +819,15 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         structured_output=True,
     )
     async def get_client_statistics(
-        period: Period = "month",
+        period: PeriodParam = None,
         department_id: UUID | None = None,
         department_ref: str | None = Field(
             default=None, max_length=200, description="Exact visible department code or name."
         ),
         employee_id: UUID | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
-    ) -> AnalyticsEnvelope:
+        start_date: StartDate = None,
+        end_date: EndDate = None,
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE)
         return await _read(
             client,
@@ -820,7 +852,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         ),
         employee_id: UUID | None = None,
         snapshot_date: date | None = None,
-    ) -> AnalyticsEnvelope:
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE)
         return await _read(
             client,
@@ -839,16 +871,16 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         structured_output=True,
     )
     async def get_growth_insights(
-        period: Period = "month",
+        period: PeriodParam = None,
         department_id: UUID | None = None,
         department_ref: str | None = Field(
             default=None, max_length=200, description="Exact visible department code or name."
         ),
         employee_id: UUID | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: StartDate = None,
+        end_date: EndDate = None,
         limit: int = Field(default=20, ge=1, le=100),
-    ) -> AnalyticsEnvelope:
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE)
         return await _read(
             client,
@@ -872,18 +904,18 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         structured_output=True,
     )
     async def get_mentoring_statistics(
-        period: Period = "month",
+        period: PeriodParam = None,
         department_id: UUID | None = None,
         department_ref: str | None = Field(
             default=None, max_length=200, description="Exact visible department code or name."
         ),
         employee_id: UUID | None = None,
         task_status: TaskStatus | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: StartDate = None,
+        end_date: EndDate = None,
         page: int = Field(default=1, ge=1),
         page_size: int = Field(default=50, ge=1, le=100),
-    ) -> AnalyticsEnvelope:
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE)
         return await _read(
             client,
@@ -916,7 +948,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         include_historical: bool = False,
         page: int = Field(default=1, ge=1),
         page_size: int = Field(default=50, ge=1, le=100),
-    ) -> AnalyticsEnvelope:
+    ) -> ToolResult:
         _require_scopes(SCENARIO_SCOPE)
         return await _read(
             client,
@@ -944,7 +976,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             max_length=200,
             description="Optional department guard by exact visible code or name.",
         ),
-    ) -> AnalyticsEnvelope:
+    ) -> ToolResult:
         _require_scopes(SCENARIO_SCOPE)
         return await _read(
             client,
@@ -968,16 +1000,16 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         structured_output=True,
     )
     async def get_scenario_performance(
-        period: Period = "month",
+        period: PeriodParam = None,
         scenario_ids: list[UUID] | None = Field(default=None, max_length=100),
         department_id: UUID | None = None,
         department_ref: str | None = Field(
             default=None, max_length=200, description="Exact visible department code or name."
         ),
         employee_id: UUID | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
-    ) -> AnalyticsEnvelope:
+        start_date: StartDate = None,
+        end_date: EndDate = None,
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE, SCENARIO_SCOPE)
         return await _read(
             client,
@@ -1002,7 +1034,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         structured_output=True,
     )
     async def get_criterion_performance(
-        period: Period = "month",
+        period: PeriodParam = None,
         scenario_id: UUID | None = None,
         criterion_ids: list[UUID] | None = Field(default=None, max_length=100),
         department_id: UUID | None = None,
@@ -1010,10 +1042,10 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             default=None, max_length=200, description="Exact visible department code or name."
         ),
         employee_id: UUID | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start_date: StartDate = None,
+        end_date: EndDate = None,
         limit: int = Field(default=100, ge=1, le=500),
-    ) -> AnalyticsEnvelope:
+    ) -> ToolResult:
         _require_scopes(STAT_SCOPE, SCENARIO_SCOPE)
         return await _read(
             client,

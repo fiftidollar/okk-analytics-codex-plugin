@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     mcp_authorization_code_minutes: int = Field(default=5, ge=1, le=15)
     mcp_http_timeout_seconds: float = Field(default=30.0, ge=2, le=120)
     mcp_login_attempts_per_minute: int = Field(default=8, ge=2, le=30)
+    mcp_registrations_per_hour: int = Field(default=20, ge=2, le=500)
+    # A refresh repeated within this window (the client lost the answer) gets the same new pair.
+    mcp_refresh_retry_seconds: int = Field(default=30, ge=0, le=120)
     mcp_cleanup_interval_minutes: int = Field(default=60, ge=5, le=1440)
     mcp_audit_retention_days: int = Field(default=30, ge=7, le=365)
     database_pool_size: int = Field(default=15, ge=2, le=100)
@@ -48,10 +51,15 @@ class Settings(BaseSettings):
     analytics_max_employees: int = Field(default=2000, ge=100, le=10000)
     analytics_trace_enabled: bool = True
     openai_apps_challenge_token: str = Field(default="", max_length=1000)
-    # Сайты, на которые новый OAuth-клиент может получить код входа (через запятую).
-    # Адреса этого компьютера (Codex, Claude Code) разрешены всегда. Чужой адрес
-    # возврата — это кража кода входа человека, который ввёл пароль на нашей странице.
-    mcp_oauth_redirect_hosts: str = "chatgpt.com,claude.ai,claude.com"
+    # Точные адреса возврата сайтов-клиентов (через запятую), на которые можно получить код входа.
+    # Адреса этого компьютера (Codex, Claude Code) разрешены всегда. Только точный адрес: на
+    # claude.ai и chatgpt.com живут и чужие приложения, а чужой адрес возврата — это кража кода
+    # входа человека, который ввёл пароль на нашей странице. Адрес ChatGPT — у нашего приложения.
+    mcp_oauth_redirect_uris: str = (
+        "https://claude.ai/api/mcp/auth_callback,"
+        "https://claude.com/api/mcp/auth_callback,"
+        "https://chatgpt.com/connector/oauth/a-t9rb0LP-X4"
+    )
 
     @model_validator(mode="after")
     def validate_deployment(self) -> Settings:
@@ -113,12 +121,8 @@ class Settings(BaseSettings):
         return self.okk_api_base_url.rstrip("/")
 
     @property
-    def oauth_redirect_hosts(self) -> frozenset[str]:
-        return frozenset(
-            host.strip().lower().rstrip(".")
-            for host in self.mcp_oauth_redirect_hosts.split(",")
-            if host.strip()
-        )
+    def oauth_redirect_uris(self) -> frozenset[str]:
+        return frozenset(uri.strip() for uri in self.mcp_oauth_redirect_uris.split(",") if uri.strip())
 
 
 @lru_cache

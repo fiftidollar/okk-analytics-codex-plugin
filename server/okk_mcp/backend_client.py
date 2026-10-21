@@ -211,6 +211,22 @@ _CRM_SNAPSHOT_STATES = {
 }
 
 
+def _segment_chunk(
+    source: list[dict[str, Any]], start: int, max_segments: int, max_chars: int
+) -> list[dict[str, Any]]:
+    """Segments from `start` up to `max_segments` or `max_chars` of text, at least one segment."""
+
+    chunk: list[dict[str, Any]] = []
+    used = 0
+    for segment in source[start : start + max_segments]:
+        size = len(str(segment.get("text") or ""))
+        if chunk and used + size > max_chars:
+            break
+        chunk.append(segment)
+        used += size
+    return chunk
+
+
 def _crm_snapshot_state(metrics: dict[str, Any]) -> str:
     """`available`, `not_applicable`, `unavailable` or `unknown_status`."""
     return _CRM_SNAPSHOT_STATES.get(str(metrics.get("status") or ""), "unknown_status")
@@ -2117,7 +2133,7 @@ class AnalyticsAdapter:
             return await self.envelope({}, status="not_available")
         if transcript_format == "segments":
             source = self._safe_segments(payload.get("segments"))
-            returned = source[start_segment : start_segment + max_segments]
+            returned = _segment_chunk(source, start_segment, max_segments, max_chars)
             next_segment = start_segment + len(returned)
             truncated = start_segment > 0 or next_segment < len(source)
             transcript_data: dict[str, Any] = {
@@ -2516,7 +2532,7 @@ class AnalyticsAdapter:
             return await self.envelope({}, status="not_available")
         if transcript_format == "segments":
             source = self._safe_segments(payload.get("segments"))
-            returned = source[start_segment : start_segment + max_segments]
+            returned = _segment_chunk(source, start_segment, max_segments, max_chars)
             next_segment = start_segment + len(returned)
             truncated = start_segment > 0 or next_segment < len(source)
             transcript_data: dict[str, Any] = {

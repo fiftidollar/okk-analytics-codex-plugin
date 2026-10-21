@@ -1,0 +1,330 @@
+"""OAuth token lifecycle and OKK session renewal on a real PostgreSQL.
+
+Row locks, transactions and concurrent requests cannot be faked: these tests run only with
+OKK_MCP_TEST_DATABASE_URL (an empty database the tests may migrate and truncate), as in CI.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import subprocess
+import sys
+import time
+import uuid
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from types import SimpleNamespace
+
+import httpx
+import pytest
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+
+from okk_mcp import maintenance, oauth
+from okk_mcp import platform_client as platform_module
+from okk_mcp.config import Settings
+from okk_mcp.models import OAuthClient, OAuthToken, OkkAccountSession
+from okk_mcp.platform_client import OKKPlatformClient
+from okk_mcp.security import DEFAULT_SCOPES, token_hash
+
+DATABASE_URL = os.getenv("OKK_MCP_TEST_DATABASE_URL")
+SERVER_DIR = Path(__file__).resolve().parents[1]
+OKK_URL = "https://okk.example/api/v1"
+
+pytestmark = [
+    pytest.mark.skipif(not DATABASE_URL, reason="needs OKK_MCP_TEST_DATABASE_URL (PostgreSQL)"),
+    pytest.mark.anyio,
+]
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+def _alembic(*args: str) -> None:
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "-c", "alembic.ini", *args],
+        cwd=SERVER_DIR,
+        env={**os.environ, "DATABASE_URL": DATABASE_URL or ""},
+        check=True,
+        capture_output=True,
+    )
+
+
+@pytest.fixture(scope="module")
+def migrated():
+    _alembic("downgrade", "base")
+    _alembic("upgrade", "head")
+
+
+class FakeOKK:
+    """OKK auth API: valid access tokens, one rotating refresh token, optional delay or outage."""
+
+    def __init__(self) -> None:
+        self.valid_access = {"okk-access-1"}
+        self.refresh_token = "okk-refresh-1"
+        self.refresh_calls = 0
+        self.me_delay = 0.0
+        self.down = False
+        self.user = {
+            "id": "user-1",
+            "email": "user@example.com",
+            "role": "admin",
+            "department_ids": [],
+            "is_active": True,
+        }
+
+    async def handler(self, request: httpx.Request) -> httpx.Response:
+        if self.down:
+            return httpx.Response(503)
+        if request.url.path.endswith("/auth/me"):
+            await asyncio.sleep(self.me_delay)
+            token = request.headers.get("authorization", "").removeprefix("Bearer ")
+            return httpx.Response(200, json=self.user) if token in self.valid_access else httpx.Response(401)
+        if request.url.path.endswith("/auth/refresh"):
+            self.refresh_calls += 1
+            if request.headers.get("cookie") != f"refresh_token={self.refresh_token}":
+                return httpx.Response(401)
+            access = f"okk-access-{self.refresh_calls + 1}"
+            self.valid_access = {access}
+            self.refresh_token = f"okk-refresh-{self.refresh_calls + 1}"
+            return httpx.Response(
+                200,
+                json={"access_token": access, "user": self.user},
+                headers={"set-cookie": f"refresh_token={self.refresh_token}; Path=/api/v1/auth"},
+            )
+        if request.url.path.endswith("/auth/logout"):
+            return httpx.Response(200)
+        return httpx.Response(404)
+
+
+@pytest.fixture
+def env(monkeypatch, migrated):
+    engine = create_async_engine(DATABASE_URL, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    okk = FakeOKK()
+    settings = Settings(okk_api_base_url=OKK_URL)
+    platform = OKKPlatformClient(settings)
+    platform.client = httpx.AsyncClient(base_url=OKK_URL, transport=httpx.MockTransport(okk.handler))
+    for module in (platform_module, oauth, maintenance):
+        monkeypatch.setattr(module, "session_factory", factory)
+    monkeypatch.setattr(oauth, "platform_client", platform)
+    return SimpleNamespace(factory=factory, okk=okk, platform=platform, settings=settings)
+
+
+async def _reset(env) -> None:
+    async with env.factory() as db:
+        await db.execute(
+            text(
+                "TRUNCATE oauth_tokens, oauth_authorization_codes, oauth_clients, okk_account_sessions"
+                " CASCADE"
+            )
+        )
+        await db.commit()
+
+
+async def _seed(env, *, okk_access: str = "okk-access-1") -> SimpleNamespace:
+    await _reset(env)
+    cipher = env.platform.cipher
+    async with env.factory() as db:
+        session = OkkAccountSession(
+            okk_user_id="user-1",
+            encrypted_access_token=cipher.seal(okk_access),
+            encrypted_refresh_token=cipher.seal("okk-refresh-1"),
+            role_snapshot="admin",
+            department_ids_snapshot=[],
+        )
+        db.add_all(
+            [
+                session,
+                OAuthClient(
+                    client_id="client",
+                    client_name="Codex",
+                    redirect_uris=["http://127.0.0.1:40123/callback"],
+                    grant_types=["authorization_code", "refresh_token"],
+                    response_types=["code"],
+                    token_endpoint_auth_method="none",
+                    scope=DEFAULT_SCOPES,
+                    first_authorized_at=datetime.now(UTC),
+                ),
+            ]
+        )
+        await db.flush()
+        access, refresh, _ = oauth._add_token_pair(
+            db,
+            client_id="client",
+            session_id=session.id,
+            scope=DEFAULT_SCOPES,
+            resource=env.settings.resource_url,
+            family_id=uuid.uuid4(),
+            settings=env.settings,
+        )
+        await db.commit()
+    return SimpleNamespace(access=access, refresh=refresh, session_id=session.id)
+
+
+async def _refresh(env, raw_refresh: str, settings: Settings | None = None) -> tuple[int, dict]:
+    async with env.factory() as db:
+        response = await oauth.token_endpoint(
+            grant_type="refresh_token",
+            client_id="client",
+            code=None,
+            redirect_uri=None,
+            code_verifier=None,
+            refresh_token=raw_refresh,
+            scope=None,
+            resource=None,
+            db=db,
+            settings=settings or env.settings,
+        )
+        await db.commit()
+    return response.status_code, json.loads(response.body)
+
+
+async def test_lost_refresh_answer_retried_gets_the_same_pair_and_the_chain_continues(env):
+    seeded = await _seed(env)
+    status, first = await _refresh(env, seeded.refresh)
+    status_retry, retry = await _refresh(env, seeded.refresh)
+    status_next, _ = await _refresh(env, first["refresh_token"])
+
+    assert (status, status_retry, status_next) == (200, 200, 200)
+    assert (retry["access_token"], retry["refresh_token"]) == (first["access_token"], first["refresh_token"])
+
+
+async def test_parallel_refresh_with_one_token_gives_both_callers_the_same_working_pair(env):
+    seeded = await _seed(env)
+    (status_a, a), (status_b, b) = await asyncio.gather(
+        _refresh(env, seeded.refresh), _refresh(env, seeded.refresh)
+    )
+    assert (status_a, status_b) == (200, 200)
+    assert a["refresh_token"] == b["refresh_token"]
+    assert (await _refresh(env, a["refresh_token"]))[0] == 200
+
+
+async def test_refresh_replayed_after_the_retry_window_revokes_the_whole_family(env):
+    seeded = await _seed(env)
+    no_window = Settings(okk_api_base_url=OKK_URL, mcp_refresh_retry_seconds=0)
+    _, first = await _refresh(env, seeded.refresh, no_window)
+    status, body = await _refresh(env, seeded.refresh, no_window)
+
+    assert status == 400 and "reuse detected" in body["error_description"]
+    assert (await _refresh(env, first["refresh_token"]))[0] == 400
+
+
+async def test_refresh_replayed_after_the_new_token_was_used_revokes_the_whole_family(env):
+    seeded = await _seed(env)
+    _, first = await _refresh(env, seeded.refresh)
+    _, second = await _refresh(env, first["refresh_token"])
+    status, _ = await _refresh(env, seeded.refresh)
+
+    assert status == 400
+    assert (await _refresh(env, second["refresh_token"]))[0] == 400
+
+
+async def test_expired_okk_token_is_renewed_once_for_parallel_requests(env):
+    seeded = await _seed(env, okk_access="okk-access-expired")
+    contexts = await asyncio.gather(*(env.platform.live_context(seeded.session_id) for _ in range(5)))
+
+    assert env.okk.refresh_calls == 1
+    assert {context.access_token for context in contexts} == {"okk-access-2"}
+
+
+async def test_parallel_requests_of_one_person_are_not_serialized_while_okk_answers(env):
+    seeded = await _seed(env)
+    env.okk.me_delay = 0.4
+    started = time.perf_counter()
+    await asyncio.gather(*(env.platform.live_context(seeded.session_id) for _ in range(4)))
+    # Serialized, four calls take 1.6 s.
+    assert time.perf_counter() - started < 1.0
+
+
+async def test_okk_outage_keeps_the_mcp_token_valid(env):
+    seeded = await _seed(env)
+    env.okk.down = True
+    verified = await oauth.OKKTokenVerifier(env.settings.resource_url).verify_token(seeded.access)
+
+    assert verified is not None
+    assert verified.claims == {}
+
+
+async def test_cleanup_removes_abandoned_registrations_and_old_retry_pairs(env):
+    seeded = await _seed(env)
+    _, first = await _refresh(env, seeded.refresh)
+    now = datetime.now(UTC)
+    async with env.factory() as db:
+        for client_id, created, authorized in (
+            ("abandoned", now - timedelta(days=2), None),
+            ("just-registered", now - timedelta(hours=1), None),
+            ("in-use", now - timedelta(days=90), now - timedelta(days=90)),
+        ):
+            db.add(
+                OAuthClient(
+                    client_id=client_id,
+                    client_name="x",
+                    redirect_uris=["http://127.0.0.1:1/cb"],
+                    grant_types=["authorization_code"],
+                    response_types=["code"],
+                    token_endpoint_auth_method="none",
+                    scope=DEFAULT_SCOPES,
+                    created_at=created,
+                    first_authorized_at=authorized,
+                )
+            )
+        old = (
+            await db.execute(select(OAuthToken).where(OAuthToken.token_hash == token_hash(seeded.refresh)))
+        ).scalar_one()
+        old.consumed_at = now - timedelta(minutes=5)
+        await db.commit()
+
+    report = await maintenance.cleanup_once(env.settings, env.platform)
+
+    async with env.factory() as db:
+        clients = set((await db.scalars(select(OAuthClient.client_id))).all())
+        sealed = (
+            await db.execute(select(OAuthToken).where(OAuthToken.token_hash == token_hash(seeded.refresh)))
+        ).scalar_one()
+    assert clients == {"client", "just-registered", "in-use"}
+    assert sealed.successor_sealed is None
+    assert report["abandoned_clients_deleted"] == 1
+    assert first["refresh_token"]
+
+
+async def test_migration_marks_clients_in_use_and_rolls_back(env):
+    await _reset(env)
+    _alembic("downgrade", "20260714_01")
+    try:
+        async with env.factory() as db:
+            for statement in (
+                """
+                INSERT INTO okk_account_sessions (id, okk_user_id, encrypted_access_token,
+                    encrypted_refresh_token, role_snapshot, department_ids_snapshot, created_at, updated_at)
+                VALUES ('00000000-0000-0000-0000-000000000001', 'u', 'a', 'r', 'admin', '[]', now(), now())
+                """,
+                """
+                INSERT INTO oauth_clients (client_id, client_name, redirect_uris, grant_types,
+                    response_types, token_endpoint_auth_method, scope, created_at, updated_at)
+                VALUES ('used', 'Codex', '[]', '[]', '[]', 'none', '', now(), now()),
+                       ('unused', 'Codex', '[]', '[]', '[]', 'none', '', now(), now())
+                """,
+                """
+                INSERT INTO oauth_tokens (id, token_hash, token_type, client_id, session_id, scope,
+                    resource, family_id, expires_at, created_at, updated_at)
+                VALUES (gen_random_uuid(), 'h', 'refresh', 'used', '00000000-0000-0000-0000-000000000001',
+                    '', '', gen_random_uuid(), now(), now(), now())
+                """,
+            ):
+                await db.execute(text(statement))
+            await db.commit()
+    finally:
+        _alembic("upgrade", "head")
+    async with env.factory() as db:
+        marked = dict(
+            (
+                await db.execute(text("SELECT client_id, first_authorized_at IS NOT NULL FROM oauth_clients"))
+            ).all()
+        )
+    assert marked == {"used": True, "unused": False}

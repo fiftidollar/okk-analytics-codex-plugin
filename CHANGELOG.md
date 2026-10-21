@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.3.2 — prepared 2026-10-21, not released
+
+Fixes from a review against the MCP specification, Claude Code and Codex
+guidance (`docs/deployment.md` lists the evidence).
+
+- Dates are no longer dropped. `start_date`/`end_date` without `period` made
+  the gateway answer for the current month with no error. Dates alone now
+  mean a custom range; a named period together with dates, one date, or a
+  non-ISO date is an error. Dates are typed (`format: date`).
+- An OKK outage is no longer reported as an invalid MCP token (401 sent the
+  client back to sign in): the tool answers with an error saying OKK is
+  temporarily unavailable, never with an empty result. `/userinfo` answers 503.
+- Each request reloads the live OKK user without a database lock, so parallel
+  tool calls of one person no longer run one by one; only the OKK refresh-token
+  rotation is serialized, and once for parallel requests.
+- A refresh repeated within `MCP_REFRESH_RETRY_SECONDS` (default 30) while the
+  new refresh token is unused gets the same pair instead of revoking the whole
+  session: a lost answer or two processes refreshing at once no longer force a
+  new sign-in. Other reuse still revokes the family.
+- Return addresses: exact web callbacks in `MCP_OAUTH_REDIRECT_URIS` (replaces
+  `MCP_OAUTH_REDIRECT_HOSTS`, which allowed any path on claude.ai, claude.com
+  and chatgpt.com, where other people's apps live too); checked at
+  registration and at `/authorize`. The login page shows the exact address.
+- Registration: per-IP limit (`MCP_REGISTRATIONS_PER_HOUR`, default 20);
+  registrations that never completed a sign-in are deleted after a day.
+  Migration `20261021_01` adds two nullable columns.
+- Response size: transcript chunk at most 30,000 characters (segments too),
+  previews and search context at most 500 characters, pages at most 50 items.
+  The text copy of a result is compact JSON (it was indented, +30%).
+- Server instructions fit the 2,048 characters older Claude Code keeps (were
+  3,276, so the safety rules at the end were cut); rules for one tool moved to
+  its description.
+- A missing permission names the scope and says to reconnect.
+- Stale texts: no tasks in `compare_employees`, no `task_page_size`, no
+  mentoring on the login page.
+- Republishes the skill changed after the 1.3.1 deployment: Claude Code and
+  Codex update a plugin only when its version changes. A test now fails when
+  plugin files change without a new version (`plugins/released-packages.json`).
+- Tests: OAuth token lifecycle and OKK session renewal on a real PostgreSQL
+  (`OKK_MCP_TEST_DATABASE_URL`, also in CI).
+
 ## 1.3.1 — released 2026-10-20
 
 Fixes found by a read-only check of 1.3.0 against the OKK test stand.

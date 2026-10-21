@@ -1,5 +1,32 @@
 # Production deployment and release gate
 
+## 1.3.2 candidate (not released)
+
+Fixes from the 2026-10-20 review against the MCP specification (revision
+2026-07-28; the SDK serves 2025-11-25), Claude Code and Codex guidance.
+Migration `20261021_01` adds two nullable columns; 1.3.1 runs against the new
+schema, so a rollback is the previous image without a downgrade.
+
+Verified locally on 2026-10-21: 273 tests (Ruff lint and format), including
+9 on a real PostgreSQL 17: refresh retried after a lost answer and two
+parallel refreshes get the same pair; reuse after the window or after the new
+token was used revokes the family; an expired OKK token is renewed once for 5
+parallel requests; 4 parallel requests with a 0.4 s OKK answer finish under
+1 s (not serialized); an OKK outage keeps the MCP token valid; maintenance
+deletes abandoned registrations and old retry pairs; the migration marks
+clients in use and rolls back. The tests of the lost answer, parallel refresh,
+parallel requests and OKK outage fail on 1.3.1 code. Tool calls through the
+MCP server: dates alone reach OKK as a custom range, conflicting or non-ISO
+dates are errors. Not verified before release: sign-in and tool calls from
+Claude Code and Codex against the deployed gateway.
+
+Release gate:
+
+- `/health` reports `1.3.2`, `/ready` is ready, OAuth metadata is served,
+  `/mcp` without a token answers 401.
+- After the release, a signed-in client asks for a past month by dates and
+  gets that month (`period.start`/`period.end` in the answer).
+
 ## 1.3.1 — released 2026-10-20
 
 Deployed to the production Compose on 2026-10-20 (PR #5, `ae4c18d`). After the
@@ -48,12 +75,12 @@ ChatGPT.
 
 Release gate in addition to the steps below:
 
-- `MCP_OAUTH_REDIRECT_HOSTS` keeps its default unless a client with another
-  web return site must connect. Before release, check that fresh ChatGPT,
+- `MCP_OAUTH_REDIRECT_URIS` keeps its default unless another web client must
+  connect; add its exact callback. Before release, check that fresh ChatGPT,
   Codex and Claude Code connections register successfully; a refused
   registration answers `invalid_redirect_uri`.
 - On the login page, the return destination reads «в приложение на этом
-  компьютере» for Codex/Claude Code and `chatgpt.com` for ChatGPT.
+  компьютере» for Codex/Claude Code and the exact callback for a web client.
 - A department report and `get_plan_fact_statistics` return plan items whose
   plan and fact equal the OKK «Планы» page for the same period.
 - Bumping the version makes clients reload the skill: update the plugin and

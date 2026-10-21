@@ -8,6 +8,21 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      # Token rotation and OKK session renewal are tested on a real PostgreSQL (row locks).
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: okk_mcp
+          POSTGRES_PASSWORD: okk_mcp_test
+          POSTGRES_DB: okk_mcp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U okk_mcp -d okk_mcp_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      OKK_MCP_TEST_DATABASE_URL: postgresql+asyncpg://okk_mcp:okk_mcp_test@localhost:5432/okk_mcp_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
