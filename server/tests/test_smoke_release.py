@@ -45,11 +45,11 @@ def _make_destructive(tools: list[dict]) -> None:
 
 
 def _drop_named_department_filter(tools: list[dict]) -> None:
-    _tool(tools, "get_department_statistics")["inputSchema"]["properties"].pop("department_ref")
+    _tool(tools, "get_department_statistics")["inputSchema"]["properties"].pop("department")
 
 
 def _drop_phone_department_filter(tools: list[dict]) -> None:
-    _tool(tools, "list_call_phone_records")["inputSchema"]["properties"].pop("department_ref")
+    _tool(tools, "list_call_phone_records")["inputSchema"]["properties"].pop("department")
 
 
 def _drop_transcript_scope(tools: list[dict]) -> None:
@@ -193,50 +193,21 @@ def test_release_smoke_requires_department_names_to_match_live_roster():
             "source_complete": True,
         },
         "data": {
-            "authoritative_employee_roster": {
-                "employee_count": 1,
-                "items": [
-                    {
-                        "id": employee_id,
-                        "full_name": "Сотрудник ОРД",
-                        "department_id": department_id,
-                    }
-                ],
-            },
-            "employee_ranking": [
-                {
-                    "employee_id": employee_id,
-                    "canonical_employee_id": employee_id,
-                    "canonical_employee_name": "Сотрудник ОРД",
-                }
-            ],
-            "complete_employee_ranking": {"employees": []},
-            "department_and_employee_trends": {"employee_trends": []},
-            "plan_fact": {"employees": []},
+            "complete_employee_ranking": {"employees": [{"id": employee_id, "full_name": "Сотрудник ОРД"}]},
+            "plan_fact": {"employees": [{"employee_id": employee_id, "employee_name": "Сотрудник ОРД"}]},
         },
     }
     payload = {"result": {"structuredContent": structured}}
 
     validate_department_employee_grounding(payload)
 
-    foreign = {"result": {"structuredContent": {**structured, "data": dict(structured["data"])}}}
-    foreign["result"]["structuredContent"]["data"]["employee_ranking"] = [
-        {
-            "employee_id": "foreign-employee",
-            "canonical_employee_id": "foreign-employee",
-            "canonical_employee_name": "Левый Сотрудник",
-        }
-    ]
-    with pytest.raises(RuntimeError, match="outside its live roster"):
-        validate_department_employee_grounding(foreign)
+    def ranking_of(*rows: dict) -> dict:
+        data = {**structured["data"], "complete_employee_ranking": {"employees": list(rows)}}
+        return {"result": {"structuredContent": {**structured, "data": data}}}
 
-    wrong_name = {"result": {"structuredContent": {**structured, "data": dict(structured["data"])}}}
-    wrong_name["result"]["structuredContent"]["data"]["employee_ranking"] = [
-        {
-            "employee_id": employee_id,
-            "canonical_employee_id": employee_id,
-            "canonical_employee_name": "Выдуманное Имя",
-        }
-    ]
+    with pytest.raises(RuntimeError, match="outside its live roster"):
+        validate_department_employee_grounding(
+            ranking_of({"id": "foreign-employee", "full_name": "Левый Сотрудник"})
+        )
     with pytest.raises(RuntimeError, match="ungrounded employee name"):
-        validate_department_employee_grounding(wrong_name)
+        validate_department_employee_grounding(ranking_of({"id": employee_id, "full_name": "Выдуманное Имя"}))

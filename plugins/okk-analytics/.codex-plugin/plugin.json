@@ -1,6 +1,6 @@
 {
   "name": "okk-analytics",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "description": "Read-only OKK analytics, transcripts and scoped phone history with native account OAuth.",
   "author": {
     "name": "Alpes",
@@ -37,7 +37,7 @@
     "defaultPrompt": [
       "Проверить подключение OKK и показать мой доступ.",
       "Покажи доступные мне отделы и краткую статистику по каждому.",
-      "Покажи зоны роста, задачи и проблемные критерии."
+      "Покажи зоны роста и самые слабые критерии оценки."
     ]
   }
 }

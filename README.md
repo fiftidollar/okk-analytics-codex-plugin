@@ -32,6 +32,11 @@ OKK outage no longer looks like a sign-in failure, a lost refresh answer no
 longer ends the session, exact web return addresses, smaller responses and
 server instructions that fit the Claude Code limit.
 
+Release 1.4.0 is prepared, not released: 25 tools instead of 28, one
+`department` parameter, correct critical-error counts, smaller answers, tool
+descriptions written for the model, and checkboxes for transcripts and phone
+numbers on the login page. Update the plugin and start a new chat after it.
+
 The account must have a working local OKK password. An account provisioned only
 through HR/SSO needs a local OKK password set by the normal account-management
 process first; the plugin never authenticates through the HR platform.
@@ -42,13 +47,12 @@ the Codex/Claude Code plugin packages.
 
 ## Included
 
-- 28 strictly typed MCP tools for company, department, employee, call, client,
-  plan/fact, CRM, growth, mentoring, scenario and criterion statistics, plus
-  an ACL-safe private Supervisors catalog, call metrics, transcript catalog,
-  full transcript reading and full-text search.
+- 25 strictly typed MCP tools for company, department, employee, call, client,
+  plan/fact, CRM, growth, scenario and criterion statistics, plus an ACL-safe
+  private Supervisors catalog, call metrics, transcript catalog, full
+  transcript reading and full-text search.
 - Full employee-card view available through the current OKK API: KPI, plan/fact,
-  client and CRM metrics, AI strengths, growth areas, weekly/saved focus, active
-  tasks and recent completed tasks.
+  client and CRM metrics, AI strengths, growth areas and weekly focus.
 - Client statistics include, for departments that track client touches
   (`client_touch_tracked` in OKK), the touch cycle: acting clients, new first
   touches, new repeat touches and the subset reactivated from repeat back into

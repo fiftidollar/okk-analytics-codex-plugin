@@ -72,7 +72,7 @@ takes effect without a plugin release.
 Restricted supervisors are `transcription_only`. Their MCP projection contains
 identity, basic call volume/duration/direction and transcript data only. It does
 not expose or manufacture department membership, evaluation scores, scenarios,
-clients, CRM, AI growth observations or mentoring tasks.
+clients, CRM or AI growth observations.
 
 `get_client_statistics` projects the platform summary counters for the client
 touch cycle of departments that track touches (OKK decides this per department

@@ -5,17 +5,15 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 
 | Tool | Data |
 |---|---|
-| `get_access_context` | Authenticated connection proof, current role and visible departments |
-| `get_statistics_catalog` | Metric domains and explicit exclusions |
+| `get_access_context` | Authenticated connection proof, current role, visible departments with their norm (`quality_threshold`), `min_call_duration_seconds` and tracked client metrics; the only answer that carries the department catalog |
 | `get_overview_statistics` | Overall KPI, clients, department rollup, ranking and trend; a department-filtered employee ranking is grounded to the live roster |
-| `list_departments` | Visible departments and KPI settings |
-| `get_department_statistics` | One department's KPI, plan/fact, employees and trend with an authoritative live employee roster |
+| `get_department_statistics` | One department's summary, every employee's metrics (`complete_employee_ranking`), plan/fact and `reporting_contract`, with an authoritative live employee roster; `detail=full` adds daily department and employee trends |
 | `compare_departments` | Visible department metrics and trends |
 | `list_employees` | Safe employee directory without credentials or phone fields; locally rechecked against live department membership |
 | `list_supervisors` | Live explicit-grant catalog for the private `Руководители` section |
 | `get_supervisor_call_statistics` | Basic call volume, duration, direction and day trend for one accessible transcription-only supervisor |
-| `get_employee_card` | KPI, plan/client/CRM, strengths, growth and focus for one date range; task windows only on an older OKK API |
-| `compare_employees` | KPI, strengths, growth, focus and task-count comparison |
+| `get_employee_card` | KPI, plan/client/CRM, strengths, growth areas and weekly focus for one date range |
+| `compare_employees` | KPI, strengths, growth areas and weekly focus side by side |
 | `get_call_statistics` | Call volume, evaluated count, scores, pass rate, duration and trend |
 | `list_call_phone_records` | ACL-scoped client phone page or exact all-status call count/existence by normalized number; requires `okk.phones.read` |
 | `list_call_transcripts` | ACL-scoped call catalog, transcript availability and bounded previews |
@@ -28,18 +26,21 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `get_client_statistics` | New/regular contacts, missed/no-answer, plus first/repeat touches and returns from repeat to first after the reset period for departments that track client touches |
 | `get_crm_statistics` | Bitrix deals, tasks, overdue, stages, funnels and employee coverage |
 | `get_growth_insights` | Employee and aggregate AI strengths/growth areas without raw reasoning |
-| `get_mentoring_statistics` | `not_available` in the new OKK (`mentoring_not_kept_by_okk`); on an older OKK API the active/recent completed task window, status/overdue/completion stats |
 | `list_scenarios` | Safe scenario catalog; archived rows are admin-only. No evaluation counts: OKK no longer keeps the legacy `calls_evaluated` / `avg_score`, use `get_scenario_performance` |
 | `get_scenario_criteria` | Categories, maximum scores, scales, indicators and applicability |
 | `get_scenario_performance` | Per scenario (all its versions): evaluation count, per-version counts, employee coverage, score distribution and pass rate: share of evaluations at or above the norm; `pass_rate_basis` says which norm (`department_norm` — per-call `quality_status` from OKK; `scenario_threshold` — scenario `passing_score` on an older OKK API; `null` — unknown, never a guessed 100%) |
-| `get_criterion_performance` | Per criterion code within a scenario (all its versions): observation count, score %, penalties, coverage and recency |
+| `get_criterion_performance` | Per criterion code within a scenario (all its versions). `data.criteria`: ordinary criteria with average percent of the maximum, weakest first. `data.critical_errors`: critical errors (deductions such as stop words) with `violations` — calls where points were deducted — and `violation_rate_percent`; a percent of the maximum is meaningless for them. Criteria are labelled (id, code, name, category, max score, critical); their full definition is `get_scenario_criteria` |
+
+OKK keeps no mentoring tasks: 1.4.0 removed `get_mentoring_statistics`, and
+the department catalog with norms moved from `list_departments` into
+`get_access_context`; `get_statistics_catalog` repeated the tool descriptions.
 
 ## Department selection contract
 
-Every department-scoped tool accepts both `department_id` and
-`department_ref`. Use the UUID only when it is already known. When a user names
-any department or supplies its current code, pass that exact value through
-`department_ref`.
+Every department-scoped tool takes one `department` parameter: the code, the
+name or the id of a visible department (`compare_departments` takes a list,
+`departments`). Before 1.4.0 there were two selectors, `department_id` and
+`department_ref`, that could disagree.
 
 The gateway resolves the selector only against departments returned to the
 current account by the live OKK ACL. There is no department allowlist or
@@ -48,9 +49,9 @@ from the platform without a plugin release. Matching is case-insensitive and
 exact after normalizing spaces and punctuation; a unique acronym derived from
 the currently displayed name is also accepted, but the resolver does not guess
 by substring. If a
-selector is absent from the visible scope, ambiguous, or conflicts with a
-simultaneously supplied UUID, the result is `not_available`. A supplied empty
-or blank `department_ref` names no department and is `not_available` too; to
+selector is absent from the visible scope or ambiguous, the result is
+`not_available`. A supplied empty or blank `department` names no department
+and is `not_available` too; to
 mean "no department filter", omit the field. The gateway never falls back to
 all visible departments.
 
@@ -62,11 +63,11 @@ first row.
 `effective_scope` returns the resolved `department_id`, `department_code` and
 `department_name`. A model must verify these fields before attributing employee
 or KPI rows to the requested department. If `not_available` is returned, the
-model may name only departments already present in `access_context`.
+model may name only departments already present in `get_access_context`.
 
 When both employee and department filters are supplied, the employee must
 belong to that resolved department. Employee cards/comparisons, calls, clients,
-plans, CRM, growth, mentoring, scenarios and criteria all apply this guard.
+plans, CRM, growth, scenarios and criteria all apply this guard.
 
 ## Private Supervisors contract
 
@@ -84,9 +85,8 @@ grant returns neutral `not_available` without looking up calls.
 
 Supervisor rows are transcription-only. `get_supervisor_call_statistics`
 returns call counts, loaded duration/direction/day aggregates and explicit
-source completeness. Quality scores, scenarios, client/CRM data, growth areas
-and mentoring tasks are intentionally unavailable rather than reported as
-zero. The three supervisor transcript tools mirror the normal transcript
+source completeness. Quality scores, scenarios, client/CRM data and growth
+areas are intentionally unavailable rather than reported as zero. The three supervisor transcript tools mirror the normal transcript
 formats and completeness contract without merging supervisors into department
 results.
 
@@ -125,8 +125,9 @@ Numbers never enter the other analytics or transcript tools.
 - Period: `period` by name (Moscow time), or `start_date` and `end_date`
   (`YYYY-MM-DD`) for any other range. Dates without `period` are a custom
   range; a named `period` together with dates is an error.
-- `access_context`: only the caller's current visible scope.
-- `effective_scope`: filters actually applied.
+- `effective_scope`: filters actually applied. The caller's role and visible
+  departments come only from `get_access_context`; other answers do not repeat
+  them (1.4.0).
 - `period`: exact inclusive dates.
 - `omitted_filters_count`: number of inaccessible mixed-list filters, without
   echoing their IDs.
@@ -136,14 +137,15 @@ Numbers never enter the other analytics or transcript tools.
   completeness, and counts of rejected or normalized upstream rows.
 - `data`: the business payload.
 
-`get_department_statistics` also returns
-`data.authoritative_employee_roster.items`. Every employee-bearing subsource
-(`employee_ranking`, complete ranking, employee trends and plan/fact rows) is
-intersected with those IDs. The gateway adds `canonical_employee_id` and
-`canonical_employee_name` to each surviving metric row and overwrites a
-conflicting supplied name with the live directory value. A rejected or
-normalized source row makes the response `partial`; it can never reappear in a
-model-generated report as a plausible employee.
+In `get_department_statistics` every employee-bearing subsource (the complete
+ranking, employee trends and plan/fact rows) is intersected with the live
+roster IDs. A supplied name that conflicts with the directory is overwritten
+with the directory value; a row that names its employee only by id gets
+`employee_name`. A rejected or normalized source row makes the response
+`partial`; it can never reappear in a model-generated report as a plausible
+employee. The answer has one summary and one complete ranking: until 1.4.0 it
+also repeated the department summary, the top-50 dashboard ranking and the
+roster as a second list.
 
 `get_access_context` is the canonical post-login check. Because the tool can be
 called only with a valid MCP OAuth token and revalidates `/auth/me`, its
@@ -188,21 +190,17 @@ observation inside one employee card do not inflate `employee_mentions`. When
 OKK sends structured insights (`insights.summary`), the criterion name is
 counted: the text lines of the new OKK carry each employee's own numbers.
 
-The older OKK employee-page API returns at most five active and ten completed
-mentoring tasks per employee. Task tools therefore mark this window as
-`complete=false` and return `partial`; they never present it as full history.
-The new OKK has no mentoring: `get_mentoring_statistics` answers
-`not_available` (`mentoring_not_kept_by_okk`), `get_employee_card` sets
-`mentoring_available=false` with null task lists, and `compare_employees`
-reports null task counts — never zero.
+OKK keeps no mentoring tasks or saved focus; the employee tools do not mention
+them (until 1.4.0 they answered `mentoring_available=false` and null task
+lists for the older OKK API).
 
 `get_employee_card` reads the employee page, the period summary and the plan
 for the same explicit dates — the response `period` — as the OKK employee page
 does; a named period is never passed on for OKK to resolve differently. The
-card is `ok` when every part loaded and `partial` only for the bounded task
-window of an older OKK API or a platform without the call-plan API
-(`plan_fact.status=not_available`) or a CRM snapshot that is `unavailable` or
-`unknown_status` by the CRM classification above; `no_bitrix_id` is no gap.
+card is `ok` when every part loaded and `partial` only for a platform without
+the call-plan API (`plan_fact.status=not_available`) or a CRM snapshot that is
+`unavailable` or `unknown_status` by the CRM classification above;
+`no_bitrix_id` is no gap.
 
 ## Scenario versions
 

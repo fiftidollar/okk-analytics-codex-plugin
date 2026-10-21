@@ -212,9 +212,7 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
     tools = asyncio.run(mcp.list_tools())
     assert [tool.name for tool in tools] == [
         "get_access_context",
-        "get_statistics_catalog",
         "get_overview_statistics",
-        "list_departments",
         "get_department_statistics",
         "compare_departments",
         "list_employees",
@@ -234,7 +232,6 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
         "get_client_statistics",
         "get_crm_statistics",
         "get_growth_insights",
-        "get_mentoring_statistics",
         "list_scenarios",
         "get_scenario_criteria",
         "get_scenario_performance",
@@ -268,7 +265,6 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
         "get_client_statistics",
         "get_crm_statistics",
         "get_growth_insights",
-        "get_mentoring_statistics",
         "list_scenarios",
         "get_scenario_criteria",
         "get_scenario_performance",
@@ -276,13 +272,15 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
     }
     for tool in tools:
         if tool.name in department_scoped:
-            assert "department_ref" in tool.inputSchema["properties"], tool.name
-            description = tool.inputSchema["properties"]["department_ref"].get("description", "")
+            # One department selector per tool (code, name or id), not two that can disagree.
+            assert "department" in tool.inputSchema["properties"], tool.name
+            assert "department_id" not in tool.inputSchema["properties"], tool.name
+            description = tool.inputSchema["properties"]["department"].get("description", "")
             assert "B2B" not in description and "ORD" not in description, tool.name
     compare_departments_schema = next(
         tool for tool in tools if tool.name == "compare_departments"
     ).inputSchema
-    assert "department_refs" in compare_departments_schema["properties"]
+    assert "departments" in compare_departments_schema["properties"]
     supervisor_scoped = {
         "get_supervisor_call_statistics",
         "list_supervisor_call_transcripts",
@@ -292,10 +290,11 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
     for tool in tools:
         if tool.name in supervisor_scoped:
             assert "supervisor_id" in tool.inputSchema["required"]
-            assert "department_ref" not in tool.inputSchema["properties"]
+            assert "department" not in tool.inputSchema["properties"]
     access_tool = next(tool for tool in tools if tool.name == "get_access_context")
-    assert "подтверждает подключение ОКК" in access_tool.description
     assert "OKK подключён" in access_tool.description
+    # Every task starts with it, so Claude Code must not need a tool search to find it.
+    assert access_tool.meta["anthropic/alwaysLoad"] is True
     transcript_tools = {
         tool.name: set(tool.meta["securitySchemes"][0]["scopes"])
         for tool in tools
@@ -340,7 +339,7 @@ def test_mcp_instructions_route_named_people_without_plugin_skill_support():
     # Claude Code before 2.1.296 keeps only the first 2048 characters: the whole text must fit,
     # or the rules at the end silently stop reaching the model.
     assert len(instructions) <= 2048
-    assert "search list_employees and list_supervisors" in instructions
+    assert "list_supervisors" in instructions
     assert "employee_roster_grounding" in instructions
     assert "never ask for the OKK password" in instructions
 
@@ -357,7 +356,7 @@ def test_mcp_transport_allows_only_the_configured_public_origin():
     assert security.allowed_origins == ["https://okk-mcp.akfixdev.ru"]
 
 
-def test_metadata_and_mcp_auth_challenge_are_discoverable():
+def test_metadata_and_mcp_auth_challenge_are_discoverable(monkeypatch):
     with TestClient(app, base_url="http://localhost:8020") as client:
         authorization = client.get("/.well-known/oauth-authorization-server")
         protected = client.get("/.well-known/oauth-protected-resource/mcp")
@@ -375,6 +374,12 @@ def test_metadata_and_mcp_auth_challenge_are_discoverable():
                 },
             },
         )
+        monkeypatch.setattr(oauth.OKKTokenVerifier, "verify_token", AsyncMock(return_value=None))
+        expired = client.post(
+            "/mcp",
+            headers={"Accept": "application/json, text/event-stream", "Authorization": "Bearer expired"},
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        )
     assert authorization.status_code == 200
     assert authorization.json()["code_challenge_methods_supported"] == ["S256"]
     assert authorization.json()["userinfo_endpoint"].endswith("/userinfo")
@@ -383,7 +388,45 @@ def test_metadata_and_mcp_auth_challenge_are_discoverable():
     assert protected.json()["resource"].endswith("/mcp")
     assert "okk.transcripts.read" in protected.json()["scopes_supported"]
     assert challenge.status_code == 401
-    assert "resource_metadata=" in challenge.headers["www-authenticate"]
+    www_authenticate = challenge.headers["www-authenticate"]
+    assert "resource_metadata=" in www_authenticate
+    # The MCP specification asks for the scopes to request; RFC 6750: no error code without a token.
+    assert 'scope="email okk.phones.read' in www_authenticate
+    assert "error=" not in www_authenticate
+    # An expired token keeps error="invalid_token": clients refresh on it.
+    assert expired.status_code == 401
+    assert 'error="invalid_token"' in expired.headers["www-authenticate"]
+
+
+@pytest.mark.parametrize(
+    ("form", "granted"),
+    [
+        # The page shows both boxes checked: unchanged, everything requested is granted.
+        (
+            {"consent_version": "2", "grant_transcripts": "1", "grant_phones": "1"},
+            "okk.phones.read okk.statistics.read okk.transcripts.read",
+        ),
+        # Unchecked boxes are refused access.
+        ({"consent_version": "2", "grant_transcripts": "1"}, "okk.statistics.read okk.transcripts.read"),
+        ({"consent_version": "2"}, "okk.statistics.read"),
+        # A form of the previous page version had no boxes: it grants what was requested.
+        ({}, "okk.phones.read okk.statistics.read okk.transcripts.read"),
+    ],
+)
+def test_person_can_refuse_transcripts_and_phone_numbers_on_the_login_page(form, granted):
+    requested = "okk.phones.read okk.statistics.read okk.transcripts.read"
+    page = oauth._render_login(
+        settings=Settings(),
+        client_name="Codex",
+        signed_request="signed",
+        csrf_token="csrf",
+        redirect_uri="http://127.0.0.1:3210/callback",
+        scope=requested,
+    ).body.decode()
+
+    assert 'name="grant_transcripts" value="1" checked' in page
+    assert 'name="grant_phones" value="1" checked' in page
+    assert oauth._granted_scope(requested, form) == granted
 
 
 def test_openai_domain_challenge_returns_only_the_configured_token():

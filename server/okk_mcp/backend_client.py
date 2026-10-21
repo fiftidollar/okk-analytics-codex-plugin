@@ -211,6 +211,36 @@ _CRM_SNAPSHOT_STATES = {
 }
 
 
+def _criterion_label(criterion: dict[str, Any]) -> dict[str, Any]:
+    """A criterion in statistics: what it is called and how it scores. The full business
+    definition (levels, indicators) belongs to get_scenario_criteria."""
+
+    category = criterion.get("category") or {}
+    return {
+        "id": criterion.get("id"),
+        "code": criterion.get("code"),
+        "name": criterion.get("name"),
+        "category": category.get("name"),
+        "max_score": criterion.get("max_score"),
+        "is_critical": bool(criterion.get("is_critical") or category.get("is_critical")),
+    }
+
+
+def _department_card(row: dict[str, Any]) -> dict[str, Any]:
+    """A visible department as the model needs it: how to name it and which norms apply."""
+
+    return {
+        "id": row.get("id"),
+        "name": row.get("name"),
+        "code": row.get("code"),
+        # Department norm: `quality_threshold` in the new OKK API, `passing_score` in the old one.
+        "quality_threshold": row.get("quality_threshold", row.get("passing_score")),
+        "min_call_duration_seconds": row.get("min_call_duration"),
+        "client_status_tracked": row.get("client_status_tracked"),
+        "client_touch_tracked": row.get("client_touch_tracked"),
+    }
+
+
 def _segment_chunk(
     source: list[dict[str, Any]], start: int, max_segments: int, max_chars: int
 ) -> list[dict[str, Any]]:
@@ -241,12 +271,6 @@ def _insight_text(value: Any) -> str | None:
             if isinstance(candidate, str) and candidate.strip():
                 return candidate.strip()
     return None
-
-
-def _keeps_mentoring(page: dict[str, Any]) -> bool:
-    """The old OKK sent mentoring tasks with the employee page; the new one removed mentoring. A page
-    without the keys means "not kept", which must not read as "no tasks" or zero."""
-    return "mentoring_tasks" in page or "completed_tasks" in page
 
 
 _STRUCTURED_INSIGHTS = {"strengths": "strengths", "growth_areas": "growth_zones"}
@@ -484,17 +508,6 @@ class AnalyticsAdapter:
                 self._departments = [self._safe_department(row) for row in rows]
         return self._departments
 
-    async def access_context(self) -> dict[str, Any]:
-        context = await self.context()
-        return {
-            "role": context.role,
-            "all_departments": context.is_admin,
-            "departments": [
-                {"id": row["id"], "name": row["name"], "code": row["code"]}
-                for row in await self.departments()
-            ],
-        }
-
     async def restricted_supervisors(self, search: str | None = None) -> list[dict[str, Any]]:
         """Load the upstream ACL-scoped private supervisor catalog."""
         if self._restricted_supervisors is None:
@@ -576,9 +589,10 @@ class AnalyticsAdapter:
         omitted: int = 0,
         employee_roster_grounding: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        # The caller's role and visible departments come once, from get_access_context; repeating
+        # them in every answer cost tokens on each turn without adding anything.
         return {
             "status": status,
-            "access_context": await self.access_context(),
             "effective_scope": scope or {},
             "period": {"start": period[0].isoformat(), "end": period[1].isoformat()} if period else None,
             "omitted_filters_count": omitted,
@@ -655,8 +669,9 @@ class AnalyticsAdapter:
                     canonical_nested["full_name"] = canonical_name
                     changed = True
                 canonical["employee"] = canonical_nested
-            canonical["canonical_employee_id"] = employee_id
-            canonical["canonical_employee_name"] = canonical_name
+            elif "full_name" not in canonical and "employee_name" not in canonical:
+                # A row that names its employee only by id gets the directory name once.
+                canonical["employee_name"] = canonical_name
             normalized += int(changed)
             kept.append(canonical)
         return kept, excluded, normalized
@@ -699,8 +714,6 @@ class AnalyticsAdapter:
             else None,
             "position": row.get("position"),
             "is_active": bool(row.get("is_active", True)),
-            # The saved mentoring focus went with mentoring in the new OKK: no field, not an empty one.
-            **({"focus_text": row.get("focus_text")} if "focus_text" in row else {}),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
         }
@@ -732,25 +745,6 @@ class AnalyticsAdapter:
                 "position": supervisor.get("position"),
                 "section": "supervisors",
             },
-        }
-
-    @staticmethod
-    def _safe_task(row: dict[str, Any]) -> dict[str, Any]:
-        return {
-            key: row.get(key)
-            for key in (
-                "id",
-                "employee_id",
-                "call_id",
-                "focus_area",
-                "description",
-                "status",
-                "ai_recommendation",
-                "due_date",
-                "completed_at",
-                "created_at",
-                "updated_at",
-            )
         }
 
     @staticmethod
@@ -1149,9 +1143,7 @@ class AnalyticsAdapter:
     async def dispatch(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         routes = {
             "/mcp-read/access-context": self.get_access_context,
-            "/mcp-read/statistics-catalog": self.get_statistics_catalog,
             "/mcp-read/overview-statistics": self.get_overview_statistics,
-            "/mcp-read/departments": self.list_departments,
             "/mcp-read/department-statistics": self.get_department_statistics,
             "/mcp-read/compare-departments": self.compare_departments,
             "/mcp-read/employees": self.list_employees,
@@ -1168,7 +1160,6 @@ class AnalyticsAdapter:
             "/mcp-read/client-statistics": self.get_client_statistics,
             "/mcp-read/crm-statistics": self.get_crm_statistics,
             "/mcp-read/growth-insights": self.get_growth_insights,
-            "/mcp-read/mentoring-statistics": self.get_mentoring_statistics,
             "/mcp-read/scenarios": self.list_scenarios,
             "/mcp-read/scenario-performance": self.get_scenario_performance,
             "/mcp-read/criterion-performance": self.get_criterion_performance,
@@ -1194,206 +1185,23 @@ class AnalyticsAdapter:
         return await handler(**params)
 
     async def get_access_context(self, **_: Any) -> dict[str, Any]:
-        context = await self.access_context()
+        context = await self.context()
         supervisors = await self.restricted_supervisors()
         return await self.envelope(
             {
                 "authenticated": True,
                 "connection_status": "connected",
                 "confirmation_message": "OKK подключён. Авторизация подтверждена.",
+                "role": context.role,
+                "all_departments": context.is_admin,
+                # The live department catalog with the KPI settings each department is judged by.
+                "departments": [_department_card(row) for row in await self.departments()],
                 "available_sections": {
                     "supervisors": {
                         "available": bool(supervisors),
                         "employee_count": len(supervisors),
                     }
                 },
-                **context,
-            }
-        )
-
-    async def get_statistics_catalog(self, **_: Any) -> dict[str, Any]:
-        domains = [
-            {"domain": "overview", "metrics": ["calls", "quality", "duration", "rankings", "trends"]},
-            {
-                "domain": "clients",
-                "metrics": [
-                    "new",
-                    "regular",
-                    "contacts",
-                    "repeats",
-                    "missed",
-                    "no_answer",
-                    "new_client_first_touch",
-                    "new_client_repeat_touch",
-                    "new_client_reactivated_first_touch",
-                ],
-            },
-            {"domain": "employees", "metrics": ["card", "strengths", "growth_areas", "focus", "mentoring"]},
-            {
-                "domain": "supervisors",
-                "metrics": [
-                    "directory",
-                    "call_volume",
-                    "duration",
-                    "call_catalog",
-                    "transcripts",
-                    "transcript_search",
-                ],
-            },
-            {
-                "domain": "plans",
-                "metrics": [
-                    "weekly_plan_items",
-                    "direction",
-                    "clients",
-                    "counting",
-                    "plan",
-                    "fact",
-                    "contribution",
-                ],
-            },
-            {
-                "domain": "transcripts",
-                "metrics": ["call_catalog", "full_text", "speaker_segments", "full_text_search"],
-            },
-            {"domain": "phone_calls", "metrics": ["visible_numbers", "exact_call_count", "call_exists"]},
-            {
-                "domain": "scenarios",
-                "metrics": ["catalog", "criteria", "scenario_performance", "criterion_performance"],
-            },
-            {"domain": "crm", "metrics": ["deals", "tasks", "overdue", "stages", "funnels", "coverage"]},
-        ]
-        return await self.envelope(
-            {
-                "domains": domains,
-                "tool_routing": [
-                    {
-                        "tool": "get_access_context",
-                        "use_for": "authenticated connection proof, current role and visible departments",
-                    },
-                    {"tool": "get_statistics_catalog", "use_for": "available metrics and contracts"},
-                    {"tool": "get_overview_statistics", "use_for": "overall or one-department dashboard"},
-                    {"tool": "list_departments", "use_for": "visible department directory and KPI settings"},
-                    {
-                        "tool": "get_department_statistics",
-                        "use_for": "one department KPI, ranking, trend and plan/fact",
-                    },
-                    {
-                        "tool": "compare_departments",
-                        "use_for": "comparison of two or more visible departments",
-                    },
-                    {"tool": "list_employees", "use_for": "ACL-scoped employee directory"},
-                    {
-                        "tool": "list_supervisors",
-                        "use_for": "personal ACL-scoped Supervisors section; separate from departments",
-                    },
-                    {
-                        "tool": "get_supervisor_call_statistics",
-                        "use_for": "transcription-only supervisor call volume and duration",
-                    },
-                    {
-                        "tool": "list_supervisor_call_transcripts",
-                        "use_for": "supervisor call catalog and transcript previews",
-                    },
-                    {
-                        "tool": "get_supervisor_call_transcript",
-                        "use_for": "one accessible supervisor call transcript",
-                    },
-                    {
-                        "tool": "search_supervisor_call_transcripts",
-                        "use_for": "full-text search across accessible supervisor transcripts",
-                    },
-                    {"tool": "get_employee_card", "use_for": "one employee KPI, plan, insights and CRM"},
-                    {
-                        "tool": "compare_employees",
-                        "use_for": "employee comparison, optionally guarded by department",
-                    },
-                    {"tool": "get_call_statistics", "use_for": "call volume, quality and daily trend"},
-                    {
-                        "tool": "list_call_phone_records",
-                        "use_for": "ACL-scoped client phone catalog or exact all-status call count by number",
-                    },
-                    {
-                        "tool": "list_call_transcripts",
-                        "use_for": "ACL-scoped call catalog with transcript availability and previews",
-                    },
-                    {
-                        "tool": "get_call_transcript",
-                        "use_for": "full raw, diarized or speaker-segment transcript of one accessible call",
-                    },
-                    {
-                        "tool": "search_call_transcripts",
-                        "use_for": "full-text search across transcripts of ACL-scoped calls",
-                    },
-                    {
-                        "tool": "get_plan_fact_statistics",
-                        "use_for": "weekly call plan items and their facts for departments or one employee",
-                    },
-                    {
-                        "tool": "get_client_statistics",
-                        "use_for": (
-                            "client/contact/repeat/no-answer metrics and, for departments "
-                            "with client_touch_tracked, the first/repeat-touch cycle"
-                        ),
-                    },
-                    {"tool": "get_crm_statistics", "use_for": "latest Bitrix snapshots only"},
-                    {"tool": "get_growth_insights", "use_for": "aggregated AI strengths and growth areas"},
-                    {
-                        "tool": "get_mentoring_statistics",
-                        "use_for": "mentoring tasks of an older OKK API; the new OKK keeps none (not_available)",
-                    },
-                    {"tool": "list_scenarios", "use_for": "visible scenario catalog"},
-                    {"tool": "get_scenario_criteria", "use_for": "business criteria of one visible scenario"},
-                    {
-                        "tool": "get_scenario_performance",
-                        "use_for": "scenario score and pass-rate comparison",
-                    },
-                    {
-                        "tool": "get_criterion_performance",
-                        "use_for": "criterion-level observations and scores",
-                    },
-                ],
-                "department_filter_contract": {
-                    "department_id": "visible department UUID when already known",
-                    "department_ref": "exact visible code or name from the user's request, case-insensitive",
-                    "resolution": "ACL-visible departments only; UUID, exact code/name, or unique displayed acronym",
-                    "failed_resolution": "status=not_available; never fall back to all departments",
-                    "cross_filter": "an employee must belong to the resolved department",
-                    "verification": "read effective_scope.department_id/code/name before describing results",
-                },
-                "status_contract": {
-                    "ok": "complete result for the exposed source",
-                    "partial": "bounded upstream history or configured population/call cap",
-                    "no_data": "scope is accessible but contains no matching observations",
-                    "not_available": "selector/entity is outside the visible scope or source cannot supply it",
-                    "temporarily_unavailable": "retryable upstream outage",
-                },
-                "completeness_contract": {
-                    "employees": "source_total/source_complete distinguish full population from configured cap",
-                    "calls": "source_calls/source_calls_total and partial identify truncation",
-                    "transcript_search": "scanned_calls/source_calls_total and source_complete identify bounded search",
-                    "phone_calls": "matching_calls_total is the indexed full result count, not the returned page size",
-                    "mentoring": (
-                        "the new OKK keeps no mentoring: not_available (mentoring_not_kept_by_okk), never zero "
-                        "tasks; an older OKK API exposes at most 5 active and 10 completed tasks per employee, "
-                        "always a bounded window"
-                    ),
-                    "crm": "latest snapshot per employee only; requested historical dates are never mislabeled",
-                    "historical_scenarios": "available only when the connected OKK role exposes them",
-                },
-                "explicit_exclusions": [
-                    "audio",
-                    "raw_prompts",
-                    "prompt_runtime",
-                    "raw_reasoning",
-                    "scripts",
-                    "megafon",
-                    "pipeline",
-                    "routing",
-                    "bulk_operations",
-                    "writes",
-                ],
-                "source": "existing OKK read-only HTTP API",
             }
         )
 
@@ -1464,10 +1272,6 @@ class AnalyticsAdapter:
             employee_roster_grounding=grounding,
         )
 
-    async def list_departments(self, **_: Any) -> dict[str, Any]:
-        rows = await self.departments()
-        return await self.envelope(rows, status="ok" if rows else "no_data")
-
     async def get_department_statistics(
         self,
         department_id: Any = None,
@@ -1475,6 +1279,7 @@ class AnalyticsAdapter:
         period: str = "month",
         start_date: str | None = None,
         end_date: str | None = None,
+        detail: str = "summary",
         **_: Any,
     ) -> dict[str, Any]:
         department_row, selector_supplied = await self.resolve_department(
@@ -1485,61 +1290,53 @@ class AnalyticsAdapter:
         resolved_id = str(department_row["id"])
         bounds = _period_bounds(period, start_date, end_date)
         common = _period_query(period, start_date, end_date)
-        (
-            summary,
-            trend,
-            employees,
-            department_summary,
-            department_ranking,
-            department_trends,
-            roster_result,
-        ) = await asyncio.gather(
+        with_trends = detail == "full"
+
+        async def daily_trends() -> tuple[Any, Any]:
+            if not with_trends:
+                return None, None
+            return await asyncio.gather(
+                self._get("/dashboard/calls-trend", department_id=resolved_id, **common),
+                self._get(f"/departments/{resolved_id}/trends", start_date=bounds[0], end_date=bounds[1]),
+            )
+
+        # One summary and one complete ranking: the dashboard summary and the department ranking
+        # are what reporting_contract defines; the department summary and the top-50 dashboard
+        # ranking repeated them.
+        summary, department_ranking, (trend, department_trends), roster_result = await asyncio.gather(
             self._get("/dashboard/summary", department_id=resolved_id, **common),
-            self._get("/dashboard/calls-trend", department_id=resolved_id, **common),
-            self._get("/dashboard/top-employees", department_id=resolved_id, limit=50, **common),
-            self._get(
-                f"/departments/{resolved_id}/summary",
-                period="custom",
-                start_date=bounds[0],
-                end_date=bounds[1],
-            ),
             self._get(
                 f"/departments/{resolved_id}/ranking",
                 period="custom",
                 start_date=bounds[0],
                 end_date=bounds[1],
             ),
-            self._get(
-                f"/departments/{resolved_id}/trends",
-                start_date=bounds[0],
-                end_date=bounds[1],
-            ),
+            daily_trends(),
             self.employees(department_id=resolved_id, include_inactive=False),
         )
-        roster, roster_complete, roster_source_total, roster_excluded = roster_result
+        roster, roster_complete, _, roster_excluded = roster_result
 
-        employees, removed_top, normalized_top = self._ground_employee_rows(
-            employees, roster, "employee_id", "id"
-        )
         department_ranking = dict(department_ranking or {})
         (
             department_ranking["employees"],
             removed_ranking,
             normalized_ranking,
         ) = self._ground_employee_rows(department_ranking.get("employees"), roster, "employee_id", "id")
-        department_trends = dict(department_trends or {})
-        (
-            department_trends["employee_trends"],
-            removed_trends,
-            normalized_trends,
-        ) = self._ground_employee_rows(department_trends.get("employee_trends"), roster, "employee_id", "id")
+        removed_trends = normalized_trends = 0
+        if department_trends is not None:
+            department_trends = dict(department_trends)
+            (
+                department_trends["employee_trends"],
+                removed_trends,
+                normalized_trends,
+            ) = self._ground_employee_rows(
+                department_trends.get("employee_trends"), roster, "employee_id", "id"
+            )
         plan_fact, removed_plan, normalized_plan = await self.optional_plan_fact(
             department_row, bounds[0], bounds[1], roster
         )
-        excluded_source_records = (
-            roster_excluded + removed_top + removed_ranking + removed_trends + removed_plan
-        )
-        normalized_source_records = normalized_top + normalized_ranking + normalized_trends + normalized_plan
+        excluded_source_records = roster_excluded + removed_ranking + removed_trends + removed_plan
+        normalized_source_records = normalized_ranking + normalized_trends + normalized_plan
         grounding = self.employee_roster_grounding(
             department_row,
             roster,
@@ -1547,24 +1344,18 @@ class AnalyticsAdapter:
             excluded_source_records=excluded_source_records,
             normalized_source_records=normalized_source_records,
         )
+        data = {
+            "department": _department_card(department_row),
+            "reporting_contract": department_report_contract(),
+            "summary": summary,
+            "complete_employee_ranking": department_ranking,
+            "plan_fact": plan_fact,
+        }
+        if with_trends:
+            data["daily_trend"] = trend
+            data["department_and_employee_trends"] = department_trends
         return await self.envelope(
-            {
-                "department": department_row,
-                "reporting_contract": department_report_contract(),
-                "summary": summary,
-                "daily_trend": trend,
-                "employee_ranking": employees,
-                "department_summary": department_summary,
-                "complete_employee_ranking": department_ranking,
-                "department_and_employee_trends": department_trends,
-                "plan_fact": plan_fact,
-                "authoritative_employee_roster": {
-                    "items": roster,
-                    "employee_count": len(roster),
-                    "source_total": roster_source_total,
-                    "source_complete": roster_complete and not roster_excluded,
-                },
-            },
+            data,
             status=(
                 "partial"
                 if not roster_complete
@@ -1767,7 +1558,6 @@ class AnalyticsAdapter:
         period: str = "month",
         start_date: str | None = None,
         end_date: str | None = None,
-        task_page_size: int = 100,
         **_: Any,
     ) -> dict[str, Any]:
         department_row, selector_supplied = await self.resolve_department(
@@ -1800,9 +1590,6 @@ class AnalyticsAdapter:
             self.optional_plan_fact(department_row, *bounds, [employee], employee_id=employee["id"]),
             self._get(f"/employees/{employee_id}/bitrix-metrics"),
         )
-        mentoring_kept = _keeps_mentoring(page_data)
-        active = [self._safe_task(row) for row in page_data.get("mentoring_tasks") or []]
-        completed = [self._safe_task(row) for row in page_data.get("completed_tasks") or []]
         data = {
             "employee": employee,
             "kpi": page_data.get("kpi") or {},
@@ -1812,25 +1599,17 @@ class AnalyticsAdapter:
                 "strengths": page_data.get("aggregated_strengths") or [],
                 "growth_areas": page_data.get("aggregated_improvements") or [],
                 "weekly_focus": page_data.get("weekly_focus") or [],
-                "saved_focus": page_data.get("focus_text"),
                 "week_start": page_data.get("week_start"),
                 "week_end": page_data.get("week_end"),
             },
-            "mentoring_available": mentoring_kept,
-            "active_mentoring_tasks": active[:task_page_size] if mentoring_kept else None,
-            "completed_mentoring_tasks": completed[:task_page_size] if mentoring_kept else None,
-            "mentoring_history_window": (
-                {"active_limit": 5, "completed_limit": 10, "complete": False} if mentoring_kept else None
-            ),
             "crm": self._safe_crm(crm),
         }
-        # `partial` only for what is really missing: the bounded task window of the older OKK API, a
-        # platform without call plans, or a CRM snapshot that is not usable (not linked is no gap).
-        incomplete = (
-            mentoring_kept
-            or plan.get("status") == "not_available"
-            or _crm_snapshot_state(crm) in {"unavailable", "unknown_status"}
-        )
+        # `partial` only for what is really missing: a platform without call plans, or a CRM
+        # snapshot that is not usable (not linked is no gap).
+        incomplete = plan.get("status") == "not_available" or _crm_snapshot_state(crm) in {
+            "unavailable",
+            "unknown_status",
+        }
         return await self.envelope(
             data,
             status="partial" if incomplete else "ok",
@@ -1867,16 +1646,12 @@ class AnalyticsAdapter:
 
         async def load(employee_id: str) -> dict[str, Any]:
             page = await self._bounded(lambda: self._page_data(employee_id, *bounds))
-            mentoring_kept = _keeps_mentoring(page)
             return {
                 "employee": index[employee_id],
                 "kpi": page.get("kpi") or {},
                 "strengths": page.get("aggregated_strengths") or [],
                 "growth_areas": page.get("aggregated_improvements") or [],
                 "weekly_focus": page.get("weekly_focus") or [],
-                "saved_focus": page.get("focus_text"),
-                "active_tasks": len(page.get("mentoring_tasks") or []) if mentoring_kept else None,
-                "completed_tasks_recent": len(page.get("completed_tasks") or []) if mentoring_kept else None,
             }
 
         data = await asyncio.gather(*(load(value) for value in effective))
@@ -2998,7 +2773,6 @@ class AnalyticsAdapter:
                 "strengths": page.get("aggregated_strengths") or [],
                 "growth_areas": page.get("aggregated_improvements") or [],
                 "weekly_focus": page.get("weekly_focus") or [],
-                "saved_focus": page.get("focus_text"),
             }
             return shown, {field: _insight_labels(page, field) for field in _TEXT_INSIGHTS}
 
@@ -3032,109 +2806,6 @@ class AnalyticsAdapter:
             data,
             status="partial" if not complete else ("ok" if rows else "no_data"),
             scope={**self.department_scope(department_row), "employee_id": employee},
-            period=bounds,
-        )
-
-    async def get_mentoring_statistics(
-        self,
-        period: str = "month",
-        department_id: Any = None,
-        department_ref: Any = None,
-        employee_id: Any = None,
-        task_status: str | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
-        page: int = 1,
-        page_size: int = 50,
-        **_: Any,
-    ) -> dict[str, Any]:
-        bounds = _period_bounds(period, start_date, end_date)
-        department_row, employee_row, invalid = await self.resolve_entity_scope(
-            department_id=department_id,
-            department_ref=department_ref,
-            employee_id=employee_id,
-        )
-        if invalid:
-            return await self.envelope({"reason": "requested_scope_not_available"}, status="not_available")
-        department = str(department_row["id"]) if department_row else None
-        employee = str(employee_row["id"]) if employee_row else None
-        if employee_row:
-            employees, complete = [employee_row], True
-        else:
-            employees, complete, _, _ = await self.employees(department_id=department, include_inactive=True)
-
-        async def load(row: dict[str, Any]) -> tuple[bool, list[dict[str, Any]]]:
-            data = await self._bounded(lambda: self._page_data(row["id"], *bounds))
-            tasks = (data.get("mentoring_tasks") or []) + (data.get("completed_tasks") or [])
-            return _keeps_mentoring(data), [{"employee": row, **self._safe_task(task)} for task in tasks]
-
-        loaded = await asyncio.gather(*(load(row) for row in employees))
-        if employees and not any(kept for kept, _ in loaded):
-            # The new OKK removed mentoring: say so instead of reporting an empty task window.
-            return await self.envelope(
-                {"reason": "mentoring_not_kept_by_okk"},
-                status="not_available",
-                scope={**self.department_scope(department_row), "employee_id": employee},
-                period=bounds,
-            )
-        source_tasks = [task for _, group in loaded for task in group]
-        tasks: list[dict[str, Any]] = []
-        unfilterable_timestamps = 0
-        for task in source_tasks:
-            timestamp = (
-                task.get("completed_at") if task.get("status") == "completed" else task.get("created_at")
-            )
-            parsed = _aware_datetime(timestamp)
-            if not parsed:
-                unfilterable_timestamps += 1
-                continue
-            if bounds[0] <= parsed.date() <= bounds[1]:
-                tasks.append(task)
-        if task_status:
-            tasks = [task for task in tasks if task.get("status") == task_status]
-        statuses = Counter(str(task.get("status") or "unknown") for task in tasks)
-        now = datetime.now(MSK)
-        overdue = 0
-        durations: list[float] = []
-        for task in tasks:
-            due = task.get("due_date")
-            if due and task.get("status") != "completed":
-                parsed_due = _aware_datetime(due)
-                if parsed_due and parsed_due < now:
-                    overdue += 1
-            if task.get("created_at") and task.get("completed_at"):
-                created = _aware_datetime(task["created_at"])
-                completed = _aware_datetime(task["completed_at"])
-                if created and completed:
-                    durations.append((completed - created).total_seconds() / 86400)
-        start = (page - 1) * page_size
-        data = {
-            "summary": {
-                "status_counts": dict(statuses),
-                "overdue": overdue,
-                "completion_rate": round(statuses.get("completed", 0) / len(tasks) * 100, 1)
-                if tasks
-                else None,
-                "avg_completion_days": round(sum(durations) / len(durations), 1) if durations else None,
-            },
-            "items": tasks[start : start + page_size],
-            "total_in_period": len(tasks),
-            "source_tasks_in_bounded_api_window": len(source_tasks),
-            "page": page,
-            "page_size": page_size,
-            "pages": math.ceil(len(tasks) / page_size) if tasks else 0,
-            "task_period_basis": "completed_at for completed tasks; created_at otherwise",
-            "source_tasks_without_filterable_timestamp": unfilterable_timestamps,
-            "history_window_per_employee": {"active_limit": 5, "completed_limit": 10, "complete": False},
-        }
-        return await self.envelope(
-            data,
-            status="partial" if employees else "no_data",
-            scope={
-                **self.department_scope(department_row),
-                "employee_id": employee,
-                "employee_population_complete": complete,
-            },
             period=bounds,
         )
 
@@ -3479,7 +3150,7 @@ class AnalyticsAdapter:
                         "observations": 0,
                         "score_sum": 0.0,
                         "max_score_sum": 0.0,
-                        "penalties": 0,
+                        "violations": 0,
                         "employees": set(),
                         "scenario_versions": set(),
                         "last_observation": None,
@@ -3488,7 +3159,9 @@ class AnalyticsAdapter:
                 row["observations"] += 1
                 row["score_sum"] += _number(item.get("score"))
                 row["max_score_sum"] += _number(item.get("max_score"))
-                row["penalties"] += int(bool(item.get("is_penalty")))
+                # A critical error deducts points from the call: a negative score is a violation.
+                # `is_penalty` only marks the kind of criterion, so it is true on every observation.
+                row["violations"] += int(_number(item.get("score")) < 0)
                 row["employees"].add(str(call.get("employee_id")))
                 row["scenario_versions"].add(str(call.get("scenario_id")))
                 started = call.get("started_at")
@@ -3497,20 +3170,30 @@ class AnalyticsAdapter:
             if unreadable:
                 excluded["criteria_version_not_readable"] += 1
                 excluded_observations += unreadable
-        data = []
+        quality: list[dict[str, Any]] = []
+        critical: list[dict[str, Any]] = []
         for row in aggregate.values():
             maximum = row.pop("max_score_sum")
             score = row.pop("score_sum")
+            row["criterion"] = _criterion_label(row["criterion"])
             row["employees"] = len(row["employees"])
             row["scenario_versions"] = len(row["scenario_versions"])
-            row["avg_score_percent"] = round(score / maximum * 100, 2) if maximum else None
-            data.append(row)
-        data.sort(key=lambda row: (row["avg_score_percent"] is None, row["avg_score_percent"] or 0))
-        matching_criteria_total = len(data)
+            if row["criterion"].get("is_critical"):
+                # Critical errors only deduct points: the share of calls with a violation is the
+                # measure, a "percent of maximum" is meaningless (0 means no violation).
+                row["violation_rate_percent"] = round(row["violations"] / row["observations"] * 100, 1)
+                critical.append(row)
+            else:
+                row.pop("violations")
+                row["avg_score_percent"] = round(score / maximum * 100, 2) if maximum else None
+                quality.append(row)
+        quality.sort(key=lambda row: (row["avg_score_percent"] is None, row["avg_score_percent"] or 0))
+        critical.sort(key=lambda row: -row["violations"])
+        matching_criteria_total = len(quality) + len(critical)
         truncated = not complete or total > len(calls) or matching_criteria_total > limit
         return await self.envelope(
-            data[:limit],
-            status="partial" if truncated or excluded else ("ok" if data else "no_data"),
+            {"criteria": quality[:limit], "critical_errors": critical[: max(limit - len(quality), 0)]},
+            status="partial" if truncated or excluded else ("ok" if matching_criteria_total else "no_data"),
             scope={
                 "scenario_id": scenario,
                 "scenario_code": scenario_code,

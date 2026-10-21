@@ -275,6 +275,23 @@ h1{{margin:0 0 8px}}p{{color:var(--muted)}}.hint{{background:#f7f9fb;padding:12p
     return response
 
 
+# Access a person may refuse on the login page: the scope, the form field and its label.
+OPTIONAL_GRANTS = {
+    "okk.transcripts.read": ("grant_transcripts", "транскрипции доступных звонков"),
+    "okk.phones.read": ("grant_phones", "номера клиентов и поиск звонков по номеру"),
+}
+
+
+def _granted_scope(requested: str, form: dict[str, Any]) -> str:
+    """Requested scopes minus the optional access the person unchecked. A form of the previous
+    page version (no `consent_version`) had no checkboxes: it grants what was requested."""
+
+    if form.get("consent_version") != "2":
+        return requested
+    refused = {scope for scope, (field, _) in OPTIONAL_GRANTS.items() if form.get(field) != "1"}
+    return " ".join(scope for scope in requested.split() if scope not in refused)
+
+
 def _render_login(
     *,
     settings: Settings,
@@ -293,20 +310,23 @@ def _render_login(
         else '<div class="error">Этот адрес возврата не относится к известным приложениям. '
         "Не входите, если не начинали подключение сами.</div>"
     )
-    transcript_scope = ", транскрипции доступных звонков" if "okk.transcripts.read" in scope.split() else ""
-    phone_scope = ", номера клиентов и поиск звонков по номеру" if "okk.phones.read" in scope.split() else ""
+    optional_grants = "".join(
+        f'<label class="grant"><input type="checkbox" name="{field}" value="1" checked> {html.escape(label)}</label>'
+        for scope_name, (field, label) in OPTIONAL_GRANTS.items()
+        if scope_name in scope.split()
+    )
     body = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Вход в ОКК</title>
 <style>:root{{--bg:#f4f6f8;--card:#fff;--text:#17202a;--muted:#637083;--brand:#1769e0;--danger:#b42318}}
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);font:16px/1.45 system-ui;color:var(--text)}}
 main{{min-height:100vh;display:grid;place-items:center;padding:24px}}.card{{width:min(440px,100%);background:var(--card);padding:32px;border-radius:18px;box-shadow:0 16px 48px #17202a18}}
 h1{{margin:0 0 8px}}p{{color:var(--muted)}}label{{display:block;font-weight:650;margin:14px 0 6px}}input{{width:100%;padding:12px 14px;border:1px solid #cbd3dc;border-radius:10px;font:inherit}}
-button{{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;background:var(--brand);color:#fff;font:700 16px system-ui}}.scope,.next{{font-size:14px;background:#f7f9fb;padding:12px 14px;border-radius:10px;margin-top:18px}}.next{{background:#eef6ff}}.error{{color:var(--danger);background:#fef3f2;padding:10px 12px;border-radius:10px}}</style></head>
+button{{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;background:var(--brand);color:#fff;font:700 16px system-ui}}.scope,.next{{font-size:14px;background:#f7f9fb;padding:12px 14px;border-radius:10px;margin-top:18px}}.next{{background:#eef6ff}}.error{{color:var(--danger);background:#fef3f2;padding:10px 12px;border-radius:10px}}label.grant{{font-weight:400;margin:8px 0 0}}label.grant input{{width:auto;margin-right:8px}}</style></head>
 <body><main><section class="card"><h1>Вход в ОКК</h1><p>Подключение приложения <strong>{html.escape(client_name)}</strong>. После входа браузер вернёт вас <strong>{html.escape(destination)}</strong>.</p>{destination_html}{error_html}
 <form method="post" action="/authorize"><input type="hidden" name="authorization_request" value="{html.escape(signed_request, quote=True)}"><input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}">
 <label for="email">Логин (email)</label><input id="email" name="email" type="email" autocomplete="username" maxlength="200" required autofocus>
 <label for="password">Пароль</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required>
-<div class="scope">Только чтение: статистика, карточки сотрудников, сценарии и критерии{transcript_scope}{phone_scope} — строго в пределах прав аккаунта.</div>
+<div class="scope">Только чтение, строго в пределах прав аккаунта: статистика, карточки сотрудников, сценарии и критерии.{optional_grants}<input type="hidden" name="consent_version" value="2"></div>
 <button type="submit">Войти и разрешить доступ</button></form>
 <div class="next"><strong>Что произойдёт дальше</strong><br>Браузер передаст вход обратно в приложение, из которого вы начали подключение (Codex, Claude Code или ChatGPT). Вернитесь в него и попросите «Проверить подключение OKK»: сообщение «OKK подключён» с ролью и отделами означает, что вход действительно завершён.</div>
 <p><small>MCP-шлюз сразу передаёт пароль в штатный API ОКК, не сохраняет его и никогда не передаёт приложению.</small></p></section></main></body></html>"""
@@ -419,6 +439,9 @@ async def authorize_login(
     csrf_token: str = Form(...),
     email: str = Form(..., max_length=200),
     password: str = Form(..., max_length=128),
+    consent_version: str | None = Form(default=None),
+    grant_transcripts: str | None = Form(default=None),
+    grant_phones: str | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -426,6 +449,14 @@ async def authorize_login(
         auth_request = _serializer(settings).loads(authorization_request, max_age=600)
     except (BadSignature, SignatureExpired):
         return _render_authorization_error("Срок действия запроса на авторизацию истёк.")
+    granted_scope = _granted_scope(
+        auth_request["scope"],
+        {
+            "consent_version": consent_version,
+            "grant_transcripts": grant_transcripts,
+            "grant_phones": grant_phones,
+        },
+    )
     signed_csrf = auth_request.get("csrf_token")
     if not isinstance(signed_csrf, str) or not secrets.compare_digest(signed_csrf, csrf_token):
         return await _refresh_authorization_form(
@@ -459,7 +490,7 @@ async def authorize_login(
             client_id=client.client_id,
             session_id=account_session.id,
             redirect_uri=auth_request["redirect_uri"],
-            scope=auth_request["scope"],
+            scope=granted_scope,
             code_challenge=auth_request["code_challenge"],
             resource=auth_request["resource"],
             expires_at=_now() + timedelta(minutes=settings.mcp_authorization_code_minutes),

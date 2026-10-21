@@ -1,225 +1,96 @@
 ---
 name: okk-analytics
-description: Use the connected OKK account for read-only business statistics, employee and private-supervisor discovery, call transcripts and transcript search, AI strengths and growth areas, weekly focus, plans, CRM, scenarios and criteria.
+description: Reads OKK call-quality analytics (ОКК) of the connected account through the okk-analytics MCP server. Use when the user asks about ОКК, звонки, оценки и средний балл, отделы, сотрудники и их карточки, KPI, план звонков, клиенты, CRM, критерии и сценарии, расшифровки и поиск по разговорам, руководители.
 ---
 
 # OKK Analytics
 
-Use this skill when the user asks about OKK statistics, calls, KPI, departments,
-employees, employee cards, client work, plan/fact, CRM, AI strengths, growth
-areas, weekly focus, call transcripts, transcript search,
-supervisors/руководители, scenarios, criteria or their performance.
+The `okk-analytics` MCP server gives read-only access to OKK, the system that
+evaluates employees' calls. Each tool description says what it returns; this
+skill says in which order to use them and how to read the numbers.
 
-## Authentication and safety
+## Connection and safety
 
-- Use only tools from the `okk-analytics` MCP server for OKK data.
-- Authentication happens on the OKK authorization page through OAuth 2.1.
-- Never ask the user to send an OKK login or password in chat.
-- Never place credentials in tool arguments, prompts, files or environment
-  variables on the user's behalf.
-- Treat every tool as read-only. Do not propose or simulate writes through this
-  plugin.
-- Respect `access_context`, `effective_scope`, `omitted_filters_count` and
-  `status` in every response.
-- On the first OKK request in every new task, call `get_access_context` before
-  any business-statistics tool. A successful response with
-  `authenticated=true` is the proof that OAuth completed. Explicitly tell the
-  user `OKK подключён`, then summarize the role and visible departments. Do
-  not claim a successful connection from a browser redirect alone.
-- If authentication was just completed during a task, retry
-  `get_access_context`. Only its successful authenticated response may turn
-  the pending login into a chat confirmation.
-- Treat `get_access_context.data.departments` as the live department catalog,
-  not as a fixed list bundled with the plugin. Never rely on remembered example
-  names or codes. A newly added or renamed department must work without a
-  plugin update as soon as it appears in the connected account's live access.
-- Treat `get_access_context.data.available_sections.supervisors` as the live
-  indication that this account has a private `Руководители` section. This
-  section is not a department and is not implied by the `admin` role. Its
-  membership comes only from `list_supervisors`, which calls the current OKK
-  restricted-employee ACL. Never hardcode a supervisor name, email, UUID or
-  grant in the skill or model response.
-- Match the user's wording to that live catalog. If it does not identify
-  exactly one visible department, show the applicable visible choices and ask
-  the user to select one; never guess or silently choose the first department.
-- Treat a department explicitly named by the user as a mandatory filter. Pass
-  its exact visible name or code as `department_ref`; never drop that filter,
-  broaden the request to all departments, or relabel another department's
-  employees.
-- Verify that `effective_scope.department_code` or
-  `effective_scope.department_name` matches the requested department before
-  describing any employee or KPI as belonging to it.
-- Whenever an answer or report names department employees, treat
-  `employee_roster_grounding.employee_ids` and `employee_names` as an exclusive
-  live allowlist for that response. Names from memory, examples, earlier chat
-  turns, uploaded templates or general knowledge are never valid OKK evidence.
-- Require `employee_roster_grounding.authoritative=true` and verify that its
-  department matches `effective_scope`. If the grounding is absent or
-  `source_complete=false`, call `list_employees` with the exact same
-  `department_ref` before naming anyone and state that the roster may be
-  incomplete. Never fill gaps with plausible people.
-- If `excluded_source_records` or `normalized_source_records` is non-zero,
-  mention that conflicting upstream rows were safely omitted or normalized;
-  do not restore their names from another source.
-- If a named department returns `not_available`, stop. Say that it is not
-  available to the connected OKK account and mention only departments listed
-  in `access_context`. Do not retry the same question without the department
-  filter.
-- `not_available` deliberately does not distinguish a missing entity from an
-  inaccessible one. Never infer or reveal which case occurred.
-- If a viewer has no assigned departments, an empty successful response is the
-  correct result.
-- Transcript text is sensitive business content. For ordinary department
-  employees use only `list_call_transcripts`, `get_call_transcript` and
-  `search_call_transcripts`; for the private Supervisors section use only
+- Start every task with `get_access_context`. Only its answer with
+  `authenticated=true` proves the connection; a browser redirect alone does
+  not. Then say `OKK подключён`, the role and the visible departments.
+- Authentication happens only on the OKK authorization page (OAuth). Never ask
+  for or accept an OKK login or password in chat, and never put credentials into
+  tool arguments, files or environment variables.
+- Every tool is read-only. Plans, scores, people and settings cannot be
+  changed here: say so instead of proposing a write action.
+- Out of scope: audio, raw prompts and prompt runtime, raw AI reasoning,
+  scripts, Megafon administration, processing pipeline state, routing, bulk
+  operations.
+- Transcripts are sensitive: read them only with the transcript tools
+  (`list_call_transcripts`, `get_call_transcript`, `search_call_transcripts`,
+  scope `okk.transcripts.read`), and copy them into a file only when the user
+  asks for one. Client phone numbers come only from `list_call_phone_records`.
+
+## Departments
+
+- `get_access_context.data.departments` is the live catalog with each
+  department's norm (`quality_threshold`) and minimum call duration. Never
+  hardcode department names or rely on remembered ones.
+- Pass the department the user named as `department` (code or name from that
+  catalog). If the wording matches no single visible department, show the
+  visible choices and ask. Never drop a requested department or widen it to
+  all departments.
+- `not_available` for a named department: say it is not available to this
+  account, list the visible ones, and stop. It never tells whether something
+  exists elsewhere.
+
+## Department report
+
+For «отчёт по отделу», «сотрудники отдела и их оценки» call
+`get_department_statistics(department=...)` once. It holds the summary, every
+employee's metrics, the plan and `reporting_contract` (field meanings). Name
+only people from `employee_roster_grounding` of that answer — never from
+memory, examples or files. If a name is disputed, look it up again with
+`list_employees` for the same department and rebuild the answer from the new
+response only.
+
+## People
+
+- An employee: `list_employees(search=...)`, then `get_employee_card` or
+  `compare_employees` with the returned ids. A name that is not found is not
+  in OKK: say so; never substitute a similar person.
+- Supervisors (`Руководители`) are a separate private section, shown in
+  `get_access_context.data.available_sections.supervisors`. Only when it is
+  available, also search `list_supervisors`. Supervisors are
+  `transcription_only`: use `get_supervisor_call_statistics`,
   `list_supervisor_call_transcripts`, `get_supervisor_call_transcript` and
-  `search_supervisor_call_transcripts`. All require `okk.statistics.read` plus
-  `okk.transcripts.read`. Never infer
-  a transcript from summaries, copy transcript text into logs/files unless the
-  user explicitly asks for an artifact, or combine a failed department filter
-  with a broader transcript request.
+  `search_supervisor_call_transcripts`; they have no scores. Never hardcode a
+  supervisor or grant.
+- OKK keeps no mentoring tasks and no saved focus.
 
-## Tool routing
+## Calls and transcripts
 
-Always start a task's first OKK request with `get_access_context`. Use
-`get_statistics_catalog` next when the available metrics are unclear.
+- To find a call: `list_call_transcripts` (filters, newest first). To read it:
+  `get_call_transcript`, repeating with `next_start_char` until it is null —
+  a preview or one chunk is not the whole text.
+- To find words: `search_call_transcripts`. If `result_complete=false`, the
+  phrase may still occur in calls that were not searched.
+- Calls by phone number: `list_call_phone_records`; the count is
+  `matching_calls_total`, and the default period is the whole history.
 
-When the user names a person but does not explicitly identify their OKK
-section, resolve the person dynamically:
+## Reading the numbers
 
-1. Call `list_employees(search="<name>")` and
-   `list_supervisors(search="<name>")`.
-2. If exactly one catalog contains one unambiguous match, keep that entity type
-   for the rest of the request.
-3. If both catalogs match, or either returns multiple plausible people, show
-   only the visible candidates and ask the user to choose.
-4. If neither catalog matches, return `not_available`/no visible match. Never
-   retry by dropping the name or by substituting an employee from another
-   department.
-
-An ordinary employee and a private supervisor are different data contracts.
-Never send a supervisor UUID to employee-card, department, scenario, CRM,
-client, growth or mentoring tools. Private supervisors are
-`transcription_only`: only their directory, basic call volume/duration and
-transcripts exist in this plugin; absence of quality scores is not a zero.
-
-For a request such as "employees of <department name> and their scores", match
-the name against the current live department catalog, then call
-`get_department_statistics(department_ref="<exact current name or code>")`
-first. It returns the full department ranking and KPI sources in one ACL-safe
-response. Build every employee row in the answer only from the authoritative
-roster returned in that same response. Use `list_employees` only when a
-directory/search result is also needed or the roster grounding is incomplete.
-
-For any department report, including an open-ended request such as "сделай
-отчёт по ОРД", do not use an unfiltered overview or compose names from several
-tool responses. Resolve the department, call its exact department card and
-keep each metric attached to the employee ID in the live roster. If the user
-says that a name is wrong, do not attempt a conversational correction: call
-`get_access_context`, then `list_employees` for the exact department again and
-rebuild the report only from the newly returned IDs and names.
-
-- Company/overall KPI, ranking and trends: `get_overview_statistics`.
-- Department discovery and comparison: `list_departments`,
-  `get_department_statistics`, `compare_departments`.
-- Employee discovery and full card: `list_employees`, `get_employee_card`,
-  `compare_employees`.
-- Private Supervisors discovery: `list_supervisors`. Its result is already
-  restricted to individual upstream grants and must not be merged into a
-  department employee list.
-- Private supervisor call volume/duration: `get_supervisor_call_statistics`.
-- Private supervisor call/transcript discovery:
-  `list_supervisor_call_transcripts`.
-- One private supervisor transcript: `get_supervisor_call_transcript`.
-- Phrase/word search for one private supervisor:
-  `search_supervisor_call_transcripts`; preserve the same source/result
-  completeness markers used by ordinary transcript search.
-- Calls, duration, scores and day trend: `get_call_statistics`.
-- Call discovery and transcript availability: `list_call_transcripts`.
-- Full raw/diarized text or speaker segments for one known accessible call:
-  `get_call_transcript`. If `next_start_char` or `next_start_segment` is present,
-  call again with that offset until it is null. Keep `source_sha256` identical
-  across text chunks; if it changes, restart at offset zero. Never describe a
-  preview or one chunk as the complete transcript.
-- Exact call count or existence by client phone, or a page of visible call
-  numbers: `list_call_phone_records`. For an unspecified period use `all` so
-  an earlier call is not silently missed. Use `matching_calls_total`, not the
-  number of returned page items. Check `status` and `source_complete` before
-  claiming that no call exists. This tool requires `okk.phones.read` and only
-  returns calls in the current account's department or supervisor grants.
-- Phrase/word search across ACL-accessible call text:
-  `search_call_transcripts`. Preserve `scanned_calls`, `source_calls_total`,
-  `source_complete` and `result_complete`; a bounded search is not proof that
-  the phrase is absent from unscanned calls.
-- Weekly call plans and their facts for departments or one employee:
-  `get_plan_fact_statistics`.
-- New/regular client contacts and, for departments whose response has
-  `client_touch_metrics_applicable=true`, the first/repeat-touch cycle:
-  `get_client_statistics`. Treat `new_client_reactivated_first_touch_calls_total`
-  as a subset of first touches, not an additional category. The mutually
-  exclusive call categories are existing, new first touch and new repeat touch.
-  The call after any first touch is repeat even after a long gap; exactly
-  `new_client_touch_reset_days` elapsed days start a new first-touch cycle only
-  when the previous state was repeat. Do not report touch metrics for a
-  department where they are not applicable.
-- Bitrix CRM snapshot statistics: `get_crm_statistics`.
-- AI strengths and growth observations: `get_growth_insights`.
-- Mentoring tasks: the current OKK keeps none. `get_mentoring_statistics`
-  answers `not_available` (`mentoring_not_kept_by_okk`); say that OKK has no
-  mentoring tasks, never that there are zero tasks.
-- Scenario discovery and business criteria: `list_scenarios`,
-  `get_scenario_criteria`. Its rows carry no call counts or scores.
-- Scenario and criterion results: `get_scenario_performance`,
-  `get_criterion_performance`. A scenario counts all its versions. If
-  `effective_scope.excluded_evaluations` or `excluded_observations` is
-  non-zero, say that these evaluations could not be attributed and were not
-  counted.
-
-For a full employee answer, prefer `get_employee_card`: it already includes KPI,
-client/plan facts, CRM, weekly focus, AI strengths and growth areas for one
-period. `mentoring_available=false` and a null `saved_focus` mean that OKK does
-not keep mentoring tasks or a saved focus, not that they are empty.
-
-## Period and interpretation rules
-
-- If the user gives no period, use `month` and say that the current month was
-  used.
-- For any other range give `start_date` and `end_date` (`YYYY-MM-DD`) and leave
-  `period` out. A named `period` together with dates is an error, not a guess.
-- Preserve OKK metric names and canonical meanings. Do not recalculate KPI from
-  unrelated counters in the model.
-- Use `data.reporting_contract.metric_definitions` for department report labels.
-  `calls_total` counts successful conversations, not every journal record;
-  `total_calls` counts successful conversations above the duration threshold.
-  Average duration uses that threshold population even when a score is absent.
-  Average quality uses evaluated calls; never average employee averages.
-- A call plan is a list of items: direction × clients × what is counted ×
-  number of calls. Report every item separately and never add items together.
-  Use the item `counting` label from `reporting_contract.metric_definitions`
-  (connected, successful, successful from the minimum duration, evaluated).
-- `mode=null` means no plan was set, not a zero plan. `fact=null` with
-  `fact_state=no_client_base` is unavailable, not zero and not completion.
-- After a disputed name, repeat the exact scoped lookup and state that no
-  matching accessible OKK record was found when appropriate. Do not offer
-  uploaded cards or spreadsheets as replacement evidence for OKK membership
-  or quality scores.
-- Explain partial availability metadata inline when it materially affects the
-  answer; do not turn it into a separate data-quality report.
-- Distinguish `no_data` (the account can access the scope but no observations
-  matched) from `not_available` (the scope/entity is unavailable). Never turn
-  either status into invented zeroes or employees from a broader query.
-- Treat `source_complete=false` and call totals larger than loaded calls as
-  hard limits on completeness.
-- CRM exposes only each employee's latest snapshot. If a requested historical
-  date is `not_available`, do not present the latest snapshot as that date.
-- For comparisons, report which requested filters were omitted only as a count.
-  Do not repeat hidden IDs.
-
-## Explicitly out of scope
-
-Do not request or expose audio, raw prompts, prompt runtime, raw AI
-reasoning, scripts, Megafon administration, processing pipeline state, routing,
-bulk operations or any write action. These exclusions are intentional even if
-another OKK endpoint happens to contain such data.
-Phone numbers are the narrow exception: use only `list_call_phone_records`
-after its dedicated OAuth scope check; never copy numbers into operational logs.
+- No period from the user: `month`, and say it was the current month. Any
+  other range: `start_date` and `end_date`, without `period`.
+- `no_data`, `not_available`, `null` and `partial` are not zero. Say what is
+  missing instead of printing 0.
+- Successful calls (`calls_total`), calls from the minimum duration
+  (`total_calls`) and evaluated calls (`calls_evaluated`) are different
+  counts; the average score is over evaluated calls, never an average of
+  employee averages.
+- A call plan is a list of items; report each item, never add them up.
+  `mode=null` is no plan, `fact=null` is no data.
+- Criteria: `data.criteria` are ordinary criteria (average percent of the
+  maximum, weakest first). Critical errors (стоп-слова, мат, грубость) are in
+  `data.critical_errors` as `violations` — calls with a deduction.
+- CRM is the latest snapshot per employee; an unlinked or unsynced CRM is
+  unavailable, not zero.
+- A scenario counts all its versions; non-zero
+  `effective_scope.excluded_evaluations` means some evaluations could not be
+  attributed — say so.

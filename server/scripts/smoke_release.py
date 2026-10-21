@@ -13,9 +13,7 @@ import httpx
 
 EXPECTED_TOOLS = [
     "get_access_context",
-    "get_statistics_catalog",
     "get_overview_statistics",
-    "list_departments",
     "get_department_statistics",
     "compare_departments",
     "list_employees",
@@ -35,7 +33,6 @@ EXPECTED_TOOLS = [
     "get_client_statistics",
     "get_crm_statistics",
     "get_growth_insights",
-    "get_mentoring_statistics",
     "list_scenarios",
     "get_scenario_criteria",
     "get_scenario_performance",
@@ -56,7 +53,6 @@ DEPARTMENT_SCOPED_TOOLS = {
     "get_client_statistics",
     "get_crm_statistics",
     "get_growth_insights",
-    "get_mentoring_statistics",
     "list_scenarios",
     "get_scenario_criteria",
     "get_scenario_performance",
@@ -92,9 +88,9 @@ def validate_tool_inventory(payload: dict[str, Any]) -> None:
         if annotations.get("destructiveHint") is not False:
             raise RuntimeError(f"Tool is destructive: {tool.get('name')}")
         properties = (tool.get("inputSchema") or {}).get("properties") or {}
-        if tool.get("name") in DEPARTMENT_SCOPED_TOOLS and "department_ref" not in properties:
+        if tool.get("name") in DEPARTMENT_SCOPED_TOOLS and "department" not in properties:
             raise RuntimeError(f"Tool cannot resolve a named department: {tool.get('name')}")
-        if tool.get("name") == "compare_departments" and "department_refs" not in properties:
+        if tool.get("name") == "compare_departments" and "departments" not in properties:
             raise RuntimeError("compare_departments cannot resolve named departments")
         if tool.get("name") in SUPERVISOR_SCOPED_TOOLS and "supervisor_id" not in properties:
             raise RuntimeError(f"Tool does not require a supervisor identity: {tool.get('name')}")
@@ -151,31 +147,19 @@ def validate_department_employee_grounding(payload: dict[str, Any]) -> None:
     roster_names = dict(zip(employee_ids, employee_names, strict=True))
 
     data = structured.get("data") or {}
-    authoritative = data.get("authoritative_employee_roster") or {}
-    items = authoritative.get("items") or []
-    if authoritative.get("employee_count") != len(items):
-        raise RuntimeError("Authoritative department roster payload has an invalid count")
-    for item in items:
-        employee_id = str(item.get("id") or "")
-        if roster_names.get(employee_id) != item.get("full_name"):
-            raise RuntimeError("Authoritative department roster item conflicts with grounding")
-        if str(item.get("department_id") or "") != str(scope.get("department_id") or ""):
-            raise RuntimeError("Authoritative department roster contains another department")
-
     employee_sources = [
-        data.get("employee_ranking") or [],
         (data.get("complete_employee_ranking") or {}).get("employees") or [],
         (data.get("department_and_employee_trends") or {}).get("employee_trends") or [],
         (data.get("plan_fact") or {}).get("employees") or [],
     ]
     for rows in employee_sources:
         for row in rows:
-            employee_id = str(
-                row.get("canonical_employee_id") or row.get("employee_id") or row.get("id") or ""
-            )
+            nested = row.get("employee") if isinstance(row.get("employee"), dict) else {}
+            employee_id = str(row.get("employee_id") or row.get("id") or nested.get("id") or "")
             if employee_id not in roster_names:
                 raise RuntimeError("Department report contains an employee outside its live roster")
-            if row.get("canonical_employee_name") != roster_names[employee_id]:
+            name = row.get("full_name") or row.get("employee_name") or nested.get("full_name")
+            if name != roster_names[employee_id]:
                 raise RuntimeError("Department report contains an ungrounded employee name")
 
 
@@ -313,7 +297,7 @@ async def run(base_url: str, token: str | None) -> dict[str, Any]:
                     {
                         "name": "get_department_statistics",
                         "arguments": {
-                            "department_ref": "__mcp_acl_smoke_inaccessible_department__",
+                            "department": "__mcp_acl_smoke_inaccessible_department__",
                             "period": "today",
                         },
                     },
@@ -346,7 +330,7 @@ async def run(base_url: str, token: str | None) -> dict[str, Any]:
                         "tools/call",
                         {
                             "name": "get_department_statistics",
-                            "arguments": {"department_ref": department_ref, "period": "month"},
+                            "arguments": {"department": department_ref, "period": "month"},
                         },
                         5,
                     ),
