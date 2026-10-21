@@ -36,6 +36,8 @@ class OAuthClient(TimestampMixin, Base):
     client_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # First completed sign-in. A registration that never reached it is removed after a day.
+    first_authorized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class OkkAccountSession(TimestampMixin, Base):
@@ -93,3 +95,6 @@ class OAuthToken(TimestampMixin, Base):
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     replaced_by_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # The pair issued for this refresh token, encrypted, kept for a few seconds so a client that
+    # lost the answer gets the same pair on retry (cleared by maintenance).
+    successor_sealed: Mapped[str | None] = mapped_column(Text, nullable=True)

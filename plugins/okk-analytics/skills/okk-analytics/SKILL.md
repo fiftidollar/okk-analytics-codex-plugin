@@ -184,7 +184,8 @@ not keep mentoring tasks or a saved focus, not that they are empty.
 
 - If the user gives no period, use `month` and say that the current month was
   used.
-- Use `custom` only with both `start_date` and `end_date` in `YYYY-MM-DD`.
+- For any other range give `start_date` and `end_date` (`YYYY-MM-DD`) and leave
+  `period` out. A named `period` together with dates is an error, not a guess.
 - Preserve OKK metric names and canonical meanings. Do not recalculate KPI from
   unrelated counters in the model.
 - Use `data.reporting_contract.metric_definitions` for department report labels.

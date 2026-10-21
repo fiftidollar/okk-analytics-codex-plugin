@@ -136,7 +136,12 @@ class OKKPlatformClient:
         return access_token, self._refresh_cookie(response), payload.get("user") or {}
 
     async def live_context(self, session_id: UUID | str) -> AccountContext:
-        """Reload live user state and serialize refresh-token rotation per account session."""
+        """Reload the live OKK user (role, departments) for one account session.
+
+        The usual path holds no database lock and no open transaction while OKK answers, so parallel
+        tool calls of one person run in parallel. Only the rotation of the OKK refresh token is
+        serialized (`_rotate_session`).
+        """
 
         try:
             parsed_id = UUID(str(session_id))
@@ -144,17 +149,66 @@ class OKKPlatformClient:
             raise OKKAuthenticationError("Invalid OKK account session") from exc
 
         async with session_factory() as db:
+            row = await db.get(OkkAccountSession, parsed_id)
+            if not row or row.revoked_at is not None:
+                raise OKKAuthenticationError("OKK account session is no longer active")
+            okk_user_id = row.okk_user_id
+            access_token = self.cipher.open(row.encrypted_access_token)
+
+        response = await self._get_me(access_token)
+        if response.status_code == 401:
+            access_token, user = await self._rotate_session(parsed_id, access_token)
+        else:
+            user = self._me_payload(response)
+
+        user_id, email, role, department_ids = self._user_fields(user)
+        async with session_factory() as db:
+            row = await db.get(OkkAccountSession, parsed_id)
+            if not row or row.revoked_at is not None:
+                raise OKKAuthenticationError("OKK account session is no longer active")
+            if user_id != okk_user_id:
+                row.revoked_at = datetime.now(UTC)
+                await db.commit()
+                raise OKKAuthenticationError("OKK account identity changed")
+            row.role_snapshot = role
+            row.department_ids_snapshot = department_ids
+            row.last_verified_at = datetime.now(UTC)
+            await db.commit()
+        return AccountContext(
+            session_id=parsed_id,
+            user_id=user_id,
+            email=email,
+            role=role,
+            department_ids=tuple(department_ids),
+            access_token=access_token,
+        )
+
+    @staticmethod
+    def _me_payload(response: httpx.Response) -> dict[str, Any]:
+        if response.status_code == 200:
+            return response.json()
+        if response.status_code >= 500:
+            raise OKKUnavailable("OKK is temporarily unavailable")
+        raise OKKAuthenticationError("OKK rejected the account session")
+
+    async def _rotate_session(self, session_id: UUID, expired_access: str) -> tuple[str, dict[str, Any]]:
+        """Renew an expired OKK access token once, even when several requests notice it together.
+
+        OKK rotates its refresh token: using one twice ends the OKK session. So the rotation holds
+        the session row lock across the OKK refresh call — the one external call made under a lock.
+        A request that waited for the lock finds the token already renewed and only checks it.
+        """
+
+        async with session_factory() as db:
             row = (
                 await db.execute(
-                    select(OkkAccountSession).where(OkkAccountSession.id == parsed_id).with_for_update()
+                    select(OkkAccountSession).where(OkkAccountSession.id == session_id).with_for_update()
                 )
             ).scalar_one_or_none()
             if not row or row.revoked_at is not None:
                 raise OKKAuthenticationError("OKK account session is no longer active")
-
-            access_token = self.cipher.open(row.encrypted_access_token)
-            response = await self._get_me(access_token)
-            if response.status_code == 401:
+            current_access = self.cipher.open(row.encrypted_access_token)
+            if current_access == expired_access:
                 refresh_token = self.cipher.open(row.encrypted_refresh_token)
                 try:
                     access_token, rotated_refresh, user = await self._refresh(refresh_token)
@@ -164,30 +218,10 @@ class OKKPlatformClient:
                     raise
                 row.encrypted_access_token = self.cipher.seal(access_token)
                 row.encrypted_refresh_token = self.cipher.seal(rotated_refresh)
-            elif response.status_code == 200:
-                user = response.json()
-            elif response.status_code >= 500:
-                raise OKKUnavailable("OKK is temporarily unavailable")
-            else:
-                raise OKKAuthenticationError("OKK rejected the account session")
-
-            user_id, email, role, department_ids = self._user_fields(user)
-            if user_id != row.okk_user_id:
-                row.revoked_at = datetime.now(UTC)
                 await db.commit()
-                raise OKKAuthenticationError("OKK account identity changed")
-            row.role_snapshot = role
-            row.department_ids_snapshot = department_ids
-            row.last_verified_at = datetime.now(UTC)
-            await db.commit()
-            return AccountContext(
-                session_id=row.id,
-                user_id=user_id,
-                email=email,
-                role=role,
-                department_ids=tuple(department_ids),
-                access_token=access_token,
-            )
+                return access_token, user
+        # Another request renewed the token while this one waited for the lock.
+        return current_access, self._me_payload(await self._get_me(current_access))
 
     async def get(
         self,

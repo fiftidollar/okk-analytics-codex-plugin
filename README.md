@@ -27,6 +27,11 @@ attribute; the employee card reads all its parts for one date range; an empty
 department selector fails closed; the release smoke checks the real 28-tool
 inventory. See [CHANGELOG.md](CHANGELOG.md).
 
+Release 1.3.2 is prepared, not released: dates are never dropped silently, an
+OKK outage no longer looks like a sign-in failure, a lost refresh answer no
+longer ends the session, exact web return addresses, smaller responses and
+server instructions that fit the Claude Code limit.
+
 The account must have a working local OKK password. An account provisioned only
 through HR/SSO needs a local OKK password set by the normal account-management
 process first; the plugin never authenticates through the HR platform.
@@ -56,10 +61,10 @@ the Codex/Claude Code plugin packages.
 - Scenario catalog and complete business criterion configuration without
   prompts or scripts, plus scenario/criterion performance aggregation.
 - OAuth Authorization Code + PKCE S256, dynamic client registration, refresh
-  rotation/reuse detection and revocation. A new client may only register
-  return addresses on this computer (Codex, Claude Code) or on the sites listed
-  in `MCP_OAUTH_REDIRECT_HOSTS` (default `chatgpt.com`, `claude.ai`,
-  `claude.com`); the login page names where the browser will return.
+  rotation/reuse detection and revocation. A client may only use return
+  addresses on this computer (Codex, Claude Code) or the exact web callbacks
+  in `MCP_OAUTH_REDIRECT_URIS` (Claude and our ChatGPT app); the login page
+  shows where the browser will return.
 - Cookie-independent authorization form with a signed short-lived CSRF nonce,
   plus recovery for older in-flight forms while their OAuth request is valid.
   The gateway then redirects directly to the exact callback registered by

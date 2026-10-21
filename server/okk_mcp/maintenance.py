@@ -6,14 +6,17 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, exists, or_, select
+from sqlalchemy import delete, exists, or_, select, update
 
 from okk_mcp.config import Settings
 from okk_mcp.db import session_factory
-from okk_mcp.models import OAuthAuthorizationCode, OAuthToken, OkkAccountSession
+from okk_mcp.models import OAuthAuthorizationCode, OAuthClient, OAuthToken, OkkAccountSession
 from okk_mcp.platform_client import OKKPlatformClient
 
 logger = logging.getLogger(__name__)
+
+# A registration that never completed a sign-in within this time is abandoned (or abuse).
+ABANDONED_CLIENT_AGE = timedelta(days=1)
 
 
 async def cleanup_once(settings: Settings, platform: OKKPlatformClient) -> dict[str, int]:
@@ -63,12 +66,30 @@ async def cleanup_once(settings: Settings, platform: OKKPlatformClient) -> dict[
                 ~referenced_code,
             )
         )
+        retry_result = await db.execute(
+            update(OAuthToken)
+            .where(
+                OAuthToken.successor_sealed.is_not(None),
+                OAuthToken.consumed_at < now - timedelta(seconds=settings.mcp_refresh_retry_seconds),
+            )
+            .values(successor_sealed=None)
+        )
+        client_result = await db.execute(
+            delete(OAuthClient).where(
+                OAuthClient.first_authorized_at.is_(None),
+                OAuthClient.created_at < now - ABANDONED_CLIENT_AGE,
+                ~exists().where(OAuthAuthorizationCode.client_id == OAuthClient.client_id),
+                ~exists().where(OAuthToken.client_id == OAuthClient.client_id),
+            )
+        )
         await db.commit()
     return {
         "orphan_sessions_revoked": len(orphan_ids),
         "codes_deleted": code_result.rowcount or 0,
         "tokens_deleted": token_result.rowcount or 0,
         "sessions_deleted": session_result.rowcount or 0,
+        "retry_pairs_cleared": retry_result.rowcount or 0,
+        "abandoned_clients_deleted": client_result.rowcount or 0,
     }
 
 

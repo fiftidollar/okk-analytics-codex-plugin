@@ -113,13 +113,18 @@ Its `matching_calls_total` counts all ACL-visible journal records for the number
 including missed, short and in-process calls. `has_call` answers existence. The
 default `all` period sends no date bounds, so the full available journal is
 searched. A response page is only a sample of that total. A platform revision
-without the phone field/filter fails closed with `temporarily_unavailable`.
+without the phone field/filter fails closed with the «temporarily unavailable»
+tool error.
 Numbers never enter the other analytics or transcript tools.
 
 ## Common response envelope
 
-- `status`: `ok`, `partial`, `no_data`, `not_available` or
-  `temporarily_unavailable`.
+- `status`: `ok`, `partial`, `no_data` or `not_available`. When OKK itself is
+  down, the tool returns an error (`isError`) saying OKK is temporarily
+  unavailable — never an empty or zero result.
+- Period: `period` by name (Moscow time), or `start_date` and `end_date`
+  (`YYYY-MM-DD`) for any other range. Dates without `period` are a custom
+  range; a named `period` together with dates is an error.
 - `access_context`: only the caller's current visible scope.
 - `effective_scope`: filters actually applied.
 - `period`: exact inclusive dates.

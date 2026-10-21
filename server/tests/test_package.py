@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -12,6 +13,29 @@ from okk_mcp.config import Settings
 from okk_mcp.server import create_mcp_server
 
 ROOT = Path(__file__).resolve().parents[2]
+RELEASED_PACKAGES = ROOT / "plugins/released-packages.json"
+
+
+def _package_digest() -> str:
+    """Digest of every file Claude Code and Codex install, independent of checkout line endings."""
+
+    digest = hashlib.sha256()
+    package = ROOT / "plugins/okk-analytics"
+    for path in sorted(item for item in package.rglob("*") if item.is_file()):
+        digest.update(path.relative_to(ROOT).as_posix().encode())
+        digest.update(b"\0" + path.read_bytes().replace(b"\r\n", b"\n") + b"\0")
+    return digest.hexdigest()
+
+
+def test_plugin_files_change_only_together_with_a_new_version():
+    # Claude Code and Codex cache an installed plugin by its version: files changed under a
+    # released version never reach people who already installed it (1.3.1 shipped that way).
+    released = json.loads(RELEASED_PACKAGES.read_text(encoding="utf-8"))
+    assert released.get(__version__) == _package_digest(), (
+        f"Plugin files differ from the recorded {__version__} package. Raise the version in every "
+        "plugin.json and okk_mcp.__version__, then add the new digest to plugins/released-packages.json. "
+        "Never rewrite the entry of a released version."
+    )
 
 
 def test_plugin_and_marketplace_point_to_the_standalone_package():

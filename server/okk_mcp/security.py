@@ -71,28 +71,26 @@ def is_loopback_host(host: str) -> bool:
         return host.lower() == "localhost"
 
 
-def validate_registered_redirect_uri(uri: str, allowed_hosts: frozenset[str]) -> str:
-    """Адрес возврата нового клиента: этот компьютер (RFC 8252) или известный сайт клиента.
+def validate_registered_redirect_uri(uri: str, allowed_uris: frozenset[str]) -> str:
+    """Адрес возврата клиента: этот компьютер (RFC 8252, любой порт и путь) или точный адрес сайта.
 
     Регистрация открыта всем, поэтому без списка любой мог бы зарегистрировать «Codex»
     со своим адресом и получить код входа человека, который ввёл пароль на нашей странице.
+    Сайту — только точный адрес: на claude.ai и chatgpt.com есть и чужие приложения.
     """
 
     validated = validate_redirect_uri(uri)
-    host = urlparse(validated).hostname or ""
-    if is_loopback_host(host) or _serialize_redirect_host(host).rstrip(".") in allowed_hosts:
+    if is_loopback_host(urlparse(validated).hostname or "") or validated in allowed_uris:
         return validated
     raise ValueError("invalid_redirect_uri")
 
 
-def redirect_destination(uri: str, allowed_hosts: frozenset[str]) -> tuple[str, bool]:
+def redirect_destination(uri: str, allowed_uris: frozenset[str]) -> tuple[str, bool]:
     """Куда браузер вернёт человека после входа: подпись для страницы входа и «известен ли адрес»."""
 
-    host = urlparse(uri).hostname or ""
-    if is_loopback_host(host):
+    if is_loopback_host(urlparse(uri).hostname or ""):
         return "в приложение на этом компьютере", True
-    serialized = _serialize_redirect_host(host).rstrip(".")
-    return serialized, serialized in allowed_hosts
+    return uri, uri in allowed_uris
 
 
 def redirect_origin(uri: str) -> str:

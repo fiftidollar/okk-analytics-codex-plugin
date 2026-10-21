@@ -86,7 +86,7 @@ def test_redirect_origin_is_csp_safe_and_keeps_the_exact_port(uri, origin):
     assert redirect_origin(uri) == origin
 
 
-KNOWN_HOSTS = Settings().oauth_redirect_hosts
+KNOWN_URIS = Settings().oauth_redirect_uris
 
 
 @pytest.mark.parametrize(
@@ -95,14 +95,13 @@ KNOWN_HOSTS = Settings().oauth_redirect_hosts
         "http://127.0.0.1:3210/callback/codex",
         "http://localhost:3210/callback",
         "http://[::1]:3210/callback",
-        "https://chatgpt.com/connector_platform_oauth_redirect",
-        "https://chatgpt.com/connector/oauth/abc",
+        "https://chatgpt.com/connector/oauth/a-t9rb0LP-X4",
         "https://claude.ai/api/mcp/auth_callback",
-        "https://CLAUDE.com/api/mcp/auth_callback",
+        "https://claude.com/api/mcp/auth_callback",
     ],
 )
-def test_new_client_may_return_to_this_computer_or_a_known_client_site(uri):
-    assert validate_registered_redirect_uri(uri, KNOWN_HOSTS) == uri
+def test_new_client_may_return_to_this_computer_or_an_exact_known_callback(uri):
+    assert validate_registered_redirect_uri(uri, KNOWN_URIS) == uri
 
 
 @pytest.mark.parametrize(
@@ -113,18 +112,23 @@ def test_new_client_may_return_to_this_computer_or_a_known_client_site(uri):
         "https://evil-chatgpt.com/callback",
         "https://sub.claude.ai/callback",
         "http://example.com/callback",
+        # Same sites, other paths: other people's apps live there too.
+        "https://chatgpt.com/connector/oauth/someone-elses-app",
+        "https://claude.ai/api/mcp/auth_callback/../x",
+        "https://claude.ai/api/mcp/auth_callback?next=evil",
     ],
 )
 def test_new_client_cannot_register_a_foreign_return_address(uri):
     with pytest.raises(ValueError):
-        validate_registered_redirect_uri(uri, KNOWN_HOSTS)
+        validate_registered_redirect_uri(uri, KNOWN_URIS)
 
 
-def test_registration_with_a_foreign_return_address_stores_nothing():
+def test_registration_with_a_foreign_return_address_stores_nothing(monkeypatch):
     class JsonRequest:
         async def json(self):
             return {"client_name": "Codex", "redirect_uris": ["https://evil.example/callback"]}
 
+    monkeypatch.setattr(oauth, "_check_registration_rate_limit", AsyncMock())
     db = SimpleNamespace(add=AsyncMock(), flush=AsyncMock())
     response = asyncio.run(oauth.register_client(request=JsonRequest(), db=db, settings=Settings()))
 
@@ -133,13 +137,20 @@ def test_registration_with_a_foreign_return_address_stores_nothing():
     db.add.assert_not_called()
 
 
-def test_redirect_host_allowlist_is_configurable():
-    settings = Settings(mcp_oauth_redirect_hosts=" Example.org. , ")
-    assert settings.oauth_redirect_hosts == frozenset({"example.org"})
-    assert validate_registered_redirect_uri("https://example.org/cb", settings.oauth_redirect_hosts)
+def test_redirect_uri_allowlist_is_configurable():
+    settings = Settings(mcp_oauth_redirect_uris=" https://example.org/cb , ")
+    assert settings.oauth_redirect_uris == frozenset({"https://example.org/cb"})
+    assert validate_registered_redirect_uri("https://example.org/cb", settings.oauth_redirect_uris)
 
 
-def test_login_page_names_the_return_destination_and_warns_about_unknown_sites():
+def test_client_registered_under_the_old_host_rule_cannot_use_a_foreign_path():
+    settings = Settings()
+    assert oauth._allowed_redirect("https://claude.ai/api/mcp/auth_callback", settings)
+    assert not oauth._allowed_redirect("https://claude.ai/some/other/app", settings)
+    assert oauth._allowed_redirect("http://127.0.0.1:40123/callback", settings)
+
+
+def test_login_page_names_the_exact_return_address_and_warns_about_unknown_ones():
     common = {
         "settings": Settings(),
         "client_name": "Codex",
@@ -148,16 +159,16 @@ def test_login_page_names_the_return_destination_and_warns_about_unknown_sites()
         "scope": "okk.statistics.read",
     }
     local = oauth._render_login(redirect_uri="http://127.0.0.1:3210/callback", **common).body.decode()
-    chatgpt = oauth._render_login(
-        redirect_uri="https://chatgpt.com/connector/oauth/x", **common
+    claude = oauth._render_login(
+        redirect_uri="https://claude.ai/api/mcp/auth_callback", **common
     ).body.decode()
     foreign = oauth._render_login(redirect_uri="https://evil.example/cb", **common).body.decode()
 
     assert "в приложение на этом компьютере" in local
-    assert "<strong>chatgpt.com</strong>" in chatgpt
-    assert "<strong>evil.example</strong>" in foreign
+    assert "<strong>https://claude.ai/api/mcp/auth_callback</strong>" in claude
+    assert "<strong>https://evil.example/cb</strong>" in foreign
     assert "не относится к известным приложениям" in foreign
-    assert "не относится к известным приложениям" not in local + chatgpt
+    assert "не относится к известным приложениям" not in local + claude
 
 
 def test_scopes_are_allowlisted_and_canonicalized():
@@ -326,13 +337,12 @@ def test_mcp_instructions_route_named_people_without_plugin_skill_support():
     mcp = create_mcp_server(Settings(), AsyncMock())
     instructions = mcp.instructions or ""
 
-    assert "search both list_employees and list_supervisors" in instructions
-    assert "use only the matching section's tools" in instructions
-    assert "Never treat a supervisor as a department employee" in instructions
-    assert "never hardcode names, emails or grants" in instructions
-    assert "employee_roster_grounding.employee_ids/employee_names" in instructions
-    assert "exclusive authoritative roster" in instructions
-    assert "including from conversation memory" in instructions
+    # Claude Code before 2.1.296 keeps only the first 2048 characters: the whole text must fit,
+    # or the rules at the end silently stop reaching the model.
+    assert len(instructions) <= 2048
+    assert "search list_employees and list_supervisors" in instructions
+    assert "employee_roster_grounding" in instructions
+    assert "never ask for the OKK password" in instructions
 
 
 def test_mcp_transport_allows_only_the_configured_public_origin():
@@ -411,6 +421,31 @@ def test_userinfo_returns_live_verified_email(monkeypatch):
         "email_verified": True,
     }
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_userinfo_while_okk_is_down_is_unavailable_not_a_bad_token(monkeypatch):
+    verified = oauth.AccessToken(
+        token="mcp-access",
+        client_id="chatgpt",
+        scopes=["openid", "email", "okk.statistics.read"],
+        expires_at=2_000_000_000,
+        resource="http://localhost:8020/mcp",
+        subject="session-id",
+        claims={},
+    )
+    monkeypatch.setattr(oauth.OKKTokenVerifier, "verify_token", AsyncMock(return_value=verified))
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/userinfo",
+            "headers": [(b"authorization", b"Bearer mcp-access")],
+        }
+    )
+
+    response = asyncio.run(oauth.userinfo(request, Settings()))
+
+    assert response.status_code == 503
 
 
 def test_dynamic_registration_omits_null_optional_client_uri_for_strict_oauth_clients():
@@ -728,6 +763,8 @@ def test_consumed_refresh_reuse_revokes_family_even_when_old_token_is_already_re
         consumed_at=datetime.now(UTC),
         family_id=family_id,
         session_id=session_id,
+        successor_sealed=None,
+        replaced_by_hash=None,
     )
     db = DB([SimpleNamespace(client_id="client"), stored, None])
     revoke = AsyncMock()

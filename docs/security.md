@@ -99,15 +99,29 @@ criteria-only GET endpoint should replace this compatibility path.
 - Authorization Code only, PKCE S256 required.
 - Exact registered redirect URI matching.
 - HTTPS redirects, except RFC 8252 loopback HTTP clients.
-- Registration is open (DCR), so a new client may register only loopback
-  return addresses (Codex, Claude Code) or HTTPS addresses on the exact hosts in
-  `MCP_OAUTH_REDIRECT_HOSTS` (default `chatgpt.com,claude.ai,claude.com`).
-  Without this, anyone could register a client named «Codex» with their own
-  return address, send a user the gateway's genuine login link and receive that
-  user's authorization code. Clients registered before 1.3.0 keep their stored
-  addresses; for them the login page names the return host and warns when it
-  is not a known client site. The login page always states where the browser
-  will return.
+- Registration is open (DCR), so a client may use only loopback return
+  addresses (Codex, Claude Code; any port and path, RFC 8252) or one of the
+  exact HTTPS callbacks in `MCP_OAUTH_REDIRECT_URIS` (default: Claude
+  `https://claude.ai/api/mcp/auth_callback` and `https://claude.com/api/mcp/auth_callback`,
+  and the ChatGPT callback of our app). Exact addresses, not hosts: claude.ai
+  and chatgpt.com also host other people's apps. Without this, anyone could
+  register a client named «Codex» with their own return address, send a user
+  the gateway's genuine login link and receive that user's authorization code.
+  The rule is checked at registration and again at `/authorize`, so clients
+  registered under an older, wider rule are bound by it too. The login page
+  shows the exact return address (or «this computer» for loopback).
+- Registration is limited per client IP (`MCP_REGISTRATIONS_PER_HOUR`,
+  default 20, fail-closed on Redis errors). A registration that never
+  completed a sign-in is deleted by maintenance after one day.
+- Refresh tokens rotate. A refresh repeated within
+  `MCP_REFRESH_RETRY_SECONDS` (default 30) while the issued refresh token is
+  still unused gets the same new pair: the client lost the answer, or two of
+  its processes refreshed at once. The pair is kept encrypted for that window
+  and cleared by maintenance. Any other reuse revokes the whole token family
+  and the OKK session.
+- An OKK outage is not an invalid token: the MCP request goes on and the tool
+  answers with an error saying OKK is temporarily unavailable. A 401 would send
+  the client back to sign in.
 - The credential form submits only to the gateway. Its `form-action` CSP also
   includes the injection-safe origin of the exact validated callback because
   Chromium enforces the directive across the final redirect. No wildcard or
