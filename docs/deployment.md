@@ -1,6 +1,21 @@
 # Production deployment and release gate
 
-## 1.3.2 candidate (not released)
+## 1.3.2 — released 2026-10-21
+
+Deployed to the production Compose on 2026-10-21 (PR #8, `6351f97`). After the
+deployment: `/health` reported `1.3.2`, `/ready` reported `ready`, the
+authorization metadata lists `revocation_endpoint_auth_methods_supported`,
+`/mcp` without a token answered 401, registration with a foreign path on
+claude.ai answered 400, the gateway database is at `20261021_01` (10 of 55
+clients marked as in use; the other 45 have no tokens or codes and are removed
+by maintenance as abandoned — a client that still holds such an id signs in
+again). Before the release, Codex (desktop CLI 0.163, gpt-6.1-sol) answered
+«average score of Сопровождение in September 2026» through a local 1.3.2
+gateway on the test stand by passing only `start_date`/`end_date` — the call
+1.3.1 answered with the current month — and got the September value (90).
+A signed-in client against the production gateway was not tested.
+
+Notes written before the release:
 
 Fixes from the 2026-10-20 review against the MCP specification (revision
 2026-07-28; the SDK serves 2025-11-25), Claude Code and Codex guidance.
