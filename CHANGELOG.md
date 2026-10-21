@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.4.0 — prepared 2026-10-21, not released
+## 1.4.0 — released 2026-10-21
 
 Tool design measured on realistic questions (`docs/deployment.md`). Breaking
 for clients that cached the 1.3 tool list: update the plugin and start a new

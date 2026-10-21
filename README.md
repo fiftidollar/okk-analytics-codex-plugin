@@ -32,7 +32,7 @@ OKK outage no longer looks like a sign-in failure, a lost refresh answer no
 longer ends the session, exact web return addresses, smaller responses and
 server instructions that fit the Claude Code limit.
 
-Release 1.4.0 is prepared, not released: 25 tools instead of 28, one
+Release 1.4.0 is live since 2026-10-21 (public `/health` reports `1.4.0`): 25 tools instead of 28, one
 `department` parameter, correct critical-error counts, smaller answers, tool
 descriptions written for the model, and checkboxes for transcripts and phone
 numbers on the login page. Update the plugin and start a new chat after it.
