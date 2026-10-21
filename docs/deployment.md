@@ -1,6 +1,15 @@
 # Production deployment and release gate
 
-## 1.4.0 candidate (not released)
+## 1.4.0 — released 2026-10-21
+
+Deployed to the production Compose on 2026-10-21 (PR #10, `260c7ea`). After the
+deployment: `/health` reported `1.4.0`, `/ready` reported `ready`, the 401 on
+`/mcp` carried `scope` and `resource_metadata` without an error code, and the
+public release smoke passed. The authenticated smoke passed against the same
+code on a local gateway with the test stand; a signed-in client against the
+production gateway was not tested.
+
+Notes written before the release:
 
 No migration. Tool contract changes (removed tools, `department` parameter,
 criterion answer shape): clients reload the tool list in a new chat; a cached
