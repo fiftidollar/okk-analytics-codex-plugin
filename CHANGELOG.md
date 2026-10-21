@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.3.2 — prepared 2026-10-21, not released
+## 1.3.2 — released 2026-10-21
 
 Fixes from a review against the MCP specification, Claude Code and Codex
 guidance (`docs/deployment.md` lists the evidence).

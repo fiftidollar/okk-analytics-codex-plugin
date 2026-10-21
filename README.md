@@ -27,7 +27,7 @@ attribute; the employee card reads all its parts for one date range; an empty
 department selector fails closed; the release smoke checks the real 28-tool
 inventory. See [CHANGELOG.md](CHANGELOG.md).
 
-Release 1.3.2 is prepared, not released: dates are never dropped silently, an
+Release 1.3.2 is live since 2026-10-21 (public `/health` reports `1.3.2`): dates are never dropped silently, an
 OKK outage no longer looks like a sign-in failure, a lost refresh answer no
 longer ends the session, exact web return addresses, smaller responses and
 server instructions that fit the Claude Code limit.
