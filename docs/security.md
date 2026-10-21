@@ -143,6 +143,17 @@ criteria-only GET endpoint should replace this compatibility path.
   authorization before transcript tools become available.
 - Phone access is a separate `okk.phones.read` grant. Older tokens require a
   fresh authorization; refresh cannot add it silently.
+- The login page lists transcripts and client phone numbers as checkboxes,
+  checked by default (1.4.0). An unchecked box removes that scope from the
+  authorization code, so the person decides how much the client gets. A form
+  of the previous page version (no `consent_version`) grants what was
+  requested. A tool that needs a refused scope answers with an error naming
+  the scope and telling the person to reconnect.
+- The MCP 401 challenge carries `scope` (the scopes to request) and
+  `resource_metadata`. Without a token it has no error code (RFC 6750); with an
+  invalid or expired token it keeps `error="invalid_token"`, on which clients
+  refresh. Runtime step-up (403 `insufficient_scope` per tool call) is not
+  adopted until Claude Code and Codex are checked to handle it.
 - Public clients only (`token_endpoint_auth_method=none`).
 - OAuth metadata advertises `openid`, `email` and `/userinfo`. The UserInfo
   response revalidates the live OKK session and returns only the account

@@ -17,12 +17,13 @@ from okk_mcp.db import close_db, session_factory
 from okk_mcp.maintenance import cleanup_loop
 from okk_mcp.oauth import router as oauth_router
 from okk_mcp.runtime import platform_client
-from okk_mcp.server import create_mcp_server
+from okk_mcp.security import DEFAULT_SCOPES
+from okk_mcp.server import create_mcp_server, with_scope_challenge
 
 settings = get_settings()
 backend_client = BackendClient(settings, platform_client)
 mcp = create_mcp_server(settings, backend_client)
-mcp_app = mcp.streamable_http_app()
+mcp_app = with_scope_challenge(mcp.streamable_http_app(), DEFAULT_SCOPES)
 
 
 @asynccontextmanager

@@ -1,17 +1,24 @@
 # Privacy policy
 
-Last updated: 2026-09-24.
+Last updated: 2026-10-21.
 
-OKK Analytics connects Codex to the OKK account that the user explicitly
-authorizes. The gateway forwards the login and password directly to the normal
+OKK Analytics connects Codex, Claude Code (and other MCP clients) to the OKK
+account that the user explicitly authorizes. The gateway forwards the login and password directly to the normal
 OKK login API for that authorization request; it does not log or persist the
 password and does not send it to Codex.
 
 The gateway stores encrypted OKK access/refresh sessions and hashed OAuth
 codes/tokens so the connection can remain authenticated. Read-only business
 responses, employee/supervisor names, KPI values, AI strengths/growth
-observations and mentoring data are processed in memory and are not persisted
-by the gateway.
+observations, transcripts and client phone numbers are processed in memory and
+are not persisted by the gateway.
+
+Retention: an access token lives 60 minutes and a refresh token 30 days
+(`MCP_ACCESS_TOKEN_MINUTES`, `MCP_REFRESH_TOKEN_DAYS`). Expired or revoked
+tokens and codes, and revoked OKK sessions, are deleted 30 days later
+(`MCP_AUDIT_RETENTION_DAYS`). A client registration that never completed a
+sign-in is deleted after one day. On the login page the user may refuse
+transcripts and client phone numbers; the connection then gets neither.
 For ChatGPT workspace domain restrictions, the OAuth UserInfo endpoint returns
 the authenticated account's normalized email, a stable account subject and
 `email_verified=true` after rechecking the live OKK session. It does not return

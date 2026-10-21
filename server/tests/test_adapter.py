@@ -225,7 +225,18 @@ async def test_access_context_is_the_definitive_authenticated_connection_confirm
         role="viewer",
         department_ids=(department_id,),
         responses={
-            "/departments": [{"id": department_id, "name": "Отдел региональных продаж", "code": "ord"}],
+            "/departments": [
+                {
+                    "id": department_id,
+                    "name": "Отдел региональных продаж",
+                    "code": "ord",
+                    "quality_threshold": 75,
+                    "min_call_duration": 30,
+                    "client_status_tracked": True,
+                    "client_touch_tracked": True,
+                    "description": "not for the model",
+                }
+            ],
             "/employees/restricted": [],
         },
     )
@@ -240,55 +251,21 @@ async def test_access_context_is_the_definitive_authenticated_connection_confirm
         "available_sections": {"supervisors": {"available": False, "employee_count": 0}},
         "role": "viewer",
         "all_departments": False,
-        "departments": [{"id": department_id, "name": "Отдел региональных продаж", "code": "ord"}],
+        "departments": [
+            {
+                "id": department_id,
+                "name": "Отдел региональных продаж",
+                "code": "ord",
+                "quality_threshold": 75,
+                "min_call_duration_seconds": 30,
+                "client_status_tracked": True,
+                "client_touch_tracked": True,
+            }
+        ],
     }
-    assert result["access_context"] == {
-        "role": "viewer",
-        "all_departments": False,
-        "departments": [{"id": department_id, "name": "Отдел региональных продаж", "code": "ord"}],
-    }
-    assert platform.calls == [("/departments", []), ("/employees/restricted", [])]
-
-
-@pytest.mark.anyio
-async def test_statistics_catalog_routes_transcripts_without_listing_them_as_excluded():
-    result = await adapter(FakePlatform(role="viewer", department_ids=())).get_statistics_catalog()
-
-    domains = {row["domain"]: row["metrics"] for row in result["data"]["domains"]}
-    routes = {row["tool"] for row in result["data"]["tool_routing"]}
-    assert domains["transcripts"] == [
-        "call_catalog",
-        "full_text",
-        "speaker_segments",
-        "full_text_search",
-    ]
-    assert {
-        "list_call_transcripts",
-        "get_call_transcript",
-        "search_call_transcripts",
-    }.issubset(routes)
-    assert domains["supervisors"] == [
-        "directory",
-        "call_volume",
-        "duration",
-        "call_catalog",
-        "transcripts",
-        "transcript_search",
-    ]
-    assert {
-        "list_supervisors",
-        "get_supervisor_call_statistics",
-        "list_supervisor_call_transcripts",
-        "get_supervisor_call_transcript",
-        "search_supervisor_call_transcripts",
-    }.issubset(routes)
-    assert {
-        "new_client_first_touch",
-        "new_client_repeat_touch",
-        "new_client_reactivated_first_touch",
-    }.issubset(domains["clients"])
-    assert domains["plans"][0] == "weekly_plan_items"
-    assert "transcripts" not in result["data"]["explicit_exclusions"]
+    # The catalog comes once, here: other answers do not repeat it.
+    assert "access_context" not in result
+    assert sorted(platform.calls) == [("/departments", []), ("/employees/restricted", [])]
 
 
 @pytest.mark.anyio
@@ -296,11 +273,6 @@ async def test_empty_viewer_acl_is_a_valid_empty_scope_without_data_queries():
     platform = FakePlatform(role="viewer", department_ids=())
     result = await adapter(platform).list_employees()
     assert result["status"] == "no_data"
-    assert result["access_context"] == {
-        "role": "viewer",
-        "all_departments": False,
-        "departments": [],
-    }
     assert platform.calls == []
 
 
@@ -355,7 +327,7 @@ async def test_inaccessible_supervisor_id_fails_closed_before_call_lookup():
 
     assert result["status"] == "not_available"
     assert result["data"] == {}
-    assert platform.calls == [("/employees/restricted", []), ("/departments", [])]
+    assert platform.calls == [("/employees/restricted", [])]
 
 
 @pytest.mark.anyio
@@ -463,13 +435,14 @@ async def test_viewer_defense_in_depth_drops_departments_not_present_in_live_cla
             "/departments": [
                 {"id": visible_id, "name": "ORD", "code": "ord"},
                 {"id": leaked_id, "name": "B2B", "code": "b2b"},
-            ]
+            ],
+            "/employees/restricted": [],
         },
     )
 
-    result = await adapter(platform).list_departments()
+    result = await adapter(platform).get_access_context()
 
-    assert [row["id"] for row in result["data"]] == [visible_id]
+    assert [row["id"] for row in result["data"]["departments"]] == [visible_id]
     assert leaked_id not in str(result)
 
 
@@ -483,13 +456,14 @@ async def test_department_norm_of_the_new_okk_api_is_listed():
         responses={
             "/departments": [
                 {"id": department_id, "name": "Сопровождение", "code": "csm", "quality_threshold": 80}
-            ]
+            ],
+            "/employees/restricted": [],
         },
     )
 
-    result = await adapter(platform).list_departments()
+    result = await adapter(platform).get_access_context()
 
-    assert result["data"][0]["quality_threshold"] == 80
+    assert result["data"]["departments"][0]["quality_threshold"] == 80
 
 
 @pytest.mark.anyio
@@ -599,7 +573,7 @@ async def test_scenario_projection_keeps_business_criteria_but_drops_prompts_and
 
 
 @pytest.mark.anyio
-async def test_employee_card_contains_growth_and_tasks_without_raw_reasoning():
+async def test_employee_card_contains_growth_and_plan_without_raw_reasoning():
     department_id = str(uuid4())
     employee_id = str(uuid4())
     responses = {
@@ -628,9 +602,6 @@ async def test_employee_card_contains_growth_and_tasks_without_raw_reasoning():
             "aggregated_strengths": ["Сильное открытие"],
             "aggregated_improvements": ["Уточнять потребность"],
             "weekly_focus": ["Работа с возражениями"],
-            "focus_text": "Фокус наставника",
-            "mentoring_tasks": [{"id": "t1", "status": "in_progress", "focus_area": "Вопросы"}],
-            "completed_tasks": [{"id": "t2", "status": "completed", "focus_area": "Контакт"}],
             "evaluation_reasoning": "must never leave adapter",
             "transcript_raw": "must never leave adapter",
         },
@@ -664,11 +635,10 @@ async def test_employee_card_contains_growth_and_tasks_without_raw_reasoning():
     platform = FakePlatform(department_ids=(department_id,), responses=responses)
     result = await adapter(platform).get_employee_card(employee_id)
     serialized = str(result)
-    assert result["status"] == "partial"  # upstream exposes a bounded task-history window
+    assert result["status"] == "ok"
     assert "Сильное открытие" in serialized
     assert "Уточнять потребность" in serialized
-    assert "Фокус наставника" in serialized
-    assert "in_progress" in serialized and "completed" in serialized
+    assert "Работа с возражениями" in serialized
     assert "must never leave adapter" not in serialized
     assert "reasoning" not in serialized.lower()
     assert "transcript" not in serialized.lower()
@@ -731,7 +701,6 @@ async def test_employee_card_is_ok_only_when_every_part_loaded(call_plans, crm, 
     result = await adapter(platform).get_employee_card(employee_id)
 
     assert result["status"] == status
-    assert result["data"]["mentoring_available"] is False
 
 
 @pytest.mark.anyio
@@ -821,10 +790,78 @@ async def test_criterion_performance_aggregates_safe_items_only():
         scenario_id=scenario_id, period="custom", start_date="2026-07-01", end_date="2026-07-02"
     )
     serialized = str(result)
-    assert result["data"][0]["avg_score_percent"] == 80.0
+    assert result["data"]["criteria"][0]["avg_score_percent"] == 80.0
     assert "secret" not in serialized
     assert "+70000000000" not in serialized
     assert "comment" not in serialized
+
+
+@pytest.mark.anyio
+async def test_critical_error_counts_calls_with_a_deduction_not_every_observation():
+    # Before: `is_penalty` (the kind of criterion) was summed, so 13 calls without a single stop
+    # word read as «стоп-слова сработали 13 раз», and the error sat on top of the weakest criteria.
+    department_id, scenario_id, critical_id, regular_id = (str(uuid4()) for _ in range(4))
+    call_ids = [str(uuid4()) for _ in range(4)]
+    category = {"id": str(uuid4()), "name": "Критические ошибки", "is_critical": True}
+    responses = {
+        "/departments": [{"id": department_id, "name": "Продажи", "code": "sales"}],
+        "/scenarios": {
+            "items": [
+                {
+                    "id": scenario_id,
+                    "department_id": department_id,
+                    "name": "Сценарий",
+                    "code": "s",
+                    "categories": [
+                        {**category, "items": [{"id": critical_id, "name": "Стоп-слова", "max_score": 5}]},
+                        {
+                            "id": str(uuid4()),
+                            "name": "Сопровождение",
+                            "items": [{"id": regular_id, "name": "Приветствие", "max_score": 10}],
+                        },
+                    ],
+                }
+            ],
+            "pages": 1,
+        },
+        "/calls": {
+            "items": [
+                {"id": call_id, "employee_id": "e", "scenario_id": scenario_id, "quality_score": 80}
+                for call_id in call_ids
+            ],
+            "total": 4,
+            "pages": 1,
+        },
+    }
+    for index, call_id in enumerate(call_ids):
+        responses[f"/calls/{call_id}"] = {
+            "evaluation": {
+                "items": [
+                    # One call of four has a deduction.
+                    {
+                        "checklist_item_id": critical_id,
+                        "score": -5 if index == 0 else 0,
+                        "max_score": 5,
+                        "is_penalty": True,
+                    },
+                    {"checklist_item_id": regular_id, "score": 10, "max_score": 10, "is_penalty": False},
+                ]
+            }
+        }
+    platform = FakePlatform(department_ids=(department_id,), responses=responses)
+
+    result = await adapter(platform).get_criterion_performance(
+        scenario_id=scenario_id, period="custom", start_date="2026-07-01", end_date="2026-07-02"
+    )
+
+    [error] = result["data"]["critical_errors"]
+    assert (error["criterion"]["name"], error["violations"], error["violation_rate_percent"]) == (
+        "Стоп-слова",
+        1,
+        25.0,
+    )
+    assert "avg_score_percent" not in error
+    assert [row["criterion"]["name"] for row in result["data"]["criteria"]] == ["Приветствие"]
 
 
 @pytest.mark.anyio
@@ -1177,11 +1214,10 @@ async def test_criterion_performance_joins_scenario_versions_by_criterion_code(
         scenario_id=ids[scenario] if scenario else None,
     )
 
-    observed = {
-        row["criterion"]["code"]: (row["observations"], row["avg_score_percent"]) for row in result["data"]
-    }
+    rows = result["data"]["criteria"]
+    observed = {row["criterion"]["code"]: (row["observations"], row["avg_score_percent"]) for row in rows}
     assert observed == expected
-    assert all(row["scenario"]["id"] == ids["current"] for row in result["data"])
+    assert all(row["scenario"]["id"] == ids["current"] for row in rows)
     scope = result["effective_scope"]
     assert scope["excluded_evaluations"] == excluded
     assert scope["excluded_observations"] == 2 * excluded
@@ -1267,9 +1303,6 @@ async def test_named_department_outside_acl_never_falls_back_to_visible_ord_popu
 
     assert result["status"] == "not_available"
     assert result["data"] == {"reason": "department_not_in_access_scope"}
-    assert result["access_context"]["departments"] == [
-        {"id": ord_id, "name": "Отдел региональных продаж", "code": "ord"}
-    ]
     assert not any(path == "/employees" for path, _ in platform.calls)
 
 
@@ -1300,7 +1333,6 @@ async def test_named_department_outside_acl_never_falls_back_to_visible_ord_popu
         ("get_client_statistics", {"department_ref": "B2B"}),
         ("get_crm_statistics", {"department_ref": "B2B"}),
         ("get_growth_insights", {"department_ref": "B2B"}),
-        ("get_mentoring_statistics", {"department_ref": "B2B"}),
         ("list_scenarios", {"department_ref": "B2B"}),
         ("get_scenario_criteria", {"scenario_id": str(uuid4()), "department_ref": "B2B"}),
         ("get_scenario_performance", {"department_ref": "B2B"}),
@@ -1449,7 +1481,15 @@ async def test_department_card_by_name_returns_complete_department_sources_only(
         },
     )
 
-    result = await adapter(platform).get_department_statistics(department_ref="b2b", period="today")
+    summary = await adapter(platform).get_department_statistics(department_ref="b2b", period="today")
+    trend_paths = {"/dashboard/calls-trend", f"/departments/{b2b_id}/trends"}
+    # The default answer has no daily trends and does not ask OKK for them.
+    assert "daily_trend" not in summary["data"]
+    assert not trend_paths & {path for path, _params in platform.calls}
+
+    result = await adapter(platform).get_department_statistics(
+        department_ref="b2b", period="today", detail="full"
+    )
 
     assert result["status"] == "ok"
     assert result["effective_scope"]["department_id"] == b2b_id
@@ -1458,8 +1498,18 @@ async def test_department_card_by_name_returns_complete_department_sources_only(
     plan_fact = result["data"]["plan_fact"]
     assert plan_fact["mode"] == "employees"
     assert (plan_fact["items"][0]["plan"], plan_fact["items"][0]["fact"]) == (10, 3)
-    assert plan_fact["employees"][0]["canonical_employee_name"] == "B2B Employee"
+    assert plan_fact["employees"][0]["full_name"] == "B2B Employee"
     assert result["data"]["department_and_employee_trends"]["employee_trends"][0]["id"] == employee_id
+    # One summary and one complete ranking: no repeated blocks.
+    assert set(result["data"]) == {
+        "department",
+        "reporting_contract",
+        "summary",
+        "complete_employee_ranking",
+        "plan_fact",
+        "daily_trend",
+        "department_and_employee_trends",
+    }
     assert result["employee_roster_grounding"] == {
         "source": "live_okk_employee_directory",
         "authoritative": True,
@@ -1477,18 +1527,6 @@ async def test_department_card_by_name_returns_complete_department_sources_only(
             "autocorrect, transliterate, substitute or infer another person."
         ),
     }
-    assert result["data"]["authoritative_employee_roster"]["items"] == [
-        {
-            "id": employee_id,
-            "full_name": "B2B Employee",
-            "department_id": b2b_id,
-            "department": {"id": b2b_id, "name": "B2B", "code": "b2b"},
-            "position": None,
-            "is_active": True,
-            "created_at": None,
-            "updated_at": None,
-        }
-    ]
     for path, _params in platform.calls:
         if path.startswith("/departments/"):
             assert b2b_id in path
@@ -1539,7 +1577,9 @@ async def test_department_report_drops_foreign_people_and_canonicalizes_every_na
         },
     )
 
-    result = await adapter(platform).get_department_statistics(department_ref="ord", period="today")
+    result = await adapter(platform).get_department_statistics(
+        department_ref="ord", period="today", detail="full"
+    )
 
     assert result["status"] == "partial"
     assert result["effective_scope"]["department_code"] == "ord"
@@ -1547,13 +1587,9 @@ async def test_department_report_drops_foreign_people_and_canonicalizes_every_na
     assert grounding["employee_ids"] == [ord_employee_id]
     assert grounding["employee_names"] == ["Иван ОРД"]
     assert grounding["source_complete"] is False
+    # The foreign person is dropped from the roster, the ranking, the trends and the plan.
     assert grounding["excluded_source_records"] >= 4
     assert grounding["normalized_source_records"] >= 3
-    assert result["data"]["authoritative_employee_roster"]["items"][0]["department"] == {
-        "id": ord_id,
-        "name": "Отдел региональных продаж",
-        "code": "ord",
-    }
     serialized = str(result)
     assert "Левый Сотрудник" not in serialized
     assert "Выдуманное Имя" not in serialized
@@ -1686,7 +1722,7 @@ async def test_department_report_keeps_statistics_when_platform_has_no_call_plan
 
     assert result["status"] == "partial"
     assert result["data"]["plan_fact"]["status"] == "not_available"
-    assert result["data"]["department_summary"] == {"calls": 1}
+    assert result["data"]["summary"] == {"calls": 1}
 
 
 @pytest.mark.anyio
@@ -1915,45 +1951,6 @@ async def test_historical_crm_date_is_not_mislabeled_as_an_available_snapshot():
 
 
 @pytest.mark.anyio
-async def test_date_only_mentoring_deadline_is_timezone_safe_and_counted_overdue():
-    department_id, employee_id = str(uuid4()), str(uuid4())
-    employee = {
-        "id": employee_id,
-        "full_name": "Employee",
-        "department_id": department_id,
-        "department": {"id": department_id, "name": "B2B", "code": "b2b"},
-    }
-    platform = FakePlatform(
-        department_ids=(department_id,),
-        responses={
-            "/departments": [{"id": department_id, "name": "B2B", "code": "b2b"}],
-            "/employees": {"items": [employee], "total": 1, "pages": 1},
-            f"/employees/{employee_id}/page-data": {
-                "mentoring_tasks": [
-                    {
-                        "id": "task",
-                        "status": "pending",
-                        "due_date": "2020-01-01",
-                        "created_at": "2020-01-01T10:00:00+03:00",
-                    }
-                ],
-                "completed_tasks": [],
-            },
-        },
-    )
-
-    result = await adapter(platform).get_mentoring_statistics(
-        department_ref="b2b",
-        period="custom",
-        start_date="2020-01-01",
-        end_date="2020-01-31",
-    )
-
-    assert result["data"]["summary"]["overdue"] == 1
-    assert result["data"]["pages"] == 1
-
-
-@pytest.mark.anyio
 async def test_employee_only_filter_derives_and_reports_the_real_department_scope():
     department_id, employee_id = str(uuid4()), str(uuid4())
     platform = FakePlatform(
@@ -2057,42 +2054,6 @@ async def test_growth_mentions_count_criteria_when_okk_lines_carry_personal_numb
     result = await adapter(platform).get_growth_insights(department_ref="csm", period="today")
 
     assert result["data"]["growth_areas"] == [{"text": "Следующий шаг", "employee_mentions": 2}]
-
-
-@pytest.mark.anyio
-async def test_mentoring_removed_from_okk_reads_as_not_kept_not_as_zero():
-    # The new OKK has no mentoring: an employee page without the task keys is "not kept", while
-    # the old projection reported an empty task window and 0 active tasks.
-    department_id, employee_id = str(uuid4()), str(uuid4())
-    employee = {
-        "id": employee_id,
-        "full_name": "Employee",
-        "department_id": department_id,
-        "department": {"id": department_id, "name": "Сопровождение", "code": "csm"},
-    }
-    platform = FakePlatform(
-        department_ids=(department_id,),
-        responses={
-            "/departments": [{"id": department_id, "name": "Сопровождение", "code": "csm"}],
-            "/employees": {"items": [employee], "total": 1, "pages": 1},
-            f"/employees/{employee_id}": employee,
-            f"/employees/{employee_id}/page-data": {"kpi": {"calls_total": 5}, "aggregated_strengths": []},
-        },
-    )
-
-    statistics = await adapter(platform).get_mentoring_statistics(department_ref="csm", period="today")
-    compared = await adapter(platform).compare_employees(
-        employee_ids=[employee_id], department_ref="csm", period="today"
-    )
-
-    assert (statistics["status"], statistics["data"]["reason"]) == (
-        "not_available",
-        "mentoring_not_kept_by_okk",
-    )
-    assert (compared["data"][0]["active_tasks"], compared["data"][0]["completed_tasks_recent"]) == (
-        None,
-        None,
-    )
 
 
 @pytest.mark.anyio
@@ -2258,7 +2219,7 @@ async def test_criterion_output_limit_is_explicitly_reported_as_partial():
     )
 
     assert result["status"] == "partial"
-    assert len(result["data"]) == 1
+    assert len(result["data"]["criteria"]) == 1
     assert result["effective_scope"]["matching_criteria_total"] == 2
     assert result["effective_scope"]["returned_criteria"] == 1
 

@@ -16,28 +16,12 @@
         "destructive_justification": "Cannot create, update, delete, revoke, send, or otherwise mutate OKK data."
       }
     },
-    "get_statistics_catalog": {
-      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
-      "justifications": {
-        "read_only_justification": "Retrieves the available OKK metric catalog and its definitions without changing records.",
-        "open_world_justification": "Reads only metadata from the authenticated private OKK account.",
-        "destructive_justification": "Cannot modify metric definitions or any OKK state."
-      }
-    },
     "get_overview_statistics": {
       "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
       "justifications": {
         "read_only_justification": "Computes an ACL-scoped overview from existing OKK analytics through GET-only requests.",
         "open_world_justification": "Reads only the authenticated user's private OKK workspace.",
         "destructive_justification": "Cannot create, update, delete, or trigger processing in OKK."
-      }
-    },
-    "list_departments": {
-      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
-      "justifications": {
-        "read_only_justification": "Lists only departments visible to the current OKK account without changing access or records.",
-        "open_world_justification": "Department discovery is confined to the user's private OKK tenant.",
-        "destructive_justification": "Cannot create, rename, delete, or reassign departments."
       }
     },
     "get_department_statistics": {
@@ -190,14 +174,6 @@
         "read_only_justification": "Aggregates existing AI strengths and growth-area observations without exposing raw reasoning or changing evaluations.",
         "open_world_justification": "Insights are read only from the authenticated private OKK scope.",
         "destructive_justification": "Cannot create, edit, delete, or rerun evaluations or employee insights."
-      }
-    },
-    "get_mentoring_statistics": {
-      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
-      "justifications": {
-        "read_only_justification": "Retrieves existing mentoring task history and aggregate completion metrics without changing tasks.",
-        "open_world_justification": "Mentoring data is limited to the authenticated user's private OKK scope.",
-        "destructive_justification": "Cannot create, assign, complete, cancel, or delete mentoring tasks."
       }
     },
     "list_scenarios": {

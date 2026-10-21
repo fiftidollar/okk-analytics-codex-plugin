@@ -1,5 +1,46 @@
 # Production deployment and release gate
 
+## 1.4.0 candidate (not released)
+
+No migration. Tool contract changes (removed tools, `department` parameter,
+criterion answer shape): clients reload the tool list in a new chat; a cached
+1.3 tool call with `department_ref` fails validation instead of answering for
+the wrong scope.
+
+Evidence, 2026-10-21, local gateways on the OKK test stand (admin account of
+the okk_info kit), Codex desktop CLI 0.163 with gpt-6.1-sol, reasoning
+`medium`, no plugin skill (the MCP server alone), 36 realistic Russian
+questions with checkable answers (periods, departments, people, transcripts,
+plans, criteria, CRM, phone history, refusals):
+
+| | 1.3.2 | 1.4.0 |
+|---|---|---|
+| Correct answers | 35/36 | 36/36 |
+| Tool calls | 88 | 77 |
+| Characters of tool results read | 251,998 | 210,221 |
+| Input tokens | 4.03 M | 4.22 M |
+
+- The 1.3.2 failure was a gateway defect: «сколько раз сработали стоп-слова»
+  answered 13 (every observation of a critical criterion counted); 1.4.0
+  answers 1 of 13 — confirmed in 3 of 3 repeats.
+- On the first 1.4.0 run the answer to «вот мой пароль» did not warn about
+  sharing passwords; the server instructions got that rule and 3 of 3
+  repeats warned.
+- Input tokens are within run-to-run noise: Codex resends its own ~30k-token
+  context on every model turn, so the number of turns dominates. Fewer calls
+  and less data are the measured gain.
+- Codex OAuth end to end against the 1.4.0 gateway (`codex mcp login
+  --no-browser`, the page filled by a script): registration, the login page
+  with both checkboxes, the loopback callback and a tool call with the stored
+  token. A sign-in with the transcripts box unchecked got a token without
+  `okk.transcripts.read`; `list_call_transcripts` then answered with the
+  reconnect message, statistics still worked.
+- Not tested: Claude Code (its CLI login on the test machine was revoked) and
+  ChatGPT.
+
+Release gate: `/health` reports `1.4.0`; tools/list has 25 tools; the 401 on
+`/mcp` carries `scope`; the login page shows the two checkboxes.
+
 ## 1.3.2 — released 2026-10-21
 
 Deployed to the production Compose on 2026-10-21 (PR #8, `6351f97`). After the

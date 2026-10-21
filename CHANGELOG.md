@@ -1,5 +1,49 @@
 # Changelog
 
+## 1.4.0 — prepared 2026-10-21, not released
+
+Tool design measured on realistic questions (`docs/deployment.md`). Breaking
+for clients that cached the 1.3 tool list: update the plugin and start a new
+chat.
+
+- Fix: critical errors (stop words, swearing, rudeness) were counted on every
+  observation (`penalties` summed `is_penalty`, the kind of criterion), so
+  «стоп-слова сработали 13 раз» for 1 real violation, and they topped the
+  weakest criteria with a meaningless percent. `get_criterion_performance`
+  now answers `data.criteria` (ordinary criteria, average percent, weakest
+  first) and `data.critical_errors` (`violations` — calls with a deduction —
+  and `violation_rate_percent`). Criteria are labelled (id, code, name,
+  category, max score, critical); the full definition is in
+  `get_scenario_criteria`. The answer shrank from ~23,700 to ~6,000 characters
+  on the stand.
+- 25 tools instead of 28: `get_mentoring_statistics` (OKK keeps no
+  mentoring), `get_statistics_catalog` (repeated the tool descriptions) and
+  `list_departments` are gone; `get_access_context` lists the departments with
+  their norm, minimum call duration and tracked client metrics.
+- One `department` parameter (code, name or id) replaces `department_id` and
+  `department_ref`, which could disagree; `compare_departments` takes
+  `departments`.
+- `get_department_statistics` returns one summary, the complete employee
+  ranking, the plan and `reporting_contract`; the department summary, the
+  top-50 dashboard ranking and the second copy of the roster are gone, and
+  daily trends come with `detail=full` only (fewer OKK calls too).
+- Answers no longer repeat the caller's department catalog
+  (`access_context`); unset top-level parts are left out instead of `null`.
+- Employee card and comparison: no mentoring or saved-focus fields;
+  ranking rows carry `employee_name` only when they have no name.
+- Tool descriptions say when to use each tool, with the Russian domain words
+  users type; every parameter has a short description; pydantic titles are
+  removed from input schemas. The tool list the model reads is ~27,900
+  characters instead of ~30,100. `get_access_context` is marked
+  `anthropic/alwaysLoad` so Claude Code loads it without a tool search.
+- Server instructions: use `list_supervisors` only when `get_access_context`
+  shows the Supervisors section (the model searched it for every name).
+- Skill rewritten around workflows (96 lines instead of 225); tool contracts
+  live in tool descriptions, safety in the server instructions.
+- OAuth: the login page has checkboxes for transcripts and client phone
+  numbers (checked by default); an unchecked one is not granted. The MCP 401
+  challenge carries `scope`, and no error code when there is no token.
+
 ## 1.3.2 — released 2026-10-21
 
 Fixes from a review against the MCP specification, Claude Code and Codex
