@@ -27,6 +27,9 @@ services:
       ANALYTICS_MAX_EMPLOYEES: "2000"
       ANALYTICS_TRACE_ENABLED: "true"
       OPENAI_APPS_CHALLENGE_TOKEN: ${OPENAI_APPS_CHALLENGE_TOKEN:-}
+      # Corporate login through OKK (both set, or both empty = password only).
+      OKK_SSO_AUTHORIZE_URL: ${OKK_SSO_AUTHORIZE_URL:-}
+      OKK_SSO_HANDOFF_SECRET: ${OKK_SSO_HANDOFF_SECRET:-}
     expose:
       - "8020"
     depends_on:

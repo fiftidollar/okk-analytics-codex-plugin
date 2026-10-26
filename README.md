@@ -37,9 +37,12 @@ Release 1.4.0 is live since 2026-10-21 (public `/health` reports `1.4.0`): 25 to
 descriptions written for the model, and checkboxes for transcripts and phone
 numbers on the login page. Update the plugin and start a new chat after it.
 
-The account must have a working local OKK password. An account provisioned only
-through HR/SSO needs a local OKK password set by the normal account-management
-process first; the plugin never authenticates through the HR platform.
+People who enter OKK through the corporate Akyul login use the «Войти через
+корпоративный аккаунт» button on the login page (when the deployment sets
+`OKK_SSO_AUTHORIZE_URL` and `OKK_SSO_HANDOFF_SECRET`): OKK signs them in exactly
+as in its web interface and hands the gateway a one-time code. Everyone else
+signs in with the OKK email and password. The gateway never talks to the HR
+platform itself.
 
 This repository is independent of the OKK platform codebase: it uses the
 existing HTTP API and owns only OAuth grants, encrypted upstream sessions and

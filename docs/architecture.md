@@ -123,8 +123,25 @@ request selectors, entity UUIDs, employee names, AI observations, response
 payloads, passwords or tokens. `ANALYTICS_TRACE_ENABLED=false` disables these
 events; responses themselves are never persisted by the gateway.
 
-This is deliberately not HR/SSO authorization. Users provisioned by HR still
-need a usable local OKK password for `/auth/login`.
+## Corporate (SSO) login
+
+The gateway is not an HR/SSO client: corporate login goes through OKK's own
+Akyul login, so OKK keeps the only Akyul client and its account-linking rules.
+
+1. The login page's corporate button submits the same signed authorization
+   request and consent checkboxes to `POST /authorize/sso`. The gateway checks
+   CSRF and the client, stores the pending request in Redis for 10 minutes under
+   a random state, sets that state as an HttpOnly cookie on `/sso`, and sends
+   the browser to `OKK_SSO_AUTHORIZE_URL` with `handoff_redirect_uri` =
+   `<issuer>/sso/callback` and `handoff_state`.
+2. OKK accepts only an exact allowlisted `handoff_redirect_uri`, runs its normal
+   Akyul login, and returns the browser to the gateway with a one-time code
+   (seconds, single use) and the state.
+3. `GET /sso/callback` requires the cookie to equal the state, consumes the
+   pending request, and exchanges the code at `POST /auth/sso/handoff/token`
+   with `Authorization: Bearer OKK_SSO_HANDOFF_SECRET`. The answer is the same
+   as `/auth/login` (access token + refresh cookie) and continues at step 4
+   above.
 
 ## Plugin packaging contract
 
