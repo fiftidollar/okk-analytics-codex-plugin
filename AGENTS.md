@@ -5,7 +5,9 @@ gateway. It must not import code, ORM models, secrets, or database connections
 from the private OKK platform repository.
 
 - Every MCP tool is read-only, idempotent and ACL-aware.
-- Use only existing OKK `GET` analytics endpoints after native `/auth/login`.
+- Use only existing OKK `GET` analytics endpoints after native `/auth/login`
+  or OKK's corporate-login handoff (`/auth/sso/handoff/token`); never talk to
+  the HR platform directly.
 - Never persist, log or echo a user's password.
 - Store MCP tokens as SHA-256 hashes and upstream OKK session tokens only with
   authenticated encryption.

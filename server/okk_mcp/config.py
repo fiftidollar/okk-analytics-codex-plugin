@@ -61,6 +61,12 @@ class Settings(BaseSettings):
         "https://chatgpt.com/connector/oauth/a-t9rb0LP-X4"
     )
 
+    # Корпоративный вход (SSO Akyul) через ОКК: адрес старта входа SSO в браузере (у ОКК он на
+    # адресе интерфейса, не API) и общий с ОКК секрет обмена одноразового кода. Оба пусты — на
+    # странице входа только логин и пароль ОКК.
+    okk_sso_authorize_url: str = ""
+    okk_sso_handoff_secret: str = ""
+
     @model_validator(mode="after")
     def validate_deployment(self) -> Settings:
         issuer = self.mcp_issuer_url.rstrip("/")
@@ -81,6 +87,26 @@ class Settings(BaseSettings):
                 or parsed.fragment
             ):
                 raise ValueError(f"{label} must be an absolute URL without credentials, query or fragment")
+        sso_url = self.okk_sso_authorize_url.strip()
+        if bool(sso_url) != bool(self.okk_sso_handoff_secret):
+            raise ValueError("OKK_SSO_AUTHORIZE_URL and OKK_SSO_HANDOFF_SECRET are set together")
+        if self.okk_sso_handoff_secret and len(self.okk_sso_handoff_secret) < 32:
+            raise ValueError("OKK_SSO_HANDOFF_SECRET must be at least 32 characters")
+        if sso_url:
+            parsed = urlsplit(sso_url)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    "OKK_SSO_AUTHORIZE_URL must be an absolute URL without credentials, query or fragment"
+                )
+            if self.app_env == "production" and parsed.scheme != "https":
+                raise ValueError("Production OKK_SSO_AUTHORIZE_URL must use HTTPS")
         if not resource.startswith(f"{issuer}/"):
             raise ValueError("MCP_RESOURCE_URL must be hosted below MCP_ISSUER_URL")
         if self.app_env == "production":
@@ -119,6 +145,14 @@ class Settings(BaseSettings):
     @property
     def api_base_url(self) -> str:
         return self.okk_api_base_url.rstrip("/")
+
+    @property
+    def sso_enabled(self) -> bool:
+        return bool(self.okk_sso_authorize_url.strip() and self.okk_sso_handoff_secret)
+
+    @property
+    def sso_callback_url(self) -> str:
+        return f"{self.issuer_url}/sso/callback"
 
     @property
     def oauth_redirect_uris(self) -> frozenset[str]:

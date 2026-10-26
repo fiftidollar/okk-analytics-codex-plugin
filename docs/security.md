@@ -15,8 +15,12 @@ membership or replace unavailable OKK scores.
   are stored.
 - Upstream OKK access and rotating refresh tokens are encrypted with Fernet
   using `MCP_SESSION_ENCRYPTION_SECRET`.
-- `MCP_OAUTH_SECRET`, `MCP_SESSION_ENCRYPTION_SECRET`, database passwords and
-  Redis credentials belong only in the deployment secret store.
+- Corporate login never shows the gateway a password: OKK returns a one-time
+  code bound to the starting browser by an HttpOnly cookie, and only the
+  gateway can exchange it, with `OKK_SSO_HANDOFF_SECRET`.
+- `MCP_OAUTH_SECRET`, `MCP_SESSION_ENCRYPTION_SECRET`, `OKK_SSO_HANDOFF_SECRET`,
+  database passwords and Redis credentials belong only in the deployment
+  secret store.
 - Refresh-token reuse revokes the whole MCP family and the upstream OKK session.
 - A background cleanup revokes orphaned upstream sessions and deletes expired
   OAuth rows only after the configured audit-retention window.

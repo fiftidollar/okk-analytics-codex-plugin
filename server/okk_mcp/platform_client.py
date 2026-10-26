@@ -86,6 +86,28 @@ class OKKPlatformClient:
             raise OKKUnavailable("OKK login is temporarily unavailable") from exc
         if response.status_code == 401:
             raise OKKAuthenticationError("Invalid OKK login or password")
+        return self._account_session(response)
+
+    async def exchange_sso_handoff(self, code: str) -> OkkAccountSession:
+        """Exchange the one-time code of an OKK corporate (SSO) login for an OKK session.
+
+        Only this gateway knows the handoff secret, so a code taken from a browser address alone
+        opens nothing; OKK accepts each code once and for seconds.
+        """
+
+        try:
+            response = await self.client.post(
+                "/auth/sso/handoff/token",
+                json={"code": code},
+                headers={"Authorization": f"Bearer {self.settings.okk_sso_handoff_secret}"},
+            )
+        except httpx.HTTPError as exc:
+            raise OKKUnavailable("OKK login is temporarily unavailable") from exc
+        if response.status_code in {400, 401, 403, 404}:
+            raise OKKAuthenticationError("OKK rejected the corporate login")
+        return self._account_session(response)
+
+    def _account_session(self, response: httpx.Response) -> OkkAccountSession:
         if response.status_code >= 500:
             raise OKKUnavailable("OKK login is temporarily unavailable")
         if response.status_code != 200:

@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from okk_mcp.config import Settings, get_settings
 from okk_mcp.db import get_db, session_factory
-from okk_mcp.models import OAuthAuthorizationCode, OAuthClient, OAuthToken
+from okk_mcp.models import OAuthAuthorizationCode, OAuthClient, OAuthToken, OkkAccountSession
 from okk_mcp.platform_client import AccountContext, OKKAuthenticationError, OKKUnavailable
 from okk_mcp.runtime import platform_client
 from okk_mcp.security import (
@@ -310,6 +310,13 @@ def _render_login(
         else '<div class="error">Этот адрес возврата не относится к известным приложениям. '
         "Не входите, если не начинали подключение сами.</div>"
     )
+    sso_html = (
+        '<div class="sso"><button type="submit" formaction="/authorize/sso" formnovalidate>'
+        "Войти через корпоративный аккаунт</button>"
+        '<div class="or">тот же вход, что в ОКК через Akyul; или ниже — логин и пароль ОКК</div></div>'
+        if settings.sso_enabled
+        else ""
+    )
     optional_grants = "".join(
         f'<label class="grant"><input type="checkbox" name="{field}" value="1" checked> {html.escape(label)}</label>'
         for scope_name, (field, label) in OPTIONAL_GRANTS.items()
@@ -321,13 +328,13 @@ def _render_login(
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);font:16px/1.45 system-ui;color:var(--text)}}
 main{{min-height:100vh;display:grid;place-items:center;padding:24px}}.card{{width:min(440px,100%);background:var(--card);padding:32px;border-radius:18px;box-shadow:0 16px 48px #17202a18}}
 h1{{margin:0 0 8px}}p{{color:var(--muted)}}label{{display:block;font-weight:650;margin:14px 0 6px}}input{{width:100%;padding:12px 14px;border:1px solid #cbd3dc;border-radius:10px;font:inherit}}
-button{{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;background:var(--brand);color:#fff;font:700 16px system-ui}}.scope,.next{{font-size:14px;background:#f7f9fb;padding:12px 14px;border-radius:10px;margin-top:18px}}.next{{background:#eef6ff}}.error{{color:var(--danger);background:#fef3f2;padding:10px 12px;border-radius:10px}}label.grant{{font-weight:400;margin:8px 0 0}}label.grant input{{width:auto;margin-right:8px}}</style></head>
+button{{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;background:var(--brand);color:#fff;font:700 16px system-ui}}form{{display:flex;flex-direction:column}}.scope{{order:-2}}.sso{{order:-1}}.or{{font-size:14px;color:var(--muted);text-align:center;margin:10px 0 4px}}.scope,.next{{font-size:14px;background:#f7f9fb;padding:12px 14px;border-radius:10px;margin-top:18px}}.next{{background:#eef6ff}}.error{{color:var(--danger);background:#fef3f2;padding:10px 12px;border-radius:10px}}label.grant{{font-weight:400;margin:8px 0 0}}label.grant input{{width:auto;margin-right:8px}}</style></head>
 <body><main><section class="card"><h1>Вход в ОКК</h1><p>Подключение приложения <strong>{html.escape(client_name)}</strong>. После входа браузер вернёт вас <strong>{html.escape(destination)}</strong>.</p>{destination_html}{error_html}
 <form method="post" action="/authorize"><input type="hidden" name="authorization_request" value="{html.escape(signed_request, quote=True)}"><input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}">
 <label for="email">Логин (email)</label><input id="email" name="email" type="email" autocomplete="username" maxlength="200" required autofocus>
 <label for="password">Пароль</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required>
 <div class="scope">Только чтение, строго в пределах прав аккаунта: статистика, карточки сотрудников, сценарии и критерии.{optional_grants}<input type="hidden" name="consent_version" value="2"></div>
-<button type="submit">Войти и разрешить доступ</button></form>
+<button type="submit">Войти и разрешить доступ</button>{sso_html}</form>
 <div class="next"><strong>Что произойдёт дальше</strong><br>Браузер передаст вход обратно в приложение, из которого вы начали подключение (Codex, Claude Code или ChatGPT). Вернитесь в него и попросите «Проверить подключение OKK»: сообщение «OKK подключён» с ролью и отделами означает, что вход действительно завершён.</div>
 <p><small>MCP-шлюз сразу передаёт пароль в штатный API ОКК, не сохраняет его и никогда не передаёт приложению.</small></p></section></main></body></html>"""
     response = HTMLResponse(body)
@@ -481,6 +488,27 @@ async def authorize_login(
         )
     except OKKUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return await _issue_code_redirect(
+        db,
+        client=client,
+        account_session=account_session,
+        auth_request=auth_request,
+        granted_scope=granted_scope,
+        settings=settings,
+    )
+
+
+async def _issue_code_redirect(
+    db: AsyncSession,
+    *,
+    client: OAuthClient,
+    account_session: OkkAccountSession,
+    auth_request: dict[str, Any],
+    granted_scope: str,
+    settings: Settings,
+) -> RedirectResponse:
+    """Store the signed-in OKK session and send the browser back to the client with a code."""
+
     db.add(account_session)
     await db.flush()
     raw_code = secrets.token_urlsafe(48)
@@ -503,6 +531,133 @@ async def authorize_login(
     callback_url = _append_redirect_query(auth_request["redirect_uri"], query)
     response = RedirectResponse(callback_url, status_code=302)
     response.headers.update({"Cache-Control": "no-store", "Pragma": "no-cache"})
+    return response
+
+
+# Corporate (SSO) login goes through OKK: OKK signs the person in with Akyul and returns a one-time
+# code to /sso/callback. The browser cookie binds the callback to the browser that started it.
+SSO_COOKIE = "okk_mcp_sso"
+SSO_STATE_SECONDS = 600
+
+
+def _sso_state_key(state: str) -> str:
+    return "okk:mcp:sso:" + hashlib.sha256(state.encode()).hexdigest()
+
+
+def _render_sso_redirect(url: str) -> HTMLResponse:
+    """A page that moves on by itself. A redirect answer to the form would be checked against the
+    page's form-action, and the OKK and Akyul addresses on the way are not known in advance."""
+
+    escaped = html.escape(url, quote=True)
+    body = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta http-equiv="refresh" content="0;url={escaped}"><title>Вход в ОКК</title></head>
+<body><p>Переходим ко входу ОКК… <a href="{escaped}">Продолжить</a></p></body></html>"""
+    response = HTMLResponse(body)
+    _security_headers(response)
+    return response
+
+
+@router.post("/authorize/sso")
+async def authorize_sso(
+    request: Request,
+    authorization_request: str = Form(...),
+    csrf_token: str = Form(...),
+    consent_version: str | None = Form(default=None),
+    grant_transcripts: str | None = Form(default=None),
+    grant_phones: str | None = Form(default=None),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    if not settings.sso_enabled:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        auth_request = _serializer(settings).loads(authorization_request, max_age=600)
+    except (BadSignature, SignatureExpired):
+        return _render_authorization_error("Срок действия запроса на авторизацию истёк.")
+    signed_csrf = auth_request.get("csrf_token")
+    if not isinstance(signed_csrf, str) or not secrets.compare_digest(signed_csrf, csrf_token):
+        return await _refresh_authorization_form(
+            authorization_request=authorization_request,
+            db=db,
+            settings=settings,
+            error="Сеанс входа был обновлён. Нажмите вход ещё раз.",
+        )
+    await _load_client(db, auth_request["client_id"], auth_request["redirect_uri"], settings)
+    pending = {
+        key: auth_request.get(key)
+        for key in ("client_id", "redirect_uri", "state", "resource", "code_challenge")
+    }
+    pending["granted_scope"] = _granted_scope(
+        auth_request["scope"],
+        {
+            "consent_version": consent_version,
+            "grant_transcripts": grant_transcripts,
+            "grant_phones": grant_phones,
+        },
+    )
+    state = secrets.token_urlsafe(32)
+    client = redis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        await client.set(_sso_state_key(state), json.dumps(pending), ex=SSO_STATE_SECONDS)
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail="Login is temporarily unavailable") from exc
+    finally:
+        await client.aclose()
+    query = urlencode({"handoff_redirect_uri": settings.sso_callback_url, "handoff_state": state})
+    response = _render_sso_redirect(f"{settings.okk_sso_authorize_url.strip()}?{query}")
+    response.set_cookie(
+        SSO_COOKIE,
+        state,
+        max_age=SSO_STATE_SECONDS,
+        path="/sso",
+        secure=settings.issuer_url.startswith("https://"),
+        httponly=True,
+        samesite="lax",
+    )
+    return response
+
+
+@router.get("/sso/callback")
+async def sso_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    if not settings.sso_enabled:
+        raise HTTPException(status_code=404, detail="Not found")
+    cookie = request.cookies.get(SSO_COOKIE)
+    if not code or not state or not cookie or not secrets.compare_digest(cookie, state):
+        return _render_authorization_error(
+            "Корпоративный вход завершился не в том окне браузера, где он начат, или устарел."
+        )
+    client = redis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        raw = await client.getdel(_sso_state_key(state))
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail="Login is temporarily unavailable") from exc
+    finally:
+        await client.aclose()
+    if not raw:
+        return _render_authorization_error("Срок действия запроса на авторизацию истёк.")
+    pending = json.loads(raw)
+    oauth_client = await _load_client(db, pending["client_id"], pending["redirect_uri"], settings)
+    try:
+        account_session = await platform_client.exchange_sso_handoff(code)
+    except OKKAuthenticationError:
+        return _render_authorization_error("ОКК не подтвердил корпоративный вход.")
+    except OKKUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    response = await _issue_code_redirect(
+        db,
+        client=oauth_client,
+        account_session=account_session,
+        auth_request=pending,
+        granted_scope=pending["granted_scope"],
+        settings=settings,
+    )
+    response.delete_cookie(SSO_COOKIE, path="/sso")
     return response
 
 

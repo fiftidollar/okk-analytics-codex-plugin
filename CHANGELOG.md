@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Corporate login: «Войти через корпоративный аккаунт» on the login page for
+  people who enter OKK through Akyul and have no OKK password. Goes through
+  OKK's own SSO (`OKK_SSO_AUTHORIZE_URL`, `OKK_SSO_HANDOFF_SECRET`; needs the
+  OKK backend with `/auth/sso/handoff/token`). Off when the two are unset.
+
 ## 1.4.0 — released 2026-10-21
 
 Tool design measured on realistic questions (`docs/deployment.md`). Breaking
