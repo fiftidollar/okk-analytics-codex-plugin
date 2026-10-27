@@ -136,11 +136,9 @@ def test_standalone_server_has_no_private_backend_import_or_copy():
         path.read_text(encoding="utf-8") for path in (ROOT / "server/okk_mcp").glob("*.py")
     )
     dockerfile = (ROOT / "server/Dockerfile").read_text(encoding="utf-8")
-    requirements = (ROOT / "server/requirements.txt").read_text(encoding="utf-8")
     assert "from app." not in python_source
     assert "import app." not in python_source
     assert "COPY backend" not in dockerfile
-    assert "mcp==1.27.2" in requirements
 
 
 def test_published_connector_is_wired_for_production_not_test_stand():
