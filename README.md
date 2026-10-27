@@ -42,6 +42,11 @@ every call of the period with the exact count, the OKK journal filters in the ca
 `get_call_filter_options` tool (26 tools), trends by day, week, month or quarter, and the fixes of
 a full review. Update the plugin and start a new chat after it.
 
+Release 1.6.0 is live since 2026-10-27 (public `/health` reports `1.6.0`): a tool list half the
+size, per-connection call and time limits, cleaned call texts, `iss` in the authorization
+response, scope step-up and a repeatable eval suite (`evals/`). Update the plugin and start a new
+chat after it.
+
 The account must have a working local OKK password. An account provisioned only
 through HR/SSO needs a local OKK password set by the normal account-management
 process first; the plugin never authenticates through the HR platform.
@@ -289,7 +294,7 @@ well-known route returns only that token.
 
 This is a live production plugin, not a test-stand connector. Its public MCP URL
 is `https://okk-mcp.akfixdev.ru/mcp`, and its upstream is the production OKK API
-above. Release `1.5.0` is live: public `/health` reported `1.5.0` on
+above. Release `1.6.0` is live: public `/health` reported `1.6.0` on
 `2026-10-27`. It registers 26 read-only tools, including the ACL-safe private
 Supervisors catalog, its dedicated call/transcript tools and the phone-history
 tool. The verification evidence of

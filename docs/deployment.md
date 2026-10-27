@@ -1,5 +1,17 @@
 # Production deployment and release gate
 
+## 1.6.0 — released 2026-10-27
+
+Deployed to the production Compose on 2026-10-27 14:26 MSK (PR #15,
+`87cb037`). After the deployment: `/health` reported `1.6.0`, `/ready`
+reported `ready`, the authorization server metadata advertises
+`authorization_response_iss_parameter_supported: true` and
+`client_id_metadata_document_supported: false`. CIMD stays off: from the
+production server Claude's document answered Cloudflare 302 and ChatGPT's 403.
+Not tested yet: a signed-in client (the person signs in once; then tools/list,
+the step-up error and the call limits are checked live). The eval suite has
+only had a dry run; a paid run needs the owner's approval.
+
 ## 1.5.0 — released 2026-10-27
 
 Deployed to the production Compose on 2026-10-27 13:10 MSK (PR #13,
