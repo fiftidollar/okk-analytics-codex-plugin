@@ -116,16 +116,46 @@ criteria-only GET endpoint should replace this compatibility path.
   addresses (Codex, Claude Code; any port and path, RFC 8252) or one of the
   exact HTTPS callbacks in `MCP_OAUTH_REDIRECT_URIS` (default: Claude
   `https://claude.ai/api/mcp/auth_callback` and `https://claude.com/api/mcp/auth_callback`,
-  and the ChatGPT callback of our app). Exact addresses, not hosts: claude.ai
+  the ChatGPT callback of our app and ChatGPT's stable
+  `https://chatgpt.com/connector_platform_oauth_redirect`, which ChatGPT uses
+  only with servers that return `iss`). Exact addresses, not hosts: claude.ai
   and chatgpt.com also host other people's apps. Without this, anyone could
   register a client named «Codex» with their own return address, send a user
   the gateway's genuine login link and receive that user's authorization code.
   The rule is checked at registration and again at `/authorize`, so clients
   registered under an older, wider rule are bound by it too. The login page
   shows the exact return address (or «this computer» for loopback).
+- Client ID Metadata Documents (CIMD, advertised as
+  `client_id_metadata_document_supported`; `MCP_CLIENT_METADATA_DOCUMENTS_ENABLED`
+  switches it off): a client may use the HTTPS URL of its own metadata as
+  `client_id` instead of registering. The URL must be plain HTTPS with a path,
+  no query, fragment, credentials or dot segments, at most 200 characters.
+  The gateway resolves the host once, refuses the fetch if any answer is not
+  a public address (private, loopback, link-local, CGNAT, multicast, reserved,
+  IPv4-mapped variants), then connects to that vetted address with the
+  original name for TLS, so a second DNS answer cannot redirect it. No
+  redirects, no environment proxy, 5 s total, at most 5 KB, cached per URL for
+  5 minutes. The document must repeat the URL as `client_id`, have no
+  `client_secret`, allow `none` at the token endpoint (ChatGPT names
+  `private_key_jwt` and lists `none` as supported; it then uses `none`) and
+  only the code and refresh grants. Its `redirect_uris` only narrow: the
+  requested callback must be listed there and pass the same rule as a
+  registered client, so a document can never return a code to an address DCR
+  would refuse. The login page names the client as «name (document host)».
+  The client's row in `oauth_clients` is written only when a person signs in,
+  so an unauthenticated document creates nothing; `/token` and `/revoke`
+  then accept the URL as `client_id`. Dynamic registration keeps working.
 - Registration is limited per client IP (`MCP_REGISTRATIONS_PER_HOUR`,
-  default 20, fail-closed on Redis errors). A registration that never
-  completed a sign-in is deleted by maintenance after one day.
+  default 20, fail-closed on Redis errors). Addresses inside
+  `MCP_TRUSTED_CLIENT_NETWORKS` (default `160.79.104.0/21`, Anthropic's egress:
+  claude.ai registers a new client per connection, all from that network)
+  share one bucket per network with `MCP_TRUSTED_NETWORK_REGISTRATIONS_PER_HOUR`
+  (default 600). The address is uvicorn's `request.client`, derived from
+  forwarded headers only of `--forwarded-allow-ips` proxies; the gateway never
+  reads `X-Forwarded-For` itself. If the ingress did not overwrite that header,
+  anyone could already evade the per-IP limit with a fresh fake address, so the
+  trusted bucket adds no new bypass. A registration that never completed a
+  sign-in is deleted by maintenance after one day.
 - Refresh tokens rotate. A refresh repeated within
   `MCP_REFRESH_RETRY_SECONDS` (default 30) while the issued refresh token is
   still unused gets the same new pair: the client lost the answer, or two of
@@ -145,6 +175,12 @@ criteria-only GET endpoint should replace this compatibility path.
 - A successful authorization POST returns a no-store `302` directly to the
   registered URI. Codex validates `state`, exchanges the code and records the
   authenticated MCP state.
+- Every redirect from `/authorize` back to the client — the code and errors
+  (`unsupported_response_type`, `invalid_request` for PKCE, `invalid_scope`,
+  `invalid_target`) — carries `state` and `iss` equal to the metadata `issuer`
+  (RFC 9207, `authorization_response_iss_parameter_supported`), so the client
+  can detect a mix-up attack. An unknown client or return address still gets
+  a page, never a redirect.
 - The redirect itself is never presented as proof of a completed login. The
   definitive check is an authenticated `get_access_context` call: token
   verification reloads `/auth/me`, and only then may the response contain
@@ -164,14 +200,23 @@ criteria-only GET endpoint should replace this compatibility path.
   authorization code, so the person decides how much the client gets. A form
   of the previous page version (no `consent_version`) grants what was
   requested. A page shown again after a wrong password or a refreshed form
-  keeps the boxes as the person left them. A tool that needs a refused scope
-  answers with an error naming the scope and telling the person to reconnect.
+  keeps the boxes as the person left them.
+- Step-up for a missing scope: the tool call ends with `isError: true`, a text
+  naming the scope and telling the person to reconnect (what Codex and Claude
+  Code show), and `_meta["mcp/www_authenticate"]` with
+  `Bearer error="insufficient_scope", scope="…", resource_metadata="…",
+  error_description="…"` (OpenAI Apps SDK; ChatGPT opens a new sign-in). The
+  `scope` is the granted scopes plus the missing ones, so stepping up never
+  loses access already given; the login page shows the requested optional
+  scopes checked. The MCP HTTP 403 `insufficient_scope` is not used: the SDK
+  runs the tool inside the JSON-RPC session after the HTTP status is fixed
+  (200 in stateless JSON mode), and a 403 would need a second copy of each
+  tool's scope rule in front of the SDK.
 - The MCP 401 challenge carries `scope` (the scopes to request) and
   `resource_metadata`. Without a token it has no error code (RFC 6750); with an
   invalid or expired token it keeps `error="invalid_token"`, on which clients
-  refresh. Runtime step-up (403 `insufficient_scope` per tool call) is not
-  adopted until Claude Code and Codex are checked to handle it.
-- Public clients only (`token_endpoint_auth_method=none`).
+  refresh.
+- Public clients only (`token_endpoint_auth_method=none`), registered or CIMD.
 - OAuth metadata advertises `openid`, `email` and `/userinfo`. The UserInfo
   response revalidates the live OKK session and returns only the account
   subject, normalized email and `email_verified=true`; no role, department,

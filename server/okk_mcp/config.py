@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from ipaddress import IPv4Network, IPv6Network, ip_network
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -39,6 +40,14 @@ class Settings(BaseSettings):
     mcp_http_timeout_seconds: float = Field(default=30.0, ge=2, le=120)
     mcp_login_attempts_per_minute: int = Field(default=8, ge=2, le=30)
     mcp_registrations_per_hour: int = Field(default=20, ge=2, le=500)
+    # Сети, из которых регистрируются клиенты сайтов: все подключения claude.ai идут из
+    # исходящей сети Anthropic, и Claude регистрирует нового клиента на каждое подключение.
+    # Такая сеть — один общий, но больший лимит в час; остальные адреса — свой малый лимит.
+    mcp_trusted_client_networks: str = "160.79.104.0/21"
+    mcp_trusted_network_registrations_per_hour: int = Field(default=600, ge=2, le=20000)
+    # Client ID Metadata Documents: клиент называет себя HTTPS-адресом своего описания.
+    # Выключатель на случай, если описание клиента не скачивается с нашего сервера.
+    mcp_client_metadata_documents_enabled: bool = True
     # A refresh repeated within this window (the client lost the answer) gets the same new pair.
     mcp_refresh_retry_seconds: int = Field(default=30, ge=0, le=120)
     mcp_cleanup_interval_minutes: int = Field(default=60, ge=5, le=1440)
@@ -56,11 +65,13 @@ class Settings(BaseSettings):
     # Точные адреса возврата сайтов-клиентов (через запятую), на которые можно получить код входа.
     # Адреса этого компьютера (Codex, Claude Code) разрешены всегда. Только точный адрес: на
     # claude.ai и chatgpt.com живут и чужие приложения, а чужой адрес возврата — это кража кода
-    # входа человека, который ввёл пароль на нашей странице. Адрес ChatGPT — у нашего приложения.
+    # входа человека, который ввёл пароль на нашей странице. Адреса ChatGPT: прежний — у нашего
+    # приложения, постоянный — для серверов, которые возвращают `iss` (RFC 9207).
     mcp_oauth_redirect_uris: str = (
         "https://claude.ai/api/mcp/auth_callback,"
         "https://claude.com/api/mcp/auth_callback,"
-        "https://chatgpt.com/connector/oauth/a-t9rb0LP-X4"
+        "https://chatgpt.com/connector/oauth/a-t9rb0LP-X4,"
+        "https://chatgpt.com/connector_platform_oauth_redirect"
     )
 
     @model_validator(mode="after")
@@ -85,6 +96,10 @@ class Settings(BaseSettings):
                 raise ValueError(f"{label} must be an absolute URL without credentials, query or fragment")
         if not resource.startswith(f"{issuer}/"):
             raise ValueError("MCP_RESOURCE_URL must be hosted below MCP_ISSUER_URL")
+        try:
+            self.trusted_client_networks  # noqa: B018 - a wrong network fails the start, not a request
+        except ValueError as exc:
+            raise ValueError("MCP_TRUSTED_CLIENT_NETWORKS must be comma-separated CIDR networks") from exc
         if self.app_env == "production":
             if not issuer.startswith("https://") or not resource.startswith("https://"):
                 raise ValueError("Production MCP issuer/resource URLs must use HTTPS")
@@ -125,6 +140,14 @@ class Settings(BaseSettings):
     @property
     def oauth_redirect_uris(self) -> frozenset[str]:
         return frozenset(uri.strip() for uri in self.mcp_oauth_redirect_uris.split(",") if uri.strip())
+
+    @property
+    def trusted_client_networks(self) -> tuple[IPv4Network | IPv6Network, ...]:
+        return tuple(
+            ip_network(network.strip())
+            for network in self.mcp_trusted_client_networks.split(",")
+            if network.strip()
+        )
 
 
 @lru_cache

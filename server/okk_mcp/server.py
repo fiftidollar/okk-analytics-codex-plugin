@@ -10,6 +10,7 @@ from uuid import UUID
 
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser, RequireAuthMiddleware
+from mcp.server.auth.routes import build_resource_metadata_url
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
@@ -177,14 +178,61 @@ def _security_meta(*scopes: str) -> dict[str, Any]:
     }
 
 
-def _require_scopes(*required: str) -> None:
-    token = get_access_token()
-    missing = sorted(set(required) - set(token.scopes if token else ()))
-    if missing:
-        raise PermissionError(
+class MissingScope(PermissionError):
+    """The token lacks a scope the tool needs. `scope` is what to ask for on a new sign-in: the
+    granted scopes plus the missing ones, so stepping up never loses access already given."""
+
+    def __init__(self, missing: list[str], scope: str):
+        super().__init__(
             f"This OKK connection was granted without {', '.join(missing)}. Reconnect OKK Analytics "
             "and allow that access on the OKK login page."
         )
+        self.missing = missing
+        self.scope = scope
+
+
+def _require_scopes(*required: str) -> None:
+    token = get_access_token()
+    granted = set(token.scopes if token else ())
+    missing = sorted(set(required) - granted)
+    if missing:
+        raise MissingScope(missing, " ".join(sorted(granted | set(required))))
+
+
+def _answer_missing_scope_with_step_up(mcp: FastMCP, settings: Settings) -> None:
+    """A tool call without a needed scope ends with an error result that carries the step-up
+    challenge in `_meta["mcp/www_authenticate"]` (OpenAI Apps SDK): ChatGPT opens a new sign-in for
+    that scope, other clients show the text.
+
+    The MCP 403 `insufficient_scope` is not possible here: the SDK runs the tool inside the JSON-RPC
+    session after the HTTP status is fixed (always 200 in stateless JSON mode). A 403 would need the
+    tool's scopes checked again before the SDK, a second owner of the rule.
+    """
+
+    resource_metadata = build_resource_metadata_url(AnyHttpUrl(settings.resource_url))
+
+    async def call_tool(name: str, arguments: dict[str, Any]) -> Any:
+        try:
+            return await mcp.call_tool(name, arguments)
+        except ToolError as exc:
+            if not isinstance(exc.__cause__, MissingScope):
+                raise
+            return _step_up_result(exc.__cause__, str(resource_metadata))
+
+    mcp._mcp_server.call_tool(validate_input=False)(call_tool)
+
+
+def _step_up_result(missing: MissingScope, resource_metadata: str) -> CallToolResult:
+    challenge = (
+        f'Bearer error="insufficient_scope", scope="{missing.scope}", '
+        f'resource_metadata="{resource_metadata}", '
+        f'error_description="Sign in again and allow {" ".join(missing.missing)}"'
+    )
+    return CallToolResult(
+        content=[TextContent(type="text", text=str(missing))],
+        isError=True,
+        _meta={"mcp/www_authenticate": [challenge]},
+    )
 
 
 def _period_params(
@@ -1049,6 +1097,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     _drop_schema_titles(mcp)
     _publish_security_schemes(mcp)
+    _answer_missing_scope_with_step_up(mcp, settings)
     return mcp
 
 
