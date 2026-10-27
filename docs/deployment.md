@@ -1,6 +1,18 @@
 # Production deployment and release gate
 
-## 1.5.0 — not released
+## 1.5.0 — released 2026-10-27
+
+Deployed to the production Compose on 2026-10-27 13:10 MSK (PR #13,
+`7890993`), right after the OKK platform release (alpes-it/Akfix-OKK-platform
+PR #273, production 12:57–12:58 MSK). After the deployment: `/health` reported
+`1.5.0`, `/ready` reported `ready`, the 401 on `/mcp` carried `scope` and
+`resource_metadata`, and the public release smoke passed. The OKK side was
+checked read-only with the new production code: «Оценено» of csm for October
+in the journal (`kpi_evaluated`) 82 = the KPI 82; transcript search «до
+свидания» 120 calls, the phrase in all 20 rows checked; 200 rows of two pages
+without repeats; the call card names its department. Not tested yet: an
+authenticated client against the production gateway (tools/list of 26 tools
+and the new filters) — it needs a person to sign in.
 
 Order: the OKK platform first, then the gateway. The gateway needs from OKK
 `POST /calls/transcript-search`, the journal filter `kpi_evaluated`, the

@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.5.0 — not released
+## 1.5.0 — released 2026-10-27
 
 Requires the OKK platform release with `POST /calls/transcript-search`,
 `kpi_evaluated`, the stable journal order and the call department in the card
