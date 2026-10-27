@@ -158,7 +158,8 @@ codex plugin marketplace add fiftidollar/okk-analytics-codex-plugin
 ```
 
 Restart Codex, open **Plugins**, choose **Alpes Community**, and install
-**OKK Analytics**. Installation immediately starts the normal Codex OAuth
+**OKK Analytics** (from the terminal: `codex plugin add
+okk-analytics@alpes-community` — the plugin name alone is refused). Installation immediately starts the normal Codex OAuth
 window; enter the credentials on the OKK page and wait until Codex reports that
 authentication is complete. The browser callback is owned by Codex, so the
 gateway does not show a premature hosted «success» page.
@@ -235,9 +236,13 @@ Use a current Claude Code release, then add the same public repository as a
 marketplace and install the plugin for the current user:
 
 ```powershell
-claude plugin marketplace add fiftidollar/okk-analytics-codex-plugin
+claude plugin marketplace add https://github.com/fiftidollar/okk-analytics-codex-plugin.git
 claude plugin install okk-analytics@alpes-community --scope user
 ```
+
+Use the full HTTPS address: the short `fiftidollar/okk-analytics-codex-plugin`
+form clones over SSH and fails («correct access rights») on a computer without
+a GitHub SSH key (checked with Claude Code 2.1.118 on 2026-10-27).
 
 Start an interactive Claude Code session and reload the installed components:
 

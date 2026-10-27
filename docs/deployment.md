@@ -12,6 +12,20 @@ Not tested yet: a signed-in client (the person signs in once; then tools/list,
 the step-up error and the call limits are checked live). The eval suite has
 only had a dry run; a paid run needs the owner's approval.
 
+Eval run on production, 2026-10-27 (owner approved one client, one repeat):
+Codex 0.154, reasoning medium, signed in as an administrator; 37 of 39 cases
+ready (2 skipped by their preconditions). First grade 31/37; every one of the 6
+failures was the grader, not the agent: numbers more precise than the rounded
+truth (90,72 for 90.7; 84,15 % for 84.146 %), a refusal worded «запрещена», and
+the connection check `get_access_context` the instructions ask for before a
+refusal. After fixing the grader the recorded answers grade 37/37 — no wrong
+number, no invented person or data, every refusal correct. 2.08 tool calls per
+question, 0 tool errors, 15 minutes, 3.87 M input tokens (2.94 M cached), 11 k
+output tokens. The marketplace install was checked in clean configurations:
+Codex adds the marketplace from `fiftidollar/okk-analytics-codex-plugin` and
+installs `okk-analytics@alpes-community` 1.6.1; Claude Code 2.1.118 needs the
+full HTTPS address (the short form clones over SSH), then installs 1.6.1.
+
 ## 1.5.0 — released 2026-10-27
 
 Deployed to the production Compose on 2026-10-27 13:10 MSK (PR #13,

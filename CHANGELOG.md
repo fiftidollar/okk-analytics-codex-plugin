@@ -1,5 +1,14 @@
 # Changelog
 
+## Eval run and install check — 2026-10-27
+
+- First paid eval run (Codex, 37 cases on production): 37/37 after fixing
+  three grader faults that failed right answers — a precise number against a
+  rounded truth, a refusal word, the connection check before a refusal
+  (`evals/run.py`, `evals/cases.json`). No wrong number or invented data.
+- README: Claude Code needs the full HTTPS marketplace address; Codex installs
+  `okk-analytics@alpes-community` (the plugin name alone is refused).
+
 ## 1.6.1 — released 2026-10-27
 
 - The sign-in error pages and the service home page name every client —
