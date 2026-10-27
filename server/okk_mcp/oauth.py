@@ -381,7 +381,7 @@ def _render_authorization_error(message: str, *, status_code: int = 400) -> HTML
 main{{min-height:100vh;display:grid;place-items:center;padding:24px}}.card{{width:min(440px,100%);background:var(--card);padding:32px;border-radius:18px;box-shadow:0 16px 48px #17202a18}}
 h1{{margin:0 0 8px}}p{{color:var(--muted)}}.hint{{background:#f7f9fb;padding:12px 14px;border-radius:10px;margin-top:18px}}</style></head>
 <body><main><section class="card"><h1>Не удалось продолжить вход</h1>
-<p>{html.escape(message)}</p><div class="hint">Вернитесь в Codex, снова запустите подключение OKK Analytics и используйте новую открывшуюся страницу входа.</div>
+<p>{html.escape(message)}</p><div class="hint">Вернитесь в приложение, из которого подключали OKK Analytics (Claude, Claude Code, Codex или ChatGPT), снова запустите подключение и используйте новую открывшуюся страницу входа.</div>
 </section></main></body></html>"""
     response = HTMLResponse(body, status_code=status_code)
     _security_headers(response)
@@ -498,7 +498,8 @@ async def authorize(
 ):
     if not all((client_id, redirect_uri, response_type, code_challenge, code_challenge_method)):
         return _render_authorization_error(
-            "Подключение не запущено или ссылка устарела. Откройте Codex, нажмите Authenticate у OKK Analytics и используйте новую страницу входа."
+            "Подключение не запущено или ссылка устарела. Начните подключение OKK Analytics заново в своём "
+            "приложении (Claude, Claude Code, Codex или ChatGPT) и используйте новую страницу входа."
         )
     # An unknown client or return address gets a page, never a redirect (RFC 6749 §4.1.2.1).
     client = await _load_client(db, client_id, redirect_uri, settings)

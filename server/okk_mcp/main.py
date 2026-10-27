@@ -55,7 +55,8 @@ app.include_router(oauth_router)
 @app.get("/", response_class=HTMLResponse)
 async def service_home():
     return HTMLResponse(
-        "<h1>OKK Analytics</h1><p>Read-only MCP service. Connect it from Codex and sign in with your OKK account on this authorization page.</p>",
+        "<h1>OKK Analytics</h1><p>Read-only MCP service. Connect it from Claude, Claude Code, Codex or "
+        "ChatGPT and sign in with your OKK account on this authorization page.</p>",
         headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY"},
     )
 

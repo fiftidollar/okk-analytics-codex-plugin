@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.1 — released 2026-10-27
+
+- The sign-in error pages and the service home page name every client —
+  Claude, Claude Code, Codex, ChatGPT — instead of sending people back to
+  Codex only (seen on 2026-10-27 by a person signing in from Claude).
+- 1.6.0 checked live on production under an administrator: 26 tools,
+  47,097 characters, no output schemas, `securitySchemes` on all; the
+  request id only in `_meta`; csm October: journal below norm 13 = «Требуют
+  внимания» 13, journal missed 63 = KPI 63, scenario evaluations 82 =
+  «Оценено» 82; transcript search 123 calls with excerpts; trend by day for a
+  month and 10 monthly points for a year; an invalid filter is a clear error.
+
 ## 1.6.0 — released 2026-10-27
 
 Reliability release after a review of the best MCP servers (GitHub, Sentry,

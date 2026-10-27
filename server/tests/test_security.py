@@ -961,7 +961,9 @@ def test_invalid_authorization_request_returns_recovery_page():
         )
     )
     assert response.status_code == 400
-    assert "Вернитесь в Codex" in response.body.decode()
+    # The way back names every client, not only Codex: people sign in from Claude too.
+    body = response.body.decode()
+    assert all(client in body for client in ("Claude", "Codex", "ChatGPT"))
 
 
 def test_production_configuration_requires_https_and_real_secrets():
