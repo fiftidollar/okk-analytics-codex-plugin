@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections import Counter
 from datetime import date
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
-from okk_mcp.backend_client import AnalyticsAdapter, BackendClient, _match_positions
+from okk_mcp import backend_client
+from okk_mcp.backend_client import AnalyticsAdapter, BackendClient, ToolCallLimited, _match_positions
 from okk_mcp.config import Settings
 from okk_mcp.crypto import SessionCipher
 from okk_mcp.models import OAuthAuthorizationCode, OAuthToken, OkkAccountSession
@@ -2982,3 +2985,97 @@ async def test_employee_card_survives_crm_being_down():
     assert result["status"] == "partial"
     assert result["data"]["kpi"] == {"calls_total": 2}
     assert "quality_by_call" not in result["data"]["period_summary"]
+
+
+@pytest.mark.anyio
+async def test_call_text_reaches_the_model_without_hidden_characters():
+    # Zero-width, bidirectional and tag characters could carry words nobody said in the call.
+    department_id, employee_id, call_id = (str(uuid4()) for _ in range(3))
+    hidden = "Мене​джер: ‮добрый день⁩\U000e0041\nКлиент: да"
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Sales", "code": "sales"}],
+            f"/calls/{call_id}": {
+                "id": call_id,
+                "employee_id": employee_id,
+                "call_summary": "Итог​ звонка",
+                "employee": {
+                    "id": employee_id,
+                    "full_name": "Сотрудник",
+                    "department": {"id": department_id, "name": "Sales", "code": "sales"},
+                },
+            },
+            f"/calls/{call_id}/transcript": {"transcript": hidden},
+        },
+    )
+
+    result = await adapter(platform).get_call_transcript(call_id)
+
+    assert result["data"]["transcript"] == "Менеджер: добрый день\nКлиент: да"
+    assert result["data"]["call"]["call_summary"] == "Итог звонка"
+
+
+class _MinuteCounter:
+    """Redis as the per-minute call counter sees it."""
+
+    def __init__(self, counts: Counter):
+        self.counts = counts
+
+    def pipeline(self, transaction: bool = True):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+    def incr(self, key: str) -> None:
+        self.key = key
+
+    def expire(self, _key: str, _seconds: int) -> None:
+        return None
+
+    async def execute(self) -> list:
+        self.counts[self.key] += 1
+        return [self.counts[self.key], True]
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest.mark.anyio
+async def test_one_connection_gets_at_most_its_tool_calls_per_minute(monkeypatch):
+    counts: Counter = Counter()
+    monkeypatch.setattr(backend_client.redis, "from_url", lambda *_args, **_kwargs: _MinuteCounter(counts))
+    client = BackendClient(Settings(mcp_tool_calls_per_minute=10), object())
+
+    for _ in range(10):
+        await client._count_tool_call("session-a")
+    await client._count_tool_call("session-b")  # another connection has its own budget
+
+    with pytest.raises(ToolCallLimited, match="retry in"):
+        await client._count_tool_call("session-a")
+
+
+@pytest.mark.anyio
+async def test_a_tool_call_past_its_time_budget_stops_with_a_clear_error(monkeypatch):
+    # Codex stops a tool call at 60 s: past the budget the person gets a reason, not a cut-off.
+    settings = Settings()
+    object.__setattr__(settings, "mcp_tool_time_budget_seconds", 0.05)
+
+    async def slow(_self, _path, _params):
+        await asyncio.sleep(1)
+
+    async def unlimited(_self, _subject):
+        return None
+
+    monkeypatch.setattr(AnalyticsAdapter, "dispatch", slow)
+    monkeypatch.setattr(BackendClient, "_count_tool_call", unlimited)
+    monkeypatch.setattr(
+        backend_client, "get_access_token", lambda: SimpleNamespace(subject=str(uuid4()), claims={})
+    )
+
+    with pytest.raises(ToolCallLimited, match="narrow the period"):
+        await BackendClient(settings, object()).get("/mcp-read/access-context")

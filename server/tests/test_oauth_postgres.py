@@ -18,15 +18,19 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
+from starlette.requests import Request
 
 from okk_mcp import maintenance, oauth
 from okk_mcp import platform_client as platform_module
+from okk_mcp.client_metadata import ClientMetadata
 from okk_mcp.config import Settings
 from okk_mcp.models import OAuthAuthorizationCode, OAuthClient, OAuthToken, OkkAccountSession
 from okk_mcp.platform_client import OKKPlatformClient
@@ -370,6 +374,97 @@ async def test_cleanup_removes_abandoned_registrations_and_old_retry_pairs(env):
     assert sealed.successor_sealed is None
     assert report["abandoned_clients_deleted"] == 1
     assert first["refresh_token"]
+
+
+async def test_client_named_by_its_metadata_document_signs_in_exchanges_and_refreshes(env, monkeypatch):
+    """Codes and tokens reference `oauth_clients`: a CIMD client gets its row on sign-in, a second
+    sign-in updates it, and /token accepts the URL as client_id."""
+
+    await _reset(env)
+    client_id = "https://chatgpt.com/oauth/client.json"
+    redirect_uri = "https://chatgpt.com/connector_platform_oauth_redirect"
+    metadata = ClientMetadata(client_id, "ChatGPT", (redirect_uri,), None)
+    monkeypatch.setattr(oauth, "load_client_metadata", AsyncMock(return_value=metadata))
+    monkeypatch.setattr(oauth, "_check_login_rate_limit", AsyncMock())
+
+    def new_okk_session(*_args):
+        return OkkAccountSession(
+            okk_user_id="user-1",
+            encrypted_access_token=env.platform.cipher.seal("okk-access-1"),
+            encrypted_refresh_token=env.platform.cipher.seal("okk-refresh-1"),
+            role_snapshot="admin",
+            department_ids_snapshot=[],
+        )
+
+    monkeypatch.setattr(env.platform, "authenticate", AsyncMock(side_effect=new_okk_session))
+    verifier = "v" * 64
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    signed = oauth._serializer(env.settings).dumps(
+        {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "state": "s",
+            "scope": DEFAULT_SCOPES,
+            "resource": env.settings.resource_url,
+            "code_challenge": challenge,
+            "csrf_token": "csrf",
+        }
+    )
+    request = Request(
+        {"type": "http", "method": "POST", "path": "/authorize", "headers": [], "client": ("127.0.0.1", 1)}
+    )
+    codes = []
+    for _ in range(2):
+        async with env.factory() as db:
+            response = await oauth.authorize_login(
+                request=request,
+                authorization_request=signed,
+                csrf_token="csrf",
+                email="user@example.com",
+                password="test-password",
+                consent_version=None,
+                grant_transcripts=None,
+                grant_phones=None,
+                db=db,
+                settings=env.settings,
+            )
+            await db.commit()
+        codes.append(parse_qs(urlsplit(response.headers["location"]).query)["code"][0])
+
+    async with env.factory() as db:
+        exchanged = await oauth.token_endpoint(
+            grant_type="authorization_code",
+            client_id=client_id,
+            code=codes[1],
+            redirect_uri=redirect_uri,
+            code_verifier=verifier,
+            refresh_token=None,
+            scope=None,
+            resource=None,
+            db=db,
+            settings=env.settings,
+        )
+        await db.commit()
+    async with env.factory() as db:
+        refreshed = await oauth.token_endpoint(
+            grant_type="refresh_token",
+            client_id=client_id,
+            code=None,
+            redirect_uri=None,
+            code_verifier=None,
+            refresh_token=json.loads(exchanged.body)["refresh_token"],
+            scope=None,
+            resource=None,
+            db=db,
+            settings=env.settings,
+        )
+        await db.commit()
+        stored = await db.get(OAuthClient, client_id)
+
+    assert (exchanged.status_code, refreshed.status_code) == (200, 200)
+    assert stored.client_name == "ChatGPT (chatgpt.com)"
+    assert stored.redirect_uris == [redirect_uri]
+    assert stored.first_authorized_at is not None
 
 
 async def test_migration_marks_clients_in_use_and_rolls_back(env):

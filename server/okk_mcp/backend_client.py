@@ -17,7 +17,9 @@ from typing import Any
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
+import redis.asyncio as redis
 from mcp.server.auth.middleware.auth_context import get_access_token
+from redis.exceptions import RedisError
 
 from okk_mcp.config import Settings
 from okk_mcp.platform_client import (
@@ -89,6 +91,10 @@ CLIENT_STATISTICS_FIELDS = frozenset(
 
 class BackendUnavailable(RuntimeError):
     pass
+
+
+class ToolCallLimited(RuntimeError):
+    """A call refused or stopped by the gateway's own limits: rate or time budget."""
 
 
 def _iso(value: Any) -> str | None:
@@ -484,6 +490,22 @@ def _match_excerpts(
     return excerpts
 
 
+_HIDDEN_CHARACTER_CATEGORIES = frozenset({"Cc", "Cf", "Co", "Cs"})
+
+
+def _spoken(text: Any) -> Any:
+    """Text from a call as the model may read it (MCP: servers MUST sanitize tool outputs): without
+    invisible format characters (zero-width, bidirectional, tag characters) and control characters
+    other than line breaks and tabs — they could carry words nobody said in the call."""
+    if not isinstance(text, str):
+        return text
+    return "".join(
+        character
+        for character in text
+        if character in "\n\t" or unicodedata.category(character) not in _HIDDEN_CHARACTER_CATEGORIES
+    )
+
+
 def _journal_params(filters: dict[str, Any] | None) -> dict[str, Any]:
     """The tool's journal filters as OKK journal parameters. OKK applies every rule: «below_norm»
     is exactly the KPI «Требуют внимания», the outcome — the KPI outcomes."""
@@ -875,7 +897,7 @@ class AnalyticsAdapter:
             "conversation_status": row.get("conversation_status"),
             "call_status": row.get("call_status"),
             "manual_tag": row.get("manual_tag"),
-            "call_summary": row.get("call_summary"),
+            "call_summary": _spoken(row.get("call_summary")),
             # The new OKK API: the norm verdict of the score and the client status (new / existing)
             # instead of a client card; why a call is not evaluated or not counted in the
             # indicators; the B2B touch cycle; a missed call the manager followed up.
@@ -1001,7 +1023,18 @@ class AnalyticsAdapter:
         return safe
 
     async def _call_transcript_payload(self, call_id: str, transcript_format: str) -> dict[str, Any]:
-        return await self._get(f"/calls/{call_id}/transcript", format=transcript_format)
+        payload = await self._get(f"/calls/{call_id}/transcript", format=transcript_format)
+        if not isinstance(payload, dict):
+            return payload
+        cleaned = dict(payload)
+        if "transcript" in cleaned:
+            cleaned["transcript"] = _spoken(cleaned["transcript"])
+        if isinstance(cleaned.get("segments"), list):
+            cleaned["segments"] = [
+                {**row, "text": _spoken(row.get("text"))} if isinstance(row, dict) else row
+                for row in cleaned["segments"]
+            ]
+        return cleaned
 
     @staticmethod
     def _criteria(row: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2038,7 +2071,7 @@ class AnalyticsAdapter:
                 **(
                     {
                         "violation_phrase": {
-                            "text": phrase.get("text"),
+                            "text": _spoken(phrase.get("text")),
                             "start_seconds": phrase.get("start_seconds"),
                         }
                     }
@@ -3437,8 +3470,10 @@ class BackendClient:
         )
         request_id = str(uuid4())
         started = time.perf_counter()
+        await self._count_tool_call(access_token.subject)
         try:
-            result = await adapter.dispatch(path, params)
+            async with asyncio.timeout(self.settings.mcp_tool_time_budget_seconds):
+                result = await adapter.dispatch(path, params)
             result["request_id"] = request_id
             self._trace(
                 request_id=request_id,
@@ -3485,6 +3520,42 @@ class BackendClient:
                 duration_ms=(time.perf_counter() - started) * 1000,
             )
             raise BackendUnavailable("OKK analytics is temporarily unavailable") from exc
+        except TimeoutError as exc:
+            self._trace(
+                request_id=request_id,
+                subject=access_token.subject,
+                path=path,
+                params=params,
+                result={"status": "time_budget_exceeded", "data": {}, "effective_scope": {}},
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            raise ToolCallLimited(
+                f"The request took longer than {self.settings.mcp_tool_time_budget_seconds} s and was "
+                "stopped: narrow the period, the department or the filters. This is not an empty result."
+            ) from exc
+
+    async def _count_tool_call(self, subject: str) -> None:
+        """At most `mcp_tool_calls_per_minute` tool calls per OKK connection (MCP: servers MUST rate
+        limit tool invocations): a looping agent cannot load OKK. Redis down lets the call through —
+        the login stays protected by its own fail-closed limit, analytics stay available."""
+        minute = int(time.time() // 60)
+        key = f"okk:mcp:tools:{hashlib.sha256(subject.encode()).hexdigest()[:24]}:{minute}"
+        client = redis.from_url(self.settings.redis_url, decode_responses=True)
+        try:
+            async with client.pipeline(transaction=True) as pipe:
+                pipe.incr(key)
+                pipe.expire(key, 120)
+                calls, _ = await pipe.execute()
+        except RedisError:
+            LOGGER.warning(json.dumps({"event": "okk_tool_rate_limit_unavailable"}))
+            return
+        finally:
+            await client.aclose()
+        if int(calls) > self.settings.mcp_tool_calls_per_minute:
+            raise ToolCallLimited(
+                f"More than {self.settings.mcp_tool_calls_per_minute} OKK requests in a minute from this "
+                f"connection; retry in {60 - int(time.time()) % 60} s."
+            )
 
     def _trace(
         self,

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import html
+import ipaddress
 import json
+import logging
 import secrets
 import time
 import uuid
@@ -19,8 +21,10 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from redis.exceptions import RedisError
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from okk_mcp.client_metadata import ClientMetadataError, is_metadata_document_client_id, load_client_metadata
 from okk_mcp.config import Settings, get_settings
 from okk_mcp.db import get_db, session_factory
 from okk_mcp.models import OAuthAuthorizationCode, OAuthClient, OAuthToken
@@ -28,6 +32,7 @@ from okk_mcp.platform_client import AccountContext, OKKAuthenticationError, OKKU
 from okk_mcp.runtime import platform_client
 from okk_mcp.security import (
     ALLOWED_SCOPES,
+    DEFAULT_SCOPES,
     random_token,
     redirect_destination,
     redirect_origin,
@@ -39,6 +44,7 @@ from okk_mcp.security import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -60,6 +66,24 @@ def _append_redirect_query(uri: str, values: dict[str, str]) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
 
 
+def _authorization_redirect(
+    redirect_uri: str, values: dict[str, str], state: str | None, settings: Settings
+) -> RedirectResponse:
+    """Every redirect back to the client, with a code or an error: `state` and the RFC 9207 `iss`.
+
+    `iss` lets the client check which server answered (mix-up attack); ChatGPT and Codex reject an
+    answer without it once the metadata advertises it.
+    """
+
+    query = dict(values)
+    if state is not None:
+        query["state"] = state
+    query["iss"] = settings.issuer_url
+    response = RedirectResponse(_append_redirect_query(redirect_uri, query), status_code=302)
+    response.headers.update({"Cache-Control": "no-store", "Pragma": "no-cache"})
+    return response
+
+
 def _authorization_metadata(settings: Settings) -> dict[str, Any]:
     return {
         "issuer": settings.issuer_url,
@@ -75,6 +99,8 @@ def _authorization_metadata(settings: Settings) -> dict[str, Any]:
         "code_challenge_methods_supported": ["S256"],
         "scopes_supported": sorted(ALLOWED_SCOPES),
         "service_documentation": f"{settings.issuer_url}/",
+        "authorization_response_iss_parameter_supported": True,
+        "client_id_metadata_document_supported": settings.mcp_client_metadata_documents_enabled,
     }
 
 
@@ -127,11 +153,33 @@ async def protected_resource_metadata(settings: Settings = Depends(get_settings)
     return _protected_resource_metadata(settings)
 
 
+def _registration_bucket(request: Request, settings: Settings) -> tuple[str, int]:
+    """The throttle bucket and its hourly limit for the caller's address.
+
+    The address is `request.client`, which uvicorn takes from forwarded headers only of trusted
+    proxies (`--forwarded-allow-ips`); a header the client sends itself is never read here. A
+    trusted network shares one larger bucket: claude.ai registers a client per connection, and all
+    of them come from Anthropic's egress network.
+    """
+
+    host = request.client.host if request.client else "unknown"
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return f"ip:{host}", settings.mcp_registrations_per_hour
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    for network in settings.trusted_client_networks:
+        if address in network:
+            return f"net:{network}", settings.mcp_trusted_network_registrations_per_hour
+    return f"ip:{host}", settings.mcp_registrations_per_hour
+
+
 async def _check_registration_rate_limit(request: Request, settings: Settings) -> None:
     """Registration is open to everyone (clients register themselves), so it is bounded per address."""
 
-    host = request.client.host if request.client else "unknown"
-    key = f"okk:mcp:register:ip:{host}:{int(time.time() // 3600)}"
+    bucket, limit = _registration_bucket(request, settings)
+    key = f"okk:mcp:register:{bucket}:{int(time.time() // 3600)}"
     client = redis.from_url(settings.redis_url, decode_responses=True)
     try:
         async with client.pipeline(transaction=True) as pipe:
@@ -142,7 +190,7 @@ async def _check_registration_rate_limit(request: Request, settings: Settings) -
         raise HTTPException(status_code=503, detail="Registration is temporarily unavailable") from exc
     finally:
         await client.aclose()
-    if int(count) > settings.mcp_registrations_per_hour:
+    if int(count) > limit:
         raise HTTPException(status_code=429, detail="Too many client registrations")
 
 
@@ -199,14 +247,17 @@ async def register_client(
 async def _load_client(
     db: AsyncSession, client_id: str, redirect_uri: str, settings: Settings
 ) -> OAuthClient:
-    client = (
-        await db.execute(
-            select(OAuthClient).where(
-                OAuthClient.client_id == client_id,
-                OAuthClient.deleted_at.is_(None),
+    if is_metadata_document_client_id(client_id):
+        client = await _metadata_document_client(db, client_id, settings)
+    else:
+        client = (
+            await db.execute(
+                select(OAuthClient).where(
+                    OAuthClient.client_id == client_id,
+                    OAuthClient.deleted_at.is_(None),
+                )
             )
-        )
-    ).scalar_one_or_none()
+        ).scalar_one_or_none()
     if (
         not client
         or (client.expires_at and client.expires_at <= _now())
@@ -215,6 +266,68 @@ async def _load_client(
     ):
         raise HTTPException(status_code=400, detail="Invalid OAuth client or redirect URI")
     return client
+
+
+async def _metadata_document_client(
+    db: AsyncSession, client_id: str, settings: Settings
+) -> OAuthClient | None:
+    """A client named by the URL of its metadata document (CIMD), not yet saved.
+
+    The document is read at every authorization (cached briefly), so the client's own current
+    description decides; `_load_client` still applies our redirect rule on top of it. An operator
+    blocks such a client the same way as a registered one: `deleted_at` on its row.
+    """
+
+    if not settings.mcp_client_metadata_documents_enabled:
+        return None
+    host = urlsplit(client_id).hostname or ""
+    try:
+        metadata = await load_client_metadata(client_id)
+    except ClientMetadataError as exc:
+        logger.warning("client_metadata_rejected", extra={"client_host": host, "reason": str(exc)})
+        return None
+    stored = await db.get(OAuthClient, client_id)
+    if stored is not None and stored.deleted_at is not None:
+        return None
+    # The login page shows the document's host: a document can call itself anything.
+    name = f"{metadata.client_name} ({host})" if metadata.client_name else host
+    return OAuthClient(
+        client_id=client_id,
+        client_name=name[:200],
+        redirect_uris=list(metadata.redirect_uris),
+        grant_types=["authorization_code", "refresh_token"],
+        response_types=["code"],
+        token_endpoint_auth_method="none",
+        scope=DEFAULT_SCOPES,
+        client_uri=metadata.client_uri,
+    )
+
+
+async def _remember_metadata_document_client(db: AsyncSession, client: OAuthClient) -> None:
+    """Codes and tokens reference `oauth_clients`, so a CIMD client gets its row when it receives a
+    code: only after a person signed in, so a document alone creates nothing."""
+
+    if not is_metadata_document_client_id(client.client_id):
+        return
+    values = {
+        "client_name": client.client_name,
+        "redirect_uris": client.redirect_uris,
+        "client_uri": client.client_uri,
+        "updated_at": _now(),
+    }
+    await db.execute(
+        pg_insert(OAuthClient)
+        .values(
+            client_id=client.client_id,
+            grant_types=client.grant_types,
+            response_types=client.response_types,
+            token_endpoint_auth_method="none",
+            scope=client.scope,
+            created_at=_now(),
+            **values,
+        )
+        .on_conflict_do_update(index_elements=[OAuthClient.client_id], set_=values)
+    )
 
 
 def _allowed_redirect(redirect_uri: str, settings: Settings) -> bool:
@@ -387,16 +500,24 @@ async def authorize(
         return _render_authorization_error(
             "Подключение не запущено или ссылка устарела. Откройте Codex, нажмите Authenticate у OKK Analytics и используйте новую страницу входа."
         )
-    if response_type != "code" or not valid_pkce_challenge(code_challenge, code_challenge_method):
-        raise HTTPException(status_code=400, detail="Authorization Code with PKCE S256 is required")
+    # An unknown client or return address gets a page, never a redirect (RFC 6749 §4.1.2.1).
     client = await _load_client(db, client_id, redirect_uri, settings)
+    if response_type != "code":
+        return _authorization_redirect(redirect_uri, {"error": "unsupported_response_type"}, state, settings)
+    if not valid_pkce_challenge(code_challenge, code_challenge_method):
+        return _authorization_redirect(
+            redirect_uri,
+            {"error": "invalid_request", "error_description": "PKCE S256 is required"},
+            state,
+            settings,
+        )
     try:
         requested_scope = validate_scopes(scope or client.scope)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid scope") from None
+        return _authorization_redirect(redirect_uri, {"error": "invalid_scope"}, state, settings)
     requested_resource = (resource or settings.resource_url).rstrip("/")
     if requested_resource != settings.resource_url:
-        raise HTTPException(status_code=400, detail="Invalid resource")
+        return _authorization_redirect(redirect_uri, {"error": "invalid_target"}, state, settings)
     csrf_token = secrets.token_urlsafe(32)
     signed = _serializer(settings).dumps(
         {
@@ -491,6 +612,7 @@ async def authorize_login(
     except OKKUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     db.add(account_session)
+    await _remember_metadata_document_client(db, client)
     await db.flush()
     raw_code = secrets.token_urlsafe(48)
     db.add(
@@ -506,13 +628,9 @@ async def authorize_login(
         )
     )
     await db.flush()
-    query = {"code": raw_code}
-    if auth_request.get("state") is not None:
-        query["state"] = auth_request["state"]
-    callback_url = _append_redirect_query(auth_request["redirect_uri"], query)
-    response = RedirectResponse(callback_url, status_code=302)
-    response.headers.update({"Cache-Control": "no-store", "Pragma": "no-cache"})
-    return response
+    return _authorization_redirect(
+        auth_request["redirect_uri"], {"code": raw_code}, auth_request.get("state"), settings
+    )
 
 
 def _add_token_pair(

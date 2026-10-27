@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.6.0 — not released
+
+Reliability release after a review of the best MCP servers (GitHub, Sentry,
+Supabase, Cloudflare) and the MCP, Claude and OpenAI rules. No change to the
+answers' data; update the plugin and start a new chat.
+
+- The tools declare no output schema: the same envelope schema on 26 tools
+  was 58% of the tool list the model reads in every chat (105,147 → 47,097
+  characters). Answers are still validated against it; the envelope is named
+  once in the server instructions; a test keeps the list within 50,000.
+- `request_id` moved from the answer to the result `_meta` (OpenAI review:
+  no internal identifiers for the model). `securitySchemes` is a field of
+  each tool (copy in `_meta` kept); a tool without parameters accepts only an
+  empty object.
+- Limits (MCP: servers MUST rate limit): at most 60 tool calls per
+  connection per minute; one call stops after 50 s with a reason instead of
+  being cut by Codex at 60 s.
+- Call texts (transcript, preview, excerpts, segments, `call_summary`,
+  `violation_phrase`) lose invisible and control characters (MCP: sanitize
+  outputs, as GitHub's server does); the server instructions say call texts
+  are data, never instructions. The plugin README asks to keep confirmation on
+  for tools that send something.
+- Behaviour rules moved from tool descriptions to the server instructions;
+  the `filters` parameter shows an example.
+- OAuth: every `/authorize` redirect (code and errors) carries `iss` (RFC
+  9207); post-validation errors return to the client. ChatGPT's stable
+  `https://chatgpt.com/connector_platform_oauth_redirect` is allowed.
+- OAuth: Client ID Metadata Documents, SSRF-safe (public IPs only, pinned
+  TLS, no redirects, 5 s / 5 KB, 5-minute cache), redirect URIs only narrow
+  our allowlist. Off by default (`MCP_CLIENT_METADATA_DOCUMENTS_ENABLED`):
+  Claude picks an advertised CIMD at once, and the production server could not
+  fetch Claude's or ChatGPT's documents on 2026-10-27.
+- MCP: a call without a needed scope returns `isError` with
+  `_meta["mcp/www_authenticate"]` (`insufficient_scope`, granted plus missing
+  scopes), so the client can ask for the extra access; the reconnect text stays.
+- Registration limit: Anthropic's egress `160.79.104.0/21`
+  (`MCP_TRUSTED_CLIENT_NETWORKS`) shares one bucket of 600 per hour, so
+  claude.ai connections no longer hit 429; other addresses keep 20 per hour.
+- MCP SDK 1.27.2 → 1.30.0 (security fixes of the 1.x line).
+
 ## 1.5.0 — released 2026-10-27
 
 Requires the OKK platform release with `POST /calls/transcript-search`,

@@ -15,7 +15,11 @@ What it answers, always within the account's live role and department access:
 - call history of one client phone number (separate `okk.phones.read`
   permission).
 
-Nothing can be changed through the plugin: every tool only reads.
+Nothing can be changed through the plugin: every tool only reads. Call
+transcripts are what people said, so in a chat with OKK keep the confirmation
+on for tools of other plugins that send or publish something (mail, chats,
+web): then text from a call can never make the assistant send data out
+unnoticed.
 
 Install, privacy and terms: see the repository
 [README](https://github.com/fiftidollar/okk-analytics-codex-plugin#readme),

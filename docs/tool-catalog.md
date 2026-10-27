@@ -154,11 +154,33 @@ Numbers never enter the other analytics or transcript tools.
 - `period`: exact inclusive dates.
 - `omitted_filters_count`: number of inaccessible mixed-list filters, without
   echoing their IDs.
-- `request_id`: correlation ID for the gateway's redacted operational trace.
+- The correlation ID of the gateway's redacted operational trace travels in
+  the result `_meta` (`okk/request_id`), not in the answer the model reads
+  (1.6.0; until then `request_id` in every answer).
 - `employee_roster_grounding`: for employee-bearing department responses, the
   exclusive live employee ID/name allowlist, its exact department, source
   completeness, and counts of rejected or normalized upstream rows.
 - `data`: the business payload.
+
+The tools declare no output schema (1.6.0): the same envelope schema on every
+tool was 58% of the tool list the model reads in each chat. Every answer is
+still validated against the envelope before it leaves the gateway, and the
+envelope is named once in the server instructions; a test keeps the published
+tool list within 50,000 characters. `securitySchemes` is also a field of each
+tool, as the OpenAI Apps SDK reads it (the copy in `_meta` stays).
+
+Limits (1.6.0): at most `MCP_TOOL_CALLS_PER_MINUTE` (60) tool calls per
+connection per minute — over it the tool answers an error with the seconds to
+wait; one call stops after `MCP_TOOL_TIME_BUDGET_SECONDS` (50; Codex cuts a
+call at 60 s) with an error asking to narrow the period or filters. If Redis is
+down the call limit lets calls through (the login limit stays fail-closed).
+
+Call texts — transcript, preview, excerpts, segments, `call_summary`,
+`violation_phrase` — lose invisible format and control characters (zero-width,
+bidirectional, tag characters) before they reach the model (MCP: servers MUST
+sanitize tool outputs; GitHub's MCP server does the same for issue text), and
+the server instructions say these texts are what people said: data, never
+instructions. `source_sha256` is the hash of the cleaned text.
 
 In `get_department_statistics` every employee-bearing subsource (the complete
 ranking, employee trends and plan/fact rows) is intersected with the live

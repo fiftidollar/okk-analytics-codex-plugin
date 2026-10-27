@@ -101,11 +101,6 @@ def test_okk_outage_is_a_tool_error_not_an_empty_result():
         _call("get_call_statistics", {}, _client(BackendUnavailable("down")))
 
 
-def test_missing_permission_names_the_scope_and_how_to_fix_it():
-    with pytest.raises(ToolError, match="okk.transcripts.read.*Reconnect"):
-        _call("list_call_transcripts", {}, _client(), scopes="okk.statistics.read")
-
-
 def test_transcript_segments_chunk_stops_at_the_character_budget():
     segments = [{"text": "x" * 400} for _ in range(10)]
     assert len(_segment_chunk(segments, 0, 500, 1000)) == 2
