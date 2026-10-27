@@ -41,6 +41,19 @@ def test_pkce_s256_and_token_hash_contract():
 
 
 @pytest.mark.parametrize(
+    "verifier",
+    [
+        "й" * 43,  # not ASCII: the token endpoint answered HTTP 500
+        "a" * 42 + "+",  # ASCII outside the RFC 7636 alphabet
+        "a" * 42,
+    ],
+)
+def test_pkce_verifier_outside_rfc_7636_is_an_invalid_grant_not_an_error(verifier):
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    assert verify_pkce(verifier, challenge) is False
+
+
+@pytest.mark.parametrize(
     "uri",
     [
         "https://chatgpt.com/connector/callback",
@@ -429,6 +442,52 @@ def test_person_can_refuse_transcripts_and_phone_numbers_on_the_login_page(form,
     assert 'name="grant_transcripts" value="1" checked' in page
     assert 'name="grant_phones" value="1" checked' in page
     assert oauth._granted_scope(requested, form) == granted
+
+
+@pytest.mark.parametrize("submitted_csrf", ["csrf", "stale-csrf"])
+def test_login_page_shown_again_keeps_the_persons_refusal(monkeypatch, submitted_csrf):
+    """After a wrong password or a refreshed form, an unchecked box stays unchecked."""
+
+    settings = Settings()
+    signed = oauth._serializer(settings).dumps(
+        {
+            "client_id": "client",
+            "redirect_uri": "http://127.0.0.1:3210/callback",
+            "state": "state",
+            "scope": "okk.phones.read okk.statistics.read okk.transcripts.read",
+            "resource": settings.resource_url,
+            "code_challenge": "challenge",
+            "csrf_token": "csrf",
+        }
+    )
+    request = Request(
+        {"type": "http", "method": "POST", "path": "/authorize", "headers": [], "client": ("127.0.0.1", 1)}
+    )
+    monkeypatch.setattr(oauth, "_load_client", AsyncMock(return_value=SimpleNamespace(client_name="Codex")))
+    monkeypatch.setattr(oauth, "_check_login_rate_limit", AsyncMock())
+    monkeypatch.setattr(
+        oauth.platform_client, "authenticate", AsyncMock(side_effect=OKKAuthenticationError("invalid"))
+    )
+
+    response = asyncio.run(
+        oauth.authorize_login(
+            request=request,
+            authorization_request=signed,
+            csrf_token=submitted_csrf,
+            email="user@example.com",
+            password="invalid-password",
+            consent_version="2",
+            grant_transcripts=None,
+            grant_phones="1",
+            db=SimpleNamespace(),
+            settings=settings,
+        )
+    )
+    page = response.body.decode()
+
+    assert response.status_code == 200
+    assert 'name="grant_transcripts" value="1">' in page
+    assert 'name="grant_phones" value="1" checked>' in page
 
 
 def test_openai_domain_challenge_returns_only_the_configured_token():

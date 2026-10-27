@@ -3,23 +3,135 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import httpx
 import pytest
 
+from okk_mcp import platform_client as platform_module
 from okk_mcp.config import Settings
 from okk_mcp.platform_client import (
     AccountContext,
     OKKAuthenticationError,
+    OKKNotAvailable,
     OKKPlatformClient,
     OKKUnavailable,
 )
+
+OKK_URL = "https://okk.example/api/v1"
 
 
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+def _platform(handler) -> OKKPlatformClient:
+    return OKKPlatformClient(Settings(okk_api_base_url=OKK_URL), transport=httpx.MockTransport(handler))
+
+
+def _context(access_token: str = "access") -> AccountContext:
+    return AccountContext(uuid4(), "user-1", "user@example.com", "admin", (), access_token)
+
+
+@pytest.mark.anyio
+async def test_one_persons_refresh_cookie_never_reaches_another_persons_request():
+    sent: list[tuple[str, str]] = []
+    issued = iter(["refresh-a", "refresh-b", "refresh-b2"])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append((request.url.path, request.headers.get("cookie", "")))
+        return httpx.Response(
+            200,
+            json={"access_token": "access", "user": {"id": "u", "email": "u@example.com", "role": "viewer"}},
+            headers={"set-cookie": f"refresh_token={next(issued)}; HttpOnly; Secure; Path=/api/v1/auth"},
+        )
+
+    platform = _platform(handler)
+    await platform.authenticate("a@example.com", "password-a")
+    await platform.authenticate("b@example.com", "password-b")
+    _access, rotated, _user = await platform._refresh("refresh-b")
+    await platform.close()
+
+    assert sent == [
+        ("/api/v1/auth/login", ""),
+        ("/api/v1/auth/login", ""),
+        ("/api/v1/auth/refresh", "refresh_token=refresh-b"),
+    ]
+    assert rotated == "refresh-b2"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("renewed_token_accepted", [True, False])
+async def test_okk_token_that_expired_during_a_tool_call_is_renewed_once(renewed_token_accepted):
+    sent: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        token = request.headers["authorization"].removeprefix("Bearer ")
+        sent.append(token)
+        if token == "renewed" and renewed_token_accepted:
+            return httpx.Response(200, json={"items": []})
+        return httpx.Response(401)
+
+    platform = _platform(handler)
+    platform._rotate_session = AsyncMock(return_value=("renewed", {}))
+    context = _context("expired")
+    if renewed_token_accepted:
+        assert await platform.get_with_context(context, "/calls") == {"items": []}
+    else:
+        with pytest.raises(OKKAuthenticationError):
+            await platform.get_with_context(context, "/calls")
+    await platform.close()
+
+    assert sent == ["expired", "renewed"]
+    platform._rotate_session.assert_awaited_once_with(context.session_id, "expired")
+
+
+READS = {
+    "get": lambda platform, context: platform.get_with_context(context, "/calls"),
+    "post": lambda platform, context: platform.transcript_search_with_context(context, {"query": "доставка"}),
+}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("read", sorted(READS))
+@pytest.mark.parametrize(
+    ("answers", "outcome"),
+    [
+        # A dropped connection, a timeout and 502/503/504 are repeated twice.
+        ((503, "connect", 200), None),
+        (("timeout", 502, 200), None),
+        ((504, 503, 502), OKKUnavailable),
+        (("connect", "timeout", "connect"), OKKUnavailable),
+        # A 4xx is OKK's answer, not a failure in transit.
+        ((400,), ValueError),
+        ((403,), OKKNotAvailable),
+        # OKK closes a restricted employee with 409: the neutral not_available, not a bad filter.
+        ((409,), OKKNotAvailable),
+    ],
+)
+async def test_read_repeats_only_failures_in_transit(monkeypatch, read, answers, outcome):
+    monkeypatch.setattr(platform_module, "_READ_RETRY_DELAYS_SECONDS", (0, 0))
+    pending = list(answers)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        answer = pending.pop(0)
+        if answer == "connect":
+            raise httpx.ConnectError("connection refused", request=request)
+        if answer == "timeout":
+            raise httpx.ReadTimeout("timed out", request=request)
+        return httpx.Response(answer, json={"items": []})
+
+    platform = _platform(handler)
+    if outcome is None:
+        assert await READS[read](platform, _context()) == {"items": []}
+    else:
+        with pytest.raises(outcome):
+            await READS[read](platform, _context())
+    await platform.close()
+
+    assert pending == []
 
 
 @pytest.mark.anyio
