@@ -429,7 +429,9 @@ def test_metadata_and_mcp_auth_challenge_are_discoverable(monkeypatch):
     assert authorization.status_code == 200
     assert authorization.json()["code_challenge_methods_supported"] == ["S256"]
     assert authorization.json()["authorization_response_iss_parameter_supported"] is True
-    assert authorization.json()["client_id_metadata_document_supported"] is True
+    # Off by default: the production server cannot fetch Claude's and ChatGPT's documents, and
+    # Claude picks an advertised CIMD at once (docs/architecture.md).
+    assert authorization.json()["client_id_metadata_document_supported"] is False
     assert authorization.json()["userinfo_endpoint"].endswith("/userinfo")
     assert {"openid", "email"}.issubset(set(authorization.json()["scopes_supported"]))
     assert "okk.transcripts.read" in authorization.json()["scopes_supported"]

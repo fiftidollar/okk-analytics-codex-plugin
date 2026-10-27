@@ -45,9 +45,10 @@ class Settings(BaseSettings):
     # Такая сеть — один общий, но больший лимит в час; остальные адреса — свой малый лимит.
     mcp_trusted_client_networks: str = "160.79.104.0/21"
     mcp_trusted_network_registrations_per_hour: int = Field(default=600, ge=2, le=20000)
-    # Client ID Metadata Documents: клиент называет себя HTTPS-адресом своего описания.
-    # Выключатель на случай, если описание клиента не скачивается с нашего сервера.
-    mcp_client_metadata_documents_enabled: bool = True
+    # Client ID Metadata Documents: клиент называет себя HTTPS-адресом своего описания. Выключено по
+    # умолчанию: объявленный CIMD Claude выбирает сразу, а с сервера прода 27.10 описания Claude
+    # (302 Cloudflare) и ChatGPT (403) не скачивались — вход бы сломался. Включать, когда скачиваются.
+    mcp_client_metadata_documents_enabled: bool = False
     # A refresh repeated within this window (the client lost the answer) gets the same new pair.
     mcp_refresh_retry_seconds: int = Field(default=30, ge=0, le=120)
     mcp_cleanup_interval_minutes: int = Field(default=60, ge=5, le=1440)

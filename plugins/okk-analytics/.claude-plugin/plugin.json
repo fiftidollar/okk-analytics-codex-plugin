@@ -1,6 +1,6 @@
 {
   "name": "okk-analytics",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Read-only OKK analytics, full call transcripts and scoped phone history with native OAuth and live ACL discovery.",
   "author": {
     "name": "Alpes",

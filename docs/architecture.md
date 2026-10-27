@@ -190,7 +190,11 @@ default allowlist. Before a production release, connect fresh ChatGPT, Codex
 and Claude Code clients to a non-production gateway: CIMD makes clients prefer
 the document, and a document the gateway cannot fetch (for example behind a
 bot challenge) fails the sign-in; `MCP_CLIENT_METADATA_DOCUMENTS_ENABLED=false`
-returns every client to registration without a release.
+returns every client to registration without a release. CIMD is therefore off
+by default: on 2026-10-27 the production server could fetch neither Claude's
+document (`https://claude.ai/oauth/claude-code-client-metadata`, Cloudflare
+302) nor ChatGPT's (`https://chatgpt.com/oauth/client.json`, 403). Turn it on
+only after both download from the gateway host.
 
 ## Scaling
 

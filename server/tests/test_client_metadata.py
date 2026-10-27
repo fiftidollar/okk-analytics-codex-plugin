@@ -146,7 +146,8 @@ def test_unusable_document_identifies_no_client(network, response, reason):
 
 def _load_client(redirect_uri: str, settings: Settings | None = None):
     db = SimpleNamespace(get=AsyncMock(return_value=None))
-    return asyncio.run(oauth._load_client(db, CLIENT_ID, redirect_uri, settings or Settings()))
+    enabled = Settings(mcp_client_metadata_documents_enabled=True)
+    return asyncio.run(oauth._load_client(db, CLIENT_ID, redirect_uri, settings or enabled))
 
 
 def test_document_redirects_pass_through_our_redirect_rule(network):
