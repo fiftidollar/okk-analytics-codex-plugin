@@ -104,6 +104,14 @@
         "destructive_justification": "Cannot change, delete, publish, or reprocess calls or transcripts."
       }
     },
+    "get_call_filter_options": {
+      "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
+      "justifications": {
+        "read_only_justification": "Reads the labelled values of the existing OKK call journal filters.",
+        "open_world_justification": "Values come only from the authenticated user's private OKK scenarios.",
+        "destructive_justification": "Cannot change filters, scenarios, criteria or calls."
+      }
+    },
     "get_call_transcript": {
       "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
       "justifications": {
