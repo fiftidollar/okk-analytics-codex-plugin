@@ -1,0 +1,213 @@
+{
+  "about": "Synthetic OKK reads for --dry-run and the suite test. Every name, id and number here is made up; the shapes follow the gateway's tool results.",
+  "today": "2026-10-20",
+  "reads": [
+    {
+      "tool": "get_access_context",
+      "args": {},
+      "result": {
+        "status": "ok",
+        "data": {
+          "authenticated": true,
+          "role": "admin",
+          "departments": [
+            {"id": "00000000-0000-4000-8000-0000000000d1", "name": "Сопровождение", "code": "csm", "quality_threshold": 80, "min_call_duration_seconds": 60},
+            {"id": "00000000-0000-4000-8000-0000000000d2", "name": "B2B", "code": "b2b", "quality_threshold": 80, "min_call_duration_seconds": 60},
+            {"id": "00000000-0000-4000-8000-0000000000d3", "name": "ОРД", "code": "ord", "quality_threshold": 75, "min_call_duration_seconds": 30}
+          ]
+        }
+      }
+    },
+    {
+      "tool": "get_department_statistics",
+      "args": {"department": "csm", "period": "month"},
+      "result": {
+        "status": "ok",
+        "data": {
+          "summary": {
+            "calls_total": 15, "total_calls": 14, "calls_evaluated": 13, "average_score": 89.0, "passing_rate": 76.9,
+            "calls_missed": 3, "avg_duration": 146, "new_client_calls_total": 7, "successful_new_total": 7
+          },
+          "complete_employee_ranking": {
+            "employees": [
+              {"id": "00000000-0000-4000-8000-0000000000e2", "full_name": "Примеров Олег Иванович", "metrics": {"calls_total": 6, "actual_total": 6, "quality_score": 91.8}},
+              {"id": "00000000-0000-4000-8000-0000000000e1", "full_name": "Образцова Мария Петровна", "metrics": {"calls_total": 6, "actual_total": 5, "quality_score": 84.4}},
+              {"id": "00000000-0000-4000-8000-0000000000e3", "full_name": "Тестова Анна Сергеевна", "metrics": {"calls_total": 3, "actual_total": 3, "quality_score": 92.0}},
+              {"id": "00000000-0000-4000-8000-0000000000e4", "full_name": "Новиков Степан Ильич", "metrics": {"calls_total": 0, "actual_total": 0, "quality_score": null}}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "tool": "get_department_statistics",
+      "args": {"department": "csm", "period": "prev_month"},
+      "result": {"status": "ok", "data": {"summary": {"calls_total": 5, "calls_evaluated": 5, "average_score": 90.0}}}
+    },
+    {
+      "tool": "get_department_statistics",
+      "args": {"department": "b2b", "period": "month"},
+      "result": {"status": "no_data", "data": {"summary": {"calls_total": 0, "total_calls": 0, "calls_evaluated": 0, "average_score": null}}}
+    },
+    {
+      "tool": "get_call_statistics",
+      "args": {"department": "csm", "start_date": "2026-10-01", "end_date": "2026-10-15"},
+      "result": {"status": "ok", "data": {"summary": {"evaluated_calls": 7, "avg_score": 91.57142857142857}}}
+    },
+    {
+      "tool": "list_employees",
+      "args": {"department": "csm"},
+      "result": {
+        "status": "ok",
+        "data": {
+          "items": [
+            {"id": "00000000-0000-4000-8000-0000000000e4", "full_name": "Новиков Степан Ильич"},
+            {"id": "00000000-0000-4000-8000-0000000000e1", "full_name": "Образцова Мария Петровна"},
+            {"id": "00000000-0000-4000-8000-0000000000e2", "full_name": "Примеров Олег Иванович"},
+            {"id": "00000000-0000-4000-8000-0000000000e3", "full_name": "Тестова Анна Сергеевна"}
+          ]
+        }
+      }
+    },
+    {
+      "tool": "list_employees",
+      "args": {},
+      "result": {
+        "status": "ok",
+        "data": {
+          "items": [
+            {"id": "00000000-0000-4000-8000-0000000000e4", "full_name": "Новиков Степан Ильич"},
+            {"id": "00000000-0000-4000-8000-0000000000e1", "full_name": "Образцова Мария Петровна"},
+            {"id": "00000000-0000-4000-8000-0000000000e2", "full_name": "Примеров Олег Иванович"},
+            {"id": "00000000-0000-4000-8000-0000000000e3", "full_name": "Тестова Анна Сергеевна"},
+            {"id": "00000000-0000-4000-8000-0000000000e5", "full_name": "Демонстрова Ольга Юрьевна"},
+            {"id": "00000000-0000-4000-8000-0000000000e6", "full_name": "Пробный Игорь Олегович"}
+          ]
+        }
+      }
+    },
+    {
+      "tool": "list_employees",
+      "args": {"search": "Иванов Пётр"},
+      "result": {"status": "no_data", "data": {"items": []}}
+    },
+    {
+      "tool": "search_call_transcripts",
+      "args": {"query": "перезвоню", "department": "csm", "period": "month"},
+      "result": {
+        "status": "ok",
+        "data": {
+          "items": [
+            {"call": {"id": "00000000-0000-4000-8000-000000000103", "employee": {"id": "00000000-0000-4000-8000-0000000000e3", "full_name": "Тестова Анна Сергеевна"}}, "match_count": 1}
+          ],
+          "matching_calls_total": 1
+        }
+      }
+    },
+    {
+      "tool": "list_call_transcripts",
+      "args": {"department": "csm", "period": "month", "page_size": 1},
+      "result": {
+        "status": "ok",
+        "data": {
+          "items": [
+            {"call": {"id": "00000000-0000-4000-8000-000000000101", "started_at": "2026-10-19T09:15:00Z", "employee": {"id": "00000000-0000-4000-8000-0000000000e2", "full_name": "Примеров Олег Иванович"}}}
+          ],
+          "total_calls": 18
+        }
+      }
+    },
+    {
+      "tool": "get_call_transcript",
+      "args": {"call_id": "00000000-0000-4000-8000-000000000101"},
+      "result": {
+        "status": "ok",
+        "data": {"call": {"id": "00000000-0000-4000-8000-000000000101", "duration": 129, "employee": {"id": "00000000-0000-4000-8000-0000000000e2", "full_name": "Примеров Олег Иванович"}}, "transcript_available": true}
+      }
+    },
+    {
+      "tool": "list_call_transcripts",
+      "args": {"department": "csm", "employee_id": "00000000-0000-4000-8000-0000000000e1", "period": "month", "page_size": 1},
+      "result": {
+        "status": "ok",
+        "data": {
+          "items": [
+            {"call": {"id": "00000000-0000-4000-8000-000000000102", "started_at": "2026-10-16T21:30:00Z", "employee": {"id": "00000000-0000-4000-8000-0000000000e1", "full_name": "Образцова Мария Петровна"}}}
+          ],
+          "total_calls": 6
+        }
+      }
+    },
+    {
+      "tool": "get_plan_fact_statistics",
+      "args": {"start_date": "2026-10-19", "end_date": "2026-10-25", "department": "csm"},
+      "result": {"status": "no_data", "data": {"departments": [{"department_code": "csm", "mode": null, "items": [], "employees": []}]}}
+    },
+    {
+      "tool": "get_scenario_performance",
+      "args": {"department": "csm", "period": "month"},
+      "result": {"status": "ok", "data": [{"scenario": {"id": "00000000-0000-4000-8000-0000000000a1", "name": "Входящий звонок"}, "evaluations": 13, "avg_score": 89.0, "pass_rate": 76.9}]}
+    },
+    {
+      "tool": "get_criterion_performance",
+      "args": {"department": "csm", "period": "month"},
+      "result": {
+        "status": "ok",
+        "data": {
+          "criteria": [
+            {"criterion": {"name": "Следующий шаг", "is_critical": false}, "observations": 13, "avg_score_percent": 61.54},
+            {"criterion": {"name": "Приветствие", "is_critical": false}, "observations": 13, "avg_score_percent": 96.15}
+          ],
+          "critical_errors": [
+            {"criterion": {"name": "Стоп-слова", "is_critical": true}, "observations": 13, "violations": 1, "violation_rate_percent": 7.7},
+            {"criterion": {"name": "Грубость", "is_critical": true}, "observations": 13, "violations": 0, "violation_rate_percent": 0.0}
+          ]
+        }
+      }
+    },
+    {
+      "tool": "list_scenarios",
+      "args": {"department": "csm"},
+      "result": {"status": "ok", "data": {"items": [{"id": "00000000-0000-4000-8000-0000000000a1", "name": "Входящий звонок", "code": "csm_inbound"}]}}
+    },
+    {
+      "tool": "get_scenario_criteria",
+      "args": {"scenario_id": "00000000-0000-4000-8000-0000000000a1"},
+      "result": {
+        "status": "ok",
+        "data": {
+          "criteria": [
+            {"name": "Приветствие", "category": {"name": "Начало", "is_critical": false}},
+            {"name": "Выявление потребности", "category": {"name": "Разговор", "is_critical": false}},
+            {"name": "Следующий шаг", "category": {"name": "Завершение", "is_critical": false}},
+            {"name": "Стоп-слова", "category": {"name": "Критические ошибки", "is_critical": true}}
+          ]
+        }
+      }
+    },
+    {
+      "tool": "get_crm_statistics",
+      "args": {"department": "csm"},
+      "result": {"status": "ok", "data": {"coverage": {"employees": 4, "available": 0, "unavailable": 3, "not_applicable": 1}, "employees": []}}
+    },
+    {
+      "tool": "list_call_phone_records",
+      "args": {"department": "csm", "period": "month", "page_size": 25},
+      "result": {
+        "status": "ok",
+        "data": {
+          "items": [
+            {"id": "00000000-0000-4000-8000-000000000101", "counterparty_phone_normalized": "70000000001"},
+            {"id": "00000000-0000-4000-8000-000000000102", "counterparty_phone_normalized": "70000000002"},
+            {"id": "00000000-0000-4000-8000-000000000103", "counterparty_phone_normalized": "70000000001"}
+          ]
+        }
+      }
+    },
+    {
+      "tool": "list_call_phone_records",
+      "args": {"phone_number": "70000000001"},
+      "result": {"status": "ok", "data": {"items": [], "matching_calls_total": 4}}
+    }
+  ]
+}
