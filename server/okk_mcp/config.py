@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     analytics_max_calls: int = Field(default=5000, ge=100, le=25000)
     analytics_max_employees: int = Field(default=2000, ge=100, le=10000)
     analytics_trace_enabled: bool = True
+    # Tool calls per OKK connection per minute, and one call's time: Codex stops a call at 60 s.
+    mcp_tool_calls_per_minute: int = Field(default=60, ge=10, le=600)
+    mcp_tool_time_budget_seconds: int = Field(default=50, ge=10, le=300)
     openai_apps_challenge_token: str = Field(default="", max_length=1000)
     # Точные адреса возврата сайтов-клиентов (через запятую), на которые можно получить код входа.
     # Адреса этого компьютера (Codex, Claude Code) разрешены всегда. Только точный адрес: на

@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
+from mcp.types import ListToolsRequest
 from starlette.requests import Request
 
 from okk_mcp import oauth
@@ -28,7 +29,7 @@ from okk_mcp.security import (
     validate_scopes,
     verify_pkce,
 )
-from okk_mcp.server import create_mcp_server
+from okk_mcp.server import _read, create_mcp_server
 
 
 def test_pkce_s256_and_token_hash_contract():
@@ -218,6 +219,33 @@ def test_login_consent_names_transcripts_only_when_that_scope_is_requested():
     assert "транскрипции доступных звонков" in with_scope
 
 
+def test_request_id_stays_for_support_and_out_of_the_model_answer():
+    # OpenAI app review: no internal identifiers in what the model reads.
+    client = AsyncMock()
+    client.get.return_value = {"status": "ok", "data": {"departments": []}, "request_id": "req-1"}
+
+    result = asyncio.run(_read(client, "/mcp-read/access-context"))
+
+    assert result.meta == {"okk/request_id": "req-1"}
+    assert "req-1" not in result.content[0].text
+    assert "request_id" not in result.structuredContent
+
+
+def test_the_tool_list_clients_read_stays_within_its_budget():
+    # The model reads the tool list in every chat. 1.5.0 sent 105,147 characters, 58% of them the
+    # same output schema repeated on 26 tools; 1.6.0 — about 47,000. Growth past the budget must be
+    # a decision, not an accident.
+    mcp = create_mcp_server(Settings(), AsyncMock())
+    handler = mcp._mcp_server.request_handlers[ListToolsRequest]
+    tools = asyncio.run(handler(ListToolsRequest(method="tools/list"))).root.tools
+    published = [tool.model_dump(by_alias=True, exclude_none=True, mode="json") for tool in tools]
+
+    assert len(json.dumps(published, ensure_ascii=False)) <= 50_000
+    assert all(tool["securitySchemes"] == tool["_meta"]["securitySchemes"] for tool in published)
+    access = next(tool for tool in published if tool["name"] == "get_access_context")
+    assert access["inputSchema"]["additionalProperties"] is False
+
+
 def test_mcp_has_exact_typed_read_only_tool_inventory():
     settings = Settings()
     client = AsyncMock()
@@ -257,8 +285,8 @@ def test_mcp_has_exact_typed_read_only_tool_inventory():
         assert tool.annotations.idempotentHint is True
         assert tool.annotations.openWorldHint is False
         assert tool.inputSchema["type"] == "object"
-        assert tool.outputSchema["type"] == "object"
-        assert "request_id" in tool.outputSchema["properties"]
+        # The envelope is described once in the server instructions, not repeated on every tool.
+        assert tool.outputSchema is None
         assert tool.meta["securitySchemes"][0]["type"] == "oauth2"
 
     compare_schema = next(tool for tool in tools if tool.name == "compare_employees").inputSchema
