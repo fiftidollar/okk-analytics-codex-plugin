@@ -65,7 +65,8 @@ the Codex/Claude Code plugin packages.
 - Scenario catalog and complete business criterion configuration without
   prompts or scripts, plus scenario/criterion performance aggregation.
 - OAuth Authorization Code + PKCE S256, dynamic client registration, refresh
-  rotation/reuse detection and revocation. A client may only use return
+  rotation/reuse detection and revocation; a replayed authorization code
+  revokes the tokens it issued. A client may only use return
   addresses on this computer (Codex, Claude Code) or the exact web callbacks
   in `MCP_OAUTH_REDIRECT_URIS` (Claude and our ChatGPT app); the login page
   shows where the browser will return.

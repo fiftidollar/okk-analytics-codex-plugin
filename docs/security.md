@@ -18,6 +18,13 @@ membership or replace unavailable OKK scores.
 - `MCP_OAUTH_SECRET`, `MCP_SESSION_ENCRYPTION_SECRET`, database passwords and
   Redis credentials belong only in the deployment secret store.
 - Refresh-token reuse revokes the whole MCP family and the upstream OKK session.
+- A second use of an authorization code is rejected and revokes every token
+  that code issued, refreshed ones included, and its OKK session (RFC 6749
+  §4.1.2). Each sign-in has its own OKK session, so the person's other
+  connections keep working.
+- The outbound OKK HTTP client is shared by everyone and stores no cookies.
+  An OKK refresh token travels only as an explicit `Cookie` header on
+  `/auth/refresh` and `/auth/logout` of its own session.
 - A background cleanup revokes orphaned upstream sessions and deletes expired
   OAuth rows only after the configured audit-retention window.
 
@@ -33,7 +40,8 @@ membership or replace unavailable OKK scores.
   ACL-aware.
 - Viewer with an empty ACL: successful empty/no-data responses, never 500/403
   noise.
-- Direct inaccessible or missing IDs: identical `not_available` response.
+- Direct inaccessible or missing IDs: identical `not_available` response
+  (OKK 403, 404, or 409 for a closed restricted employee).
 - Exact department names/codes are resolved only inside the live visible ACL.
   A failed or ambiguous named selector returns `not_available` and is never
   treated as an absent filter.
@@ -100,7 +108,8 @@ criteria-only GET endpoint should replace this compatibility path.
 
 ## OAuth requirements
 
-- Authorization Code only, PKCE S256 required.
+- Authorization Code only, PKCE S256 required. A `code_verifier` outside
+  RFC 7636 (43–128 characters of `A–Z a–z 0–9 - . _ ~`) is `invalid_grant`.
 - Exact registered redirect URI matching.
 - HTTPS redirects, except RFC 8252 loopback HTTP clients.
 - Registration is open (DCR), so a client may use only loopback return
@@ -126,6 +135,9 @@ criteria-only GET endpoint should replace this compatibility path.
 - An OKK outage is not an invalid token: the MCP request goes on and the tool
   answers with an error saying OKK is temporarily unavailable. A 401 would send
   the client back to sign in.
+- An OKK access token that expires during a tool call is renewed once through
+  the same serialized rotation and the read is repeated. Only a second 401
+  ends the call with the reconnect error.
 - The credential form submits only to the gateway. Its `form-action` CSP also
   includes the injection-safe origin of the exact validated callback because
   Chromium enforces the directive across the final redirect. No wildcard or
@@ -151,8 +163,9 @@ criteria-only GET endpoint should replace this compatibility path.
   checked by default (1.4.0). An unchecked box removes that scope from the
   authorization code, so the person decides how much the client gets. A form
   of the previous page version (no `consent_version`) grants what was
-  requested. A tool that needs a refused scope answers with an error naming
-  the scope and telling the person to reconnect.
+  requested. A page shown again after a wrong password or a refreshed form
+  keeps the boxes as the person left them. A tool that needs a refused scope
+  answers with an error naming the scope and telling the person to reconnect.
 - The MCP 401 challenge carries `scope` (the scopes to request) and
   `resource_metadata`. Without a token it has no error code (RFC 6750); with an
   invalid or expired token it keeps `error="invalid_token"`, on which clients

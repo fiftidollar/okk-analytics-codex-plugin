@@ -58,7 +58,11 @@ The published deployment is production-only: the upstream base URL is
    only as SHA-256 hashes.
 5. Each MCP request validates the opaque MCP token, calls `/auth/me`, rotates the
    upstream refresh cookie if necessary and uses the newly returned live role
-   and `department_ids`.
+   and `department_ids`. If the OKK access token expires while a tool call
+   runs, the first read that gets 401 renews it through the same rotation and
+   repeats once; the gateway remembers the renewal per OKK session, so the
+   call's later reads (and other calls still holding the old token) use the
+   new token at once. A second 401 ends the call with the reconnect error.
 6. Every analytics call uses only an upstream GET route. Results pass through an
    explicit safe projection before MCP serialization.
 
@@ -187,6 +191,13 @@ OKK refresh token is serialized with a row lock — held across the OKK refresh
 call, because OKK ends its session when a rotating refresh token is used twice;
 a request that waited for the lock finds the token already renewed. No sticky
 sessions are required.
+
+A read that fails in transit — a dropped connection, a timeout, or 502/503/504 —
+is repeated twice, after 0.3 s and 1 s. Only reads take this path (the GET
+routes and the two body-only POST reads), so a repeat cannot change anything in
+OKK; a 4xx is OKK's answer and is never repeated. A final failure is reported as
+OKK temporarily unavailable. One read can therefore take up to about three
+`MCP_HTTP_TIMEOUT_SECONDS` (30 s by default) before it fails.
 
 Expensive cross-employee and criterion aggregation uses bounded concurrency.
 `ANALYTICS_MAX_CALLS` and `ANALYTICS_MAX_EMPLOYEES` cap a single request; a

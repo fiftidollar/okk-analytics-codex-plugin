@@ -381,8 +381,8 @@ public OKK login API and does not mint OKK tokens.
    the ungranted admin to receive an empty catalog and `not_available` for a
    known supervisor UUID without any downstream `/calls` request. Confirm that
    no supervisor is merged into `list_employees` or a department ranking.
-10. Validate refresh rotation, reuse revocation, logout/revoke and concurrent
-    refresh behavior. Upgrade an account holding a pre-transcript token and
+10. Validate refresh rotation, reuse revocation, authorization-code replay
+    revocation, logout/revoke and concurrent refresh behavior. Upgrade an account holding a pre-transcript token and
     prove that refresh cannot silently add `okk.transcripts.read`; after a fresh
     authorization, prove the new scope is present and transcript tools work.
 11. Install the marketplace plugin and repeat the main user flows in both

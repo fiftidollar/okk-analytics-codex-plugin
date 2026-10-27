@@ -7,6 +7,8 @@ OKK_MCP_TEST_DATABASE_URL (an empty database the tests may migrate and truncate)
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
 import os
 import subprocess
@@ -26,13 +28,14 @@ from sqlalchemy.pool import NullPool
 from okk_mcp import maintenance, oauth
 from okk_mcp import platform_client as platform_module
 from okk_mcp.config import Settings
-from okk_mcp.models import OAuthClient, OAuthToken, OkkAccountSession
+from okk_mcp.models import OAuthAuthorizationCode, OAuthClient, OAuthToken, OkkAccountSession
 from okk_mcp.platform_client import OKKPlatformClient
 from okk_mcp.security import DEFAULT_SCOPES, token_hash
 
 DATABASE_URL = os.getenv("OKK_MCP_TEST_DATABASE_URL")
 SERVER_DIR = Path(__file__).resolve().parents[1]
 OKK_URL = "https://okk.example/api/v1"
+REDIRECT_URI = "http://127.0.0.1:40123/callback"
 
 pytestmark = [
     pytest.mark.skipif(not DATABASE_URL, reason="needs OKK_MCP_TEST_DATABASE_URL (PostgreSQL)"),
@@ -68,6 +71,7 @@ class FakeOKK:
         self.valid_access = {"okk-access-1"}
         self.refresh_token = "okk-refresh-1"
         self.refresh_calls = 0
+        self.rejected_reads = 0
         self.me_delay = 0.0
         self.down = False
         self.user = {
@@ -99,6 +103,11 @@ class FakeOKK:
             )
         if request.url.path.endswith("/auth/logout"):
             return httpx.Response(200)
+        if request.url.path.endswith("/calls"):
+            if request.headers.get("authorization", "").removeprefix("Bearer ") in self.valid_access:
+                return httpx.Response(200, json={"items": []})
+            self.rejected_reads += 1
+            return httpx.Response(401)
         return httpx.Response(404)
 
 
@@ -108,8 +117,7 @@ def env(monkeypatch, migrated):
     factory = async_sessionmaker(engine, expire_on_commit=False)
     okk = FakeOKK()
     settings = Settings(okk_api_base_url=OKK_URL)
-    platform = OKKPlatformClient(settings)
-    platform.client = httpx.AsyncClient(base_url=OKK_URL, transport=httpx.MockTransport(okk.handler))
+    platform = OKKPlatformClient(settings, transport=httpx.MockTransport(okk.handler))
     for module in (platform_module, oauth, maintenance):
         monkeypatch.setattr(module, "session_factory", factory)
     monkeypatch.setattr(oauth, "platform_client", platform)
@@ -144,7 +152,7 @@ async def _seed(env, *, okk_access: str = "okk-access-1") -> SimpleNamespace:
                 OAuthClient(
                     client_id="client",
                     client_name="Codex",
-                    redirect_uris=["http://127.0.0.1:40123/callback"],
+                    redirect_uris=[REDIRECT_URI],
                     grant_types=["authorization_code", "refresh_token"],
                     response_types=["code"],
                     token_endpoint_auth_method="none",
@@ -231,6 +239,77 @@ async def test_expired_okk_token_is_renewed_once_for_parallel_requests(env):
 
     assert env.okk.refresh_calls == 1
     assert {context.access_token for context in contexts} == {"okk-access-2"}
+
+
+async def test_okk_token_expiring_during_a_tool_call_is_renewed_once_for_all_its_reads(env):
+    seeded = await _seed(env)
+    context = await env.platform.live_context(seeded.session_id)
+    env.okk.valid_access = set()  # the OKK access token expires while the tool call runs
+
+    first = await asyncio.gather(*(env.platform.get_with_context(context, "/calls") for _ in range(4)))
+    rejected = env.okk.rejected_reads
+    later = await env.platform.get_with_context(context, "/calls")
+
+    assert first == [{"items": []}] * 4 and later == {"items": []}
+    assert env.okk.refresh_calls == 1
+    # The tool call keeps its context; its later reads carry the renewed token at once.
+    assert env.okk.rejected_reads == rejected
+
+
+async def _exchange_code(env, code: str, verifier: str) -> tuple[int, dict]:
+    async with env.factory() as db:
+        response = await oauth.token_endpoint(
+            grant_type="authorization_code",
+            client_id="client",
+            code=code,
+            redirect_uri=REDIRECT_URI,
+            code_verifier=verifier,
+            refresh_token=None,
+            scope=None,
+            resource=None,
+            db=db,
+            settings=env.settings,
+        )
+        await db.commit()
+    return response.status_code, json.loads(response.body)
+
+
+async def test_replayed_authorization_code_revokes_the_tokens_it_issued(env):
+    other_sign_in = await _seed(env)
+    code, verifier = "authorization-code", "v" * 64
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    async with env.factory() as db:
+        session = OkkAccountSession(
+            okk_user_id="user-1",
+            encrypted_access_token=env.platform.cipher.seal("okk-access-1"),
+            encrypted_refresh_token=env.platform.cipher.seal("okk-refresh-1"),
+            role_snapshot="admin",
+            department_ids_snapshot=[],
+        )
+        db.add(session)
+        await db.flush()
+        db.add(
+            OAuthAuthorizationCode(
+                code_hash=token_hash(code),
+                client_id="client",
+                session_id=session.id,
+                redirect_uri=REDIRECT_URI,
+                scope=DEFAULT_SCOPES,
+                code_challenge=challenge,
+                resource=env.settings.resource_url,
+                expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            )
+        )
+        await db.commit()
+
+    status, issued = await _exchange_code(env, code, verifier)
+    replay_status, replay = await _exchange_code(env, code, verifier)
+    verifier_ = oauth.OKKTokenVerifier(env.settings.resource_url)
+
+    assert (status, replay_status, replay["error"]) == (200, 400, "invalid_grant")
+    assert await verifier_.verify_token(issued["access_token"]) is None
+    assert (await _refresh(env, issued["refresh_token"]))[0] == 400
+    assert await verifier_.verify_token(other_sign_in.access) is not None
 
 
 async def test_parallel_requests_of_one_person_are_not_serialized_while_okk_answers(env):
