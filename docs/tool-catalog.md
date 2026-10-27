@@ -7,7 +7,7 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 |---|---|
 | `get_access_context` | Authenticated connection proof, current role, visible departments with their norm (`quality_threshold`), `min_call_duration_seconds` and tracked client metrics; the only answer that carries the department catalog |
 | `get_overview_statistics` | Overall KPI, clients, department rollup, ranking and trend; a department-filtered employee ranking is grounded to the live roster |
-| `get_department_statistics` | One department's summary, every employee's metrics (`complete_employee_ranking`), plan/fact and `reporting_contract`, with an authoritative live employee roster; `detail=full` adds daily department and employee trends |
+| `get_department_statistics` | One department's summary, every employee's metrics (`complete_employee_ranking`), plan/fact and `reporting_contract`, with an authoritative live employee roster; `detail=full` adds department and employee trends |
 | `compare_departments` | Visible department metrics and trends |
 | `list_employees` | Safe employee directory without credentials or phone fields; locally rechecked against live department membership |
 | `list_supervisors` | Live explicit-grant catalog for the private `Руководители` section |
@@ -16,7 +16,8 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `compare_employees` | KPI, strengths, growth areas and weekly focus side by side |
 | `get_call_statistics` | Call volume, evaluated count, scores, pass rate, duration and trend |
 | `list_call_phone_records` | ACL-scoped client phone page or exact all-status call count/existence by normalized number; requires `okk.phones.read` |
-| `list_call_transcripts` | ACL-scoped call catalog, transcript availability and bounded previews |
+| `list_call_transcripts` | ACL-scoped call journal with the OKK journal `filters`, exact `total_calls`, transcript availability, bounded previews and the critical error phrase |
+| `get_call_filter_options` | Values and OKK labels of the journal filters: outcomes, norm, reasons a call is not evaluated, critical error and criterion keys of the active scenarios (of one department when given) |
 | `get_call_transcript` | Raw/diarized full text or safe speaker segments for one accessible call |
 | `search_call_transcripts` | Phrase/all-term/any-term search over every visible call of the period, exact count, paged results with excerpts |
 | `list_supervisor_call_transcripts` | Private-supervisor call catalog, transcript availability and bounded previews |
@@ -25,11 +26,33 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `get_plan_fact_statistics` | Weekly call-plan items (direction × clients × counting) with plan and fact for the period, per department or one employee |
 | `get_client_statistics` | New/regular contacts, missed/no-answer, plus first/repeat touches and returns from repeat to first after the reset period for departments that track client touches |
 | `get_crm_statistics` | Bitrix deals, tasks, overdue, stages, funnels and employee coverage |
-| `get_growth_insights` | Employee and aggregate AI strengths/growth areas without raw reasoning |
+| `get_growth_insights` | OKK's own period insights (block 11) in OKK's order: growth zones by points lost per call, strengths, critical errors; a department lists who loses most (first five, with a total); an employee adds last week's focus; without a department — per visible department. No model explanations |
 | `list_scenarios` | Safe scenario catalog; archived rows are admin-only. No evaluation counts: OKK no longer keeps the legacy `calls_evaluated` / `avg_score`, use `get_scenario_performance` |
 | `get_scenario_criteria` | Categories, maximum scores, scales, indicators and applicability |
 | `get_scenario_performance` | Per scenario (all its versions): evaluation count, per-version counts, employee coverage, score distribution and pass rate: share of evaluations at or above the norm; `pass_rate_basis` says which norm (`department_norm` — per-call `quality_status` from OKK; `scenario_threshold` — scenario `passing_score` on an older OKK API; `null` — unknown, never a guessed 100%) |
 | `get_criterion_performance` | Per criterion code within a scenario (all its versions). `data.criteria`: ordinary criteria with average percent of the maximum, weakest first. `data.critical_errors`: critical errors (deductions such as stop words) with `violations` — calls where points were deducted — and `violation_rate_percent`; a percent of the maximum is meaningless for them. Criteria are labelled (id, code, name, category, max score, critical); their full definition is `get_scenario_criteria` |
+
+## Journal filters (1.5.0)
+
+`list_call_transcripts`, `search_call_transcripts` and
+`list_call_phone_records` take one `filters` object, passed to OKK as its own
+journal parameters; OKK applies every rule, the gateway decides nothing:
+`quality` (`below_norm` is exactly the KPI «Требуют внимания»), `result`
+(`successful`, `missed`, `no_answer` — the KPI outcomes), `direction`,
+`evaluation` with `not_evaluated_reason`, `critical_errors` (calls with any of
+the keys) or `any_critical_error`, `criteria_below` («the criterion scored
+less than N points», all conditions at once), `score_from` / `score_to`,
+`min_duration_seconds`. Keys and labels come from `get_call_filter_options`.
+The applied filters are echoed in `effective_scope.filters`.
+
+Trends ask OKK for `step=auto`: points by day up to 45 days, then by week,
+month or quarter; each point carries `date` (its first day) and `step`. The
+field is `trend` (until 1.5.0 `daily_trend`, always daily).
+
+Scenario and criterion results read only the evaluated calls of the
+indicators (`kpi_evaluated=true` — the summary's «Оценено»), so a scenario's
+average equals its department's when the department has one scenario. Until
+1.5.0 any call with a score counted, manually excluded and short ones too.
 
 OKK keeps no mentoring tasks: 1.4.0 removed `get_mentoring_statistics`, and
 the department catalog with norms moved from `list_departments` into

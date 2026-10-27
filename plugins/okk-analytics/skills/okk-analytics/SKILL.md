@@ -66,9 +66,13 @@ response only.
 
 ## Calls and transcripts
 
-- To find a call: `list_call_transcripts` (filters, newest first). To read it:
+- To find a call: `list_call_transcripts` (newest first). To read it:
   `get_call_transcript`, repeating with `next_start_char` until it is null —
   a preview or one chunk is not the whole text.
+- «Ниже нормы», «пропущенные», «с матом», «критерий меньше N баллов» and the
+  like: the `filters` object of the call tools, the same filters as the OKK
+  journal; take keys from `get_call_filter_options`, never invent them.
+  `total_calls` is the exact count.
 - To find words: `search_call_transcripts`. It searches every call of the
   period; `matching_calls_total` is the exact count. If `result_complete=false`,
   read the next `page`.

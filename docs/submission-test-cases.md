@@ -9,8 +9,8 @@ The list intentionally contains exactly five positive and three negative cases.
    report rows only if `effective_scope` resolves to B2B and name only people
    from that response's authoritative `employee_roster_grounding`.
 2. **Prompt:** «Какие сильные стороны и зоны роста у сотрудников ORD?»
-   **Expected:** call `get_growth_insights` with `department="ORD"` and
-   preserve completeness metadata.
+   **Expected:** call `get_growth_insights` with `department="ORD"`, keep
+   OKK's order (points lost per call) and say how many items each list has.
 3. **Prompt:** «Сравни отделы B2B и Отдел региональных продаж за квартал».
    **Expected:** call `compare_departments` with both exact values in
    `departments`; mention only the effective visible scopes.
@@ -19,7 +19,7 @@ The list intentionally contains exactly five positive and three negative cases.
 5. **Prompt:** «Найди в звонках руководителя Воробьёва за месяц фразу про перенос доставки и покажи контекст».
    **Expected:** search both person catalogs, resolve the person only through
    `list_supervisors`, then call `search_supervisor_call_transcripts`; preserve
-   private ACL and scan-completeness metadata and never substitute a department
+   private ACL and the exact match count and never substitute a department
    employee with a similar name.
 
 ## Negative (plugin should not be used)

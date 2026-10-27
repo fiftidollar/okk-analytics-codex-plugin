@@ -2,9 +2,11 @@
 
 ## 1.5.0 — not released
 
-Requires the OKK platform route `POST /calls/transcript-search`; until OKK
-serves it, both search tools answer `unavailable`. Update the plugin and start
-a new chat: the search answer changed.
+Requires the OKK platform release with `POST /calls/transcript-search`,
+`kpi_evaluated`, the stable journal order and the call department in the card
+(`docs/deployment.md`); deploy OKK first. Update the plugin and start a new
+chat: several answers changed. Found by a full review of the gateway on
+2026-10-27.
 
 - Fix: transcript search read at most `TRANSCRIPT_SEARCH_MAX_CALLS` (1000)
   calls of the period itself, so on a long period it never searched every
@@ -16,8 +18,47 @@ a new chat: the search answer changed.
   `candidate_calls_loaded`, `source_calls_total`, `search_call_cap` and
   `result_limit` are gone. The gateway reads only the returned page's
   transcripts, to cut excerpts. `TRANSCRIPT_SEARCH_MAX_CALLS` is removed.
+- The OKK journal filters in MCP: `filters` on `list_call_transcripts`,
+  `search_call_transcripts` and `list_call_phone_records` (below norm,
+  outcome, direction, evaluated or not and why, critical errors, criteria
+  below N points, score, duration), passed to OKK, which applies every rule.
+  New tool `get_call_filter_options` (26 tools) lists the keys with OKK's
+  labels. Call rows keep why a call is not evaluated or not counted, the B2B
+  touch cycle and the follow-up of a missed call; the journal tool shows the
+  critical error phrase.
+- Trends ask OKK for `step=auto` (day, week, month or quarter by length):
+  «all time» was 252 daily points. `daily_trend` is renamed `trend`.
+- Fix: scenario and criterion results counted any call with a score,
+  manually excluded and short ones too, so a scenario's average differed
+  from its department's; now only the evaluated calls of the indicators.
+- Fix: a call arriving between two journal pages was counted twice; a past
+  call of a transferred employee was listed but did not open (the gateway
+  checked the employee's current department, now the call's).
+- Fix: `get_growth_insights` ranked by how many employees mentioned an item
+  and then alphabetically, so a small `limit` dropped what loses most points,
+  and answered over 100,000 characters for a large department. It now returns
+  OKK's own insights in OKK's order, lists cut, no model explanations.
+- Fix: the employee card dropped `quality_by_call` (a long period passed the
+  50,000-character client limit) and survives CRM being down; a call deleted
+  during criterion results no longer fails them; critical errors have their
+  own `limit`; plan edit history no longer leaks through the department
+  ranking; an OKK that ignores the phone filter answers «unavailable» instead
+  of an off-schema status.
+- The shared OKK HTTP client keeps no cookies, so one person's sign-in or
+  refresh can no longer carry another person's OKK refresh token; it is sent
+  only as an explicit `Cookie` header on `/auth/refresh` and `/auth/logout`.
+- An OKK access token that expires during a tool call is renewed once and the
+  read repeated instead of asking the person to reconnect; reads repeat a
+  dropped connection, timeout or 502/503/504 twice (0.3 s, 1 s), never a 4xx.
+- OKK 409 for a closed restricted employee is the neutral `not_available`,
+  not a rejected filter.
+- The login page shown again after a wrong password or a refreshed form keeps
+  the person's unchecked transcript and phone boxes.
+- A replayed authorization code revokes the tokens it issued and its OKK
+  session (RFC 6749 §4.1.2); a `code_verifier` outside RFC 7636 is
+  `invalid_grant` instead of HTTP 500.
 - The plugin folder has its own README (required by the Claude plugin
-  directory); stale tool counts in README and deployment docs corrected (25).
+  directory); stale tool counts in README and deployment docs corrected.
 
 ## 1.4.0 — released 2026-10-21
 

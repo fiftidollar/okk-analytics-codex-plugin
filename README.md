@@ -110,7 +110,7 @@ its separate OAuth permission.
 plugins/okk-analytics/   Shared skill plus Codex and Claude Code plugin manifests
 .agents/plugins/         Codex community marketplace manifest
 .claude-plugin/          Claude Code community marketplace manifest
-server/okk_mcp/          OAuth server, encrypted sessions and 25 MCP tools
+server/okk_mcp/          OAuth server, encrypted sessions and 26 MCP tools
 server/migrations/       Standalone PostgreSQL schema
 server/tests/            Security, ACL, projection and tool-contract tests
 docs/                    Architecture, tools, security and deployment runbooks
@@ -273,7 +273,7 @@ the OKK API. See
 Create the release as **With MCP → Universal** with
 `https://okk-mcp.akfixdev.ru/mcp`, and upload the final
 `plugins/okk-analytics/skills/okk-analytics/` bundle to the same draft. The
-portal must scan all 25 tools and retain the exact five positive and three
+portal must scan all 26 tools and retain the exact five positive and three
 negative cases from `chatgpt-app-submission.json`. OAuth discovery advertises
 `openid` and `email`; `/userinfo` returns only the live account subject and
 verified email for workspace domain policy. Domain ownership is proved by

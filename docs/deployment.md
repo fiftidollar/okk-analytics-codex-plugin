@@ -1,5 +1,22 @@
 # Production deployment and release gate
 
+## 1.5.0 — not released
+
+Order: the OKK platform first, then the gateway. The gateway needs from OKK
+`POST /calls/transcript-search`, the journal filter `kpi_evaluated`, the
+journal order by start time and call id, `department_id` in the call card and
+`step=auto` on the trend routes (the last one is on production since
+2026-10-23). Until OKK serves the search route, both search tools answer
+`unavailable` (OKK 404); an OKK without `kpi_evaluated` would ignore it and
+count every scored call, as 1.4.0 did — so never deploy the gateway first.
+
+Release gate: `/health` reports `1.5.0`; tools/list has 26 tools; on the stand
+`search_call_transcripts` over «Всё время» answers `ok` with a
+`matching_calls_total` equal to the OKK journal filtered by the same text;
+`list_call_transcripts` with `filters.quality=below_norm` returns as many calls
+as the dashboard «Требуют внимания» for the same period; the scenario
+evaluations of a one-scenario department equal its `calls_evaluated`.
+
 ## 1.4.0 — released 2026-10-21
 
 Deployed to the production Compose on 2026-10-21 (PR #10, `260c7ea`). After the
@@ -363,8 +380,8 @@ public OKK login API and does not mint OKK tokens.
    allowlist. Inject one foreign ID and one conflicting name in the adapter
    regression: the former must be absent, the latter must be normalized, and
    the result must be `partial` with non-zero diagnostic counters.
-9. Exercise all 25 tools (`server/scripts/smoke_release.py` checks the exact
-   inventory). For the 18 tools that are neither transcript tools nor
+9. Exercise all 26 tools (`server/scripts/smoke_release.py` checks the exact
+   inventory). For the 19 tools that are neither transcript tools nor
    `list_call_phone_records`, search saved JSON
    for forbidden fields/values: password, phone, audio, transcript, prompt,
    reasoning, script, Megafon, routing and pipeline. The phone tool returns
@@ -402,7 +419,7 @@ public OKK login API and does not mint OKK tokens.
     `/.well-known/openai-apps-challenge` returns exactly that token as plain
     text, and verify `/userinfo` with a newly authorized `openid email` token
     returns only `sub`, normalized `email` and `email_verified=true`. Upload the
-    final skill tree, import `chatgpt-app-submission.json`, scan all 25 tools,
+    final skill tree, import `chatgpt-app-submission.json`, scan all 26 tools,
     and review the five positive and three negative cases before submission.
 
 ## Dokploy production compose
