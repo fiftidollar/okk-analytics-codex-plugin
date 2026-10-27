@@ -46,7 +46,12 @@ class FakePlatform:
         return await self.get(None, path, params=params)
 
     async def phone_lookup_with_context(self, _context, payload):
-        path = "/calls/phone-lookup"
+        return self._post("/calls/phone-lookup", payload)
+
+    async def transcript_search_with_context(self, _context, payload):
+        return self._post("/calls/transcript-search", payload)
+
+    def _post(self, path, payload):
         self.calls.append((path, list(payload.items())))
         value = self.responses[path]
         return value(payload) if callable(value) else value
@@ -1057,6 +1062,11 @@ def _versioned_csm(
         items = [row for row in rows if not wanted or row["scenario_id"] == wanted]
         return {"items": items, "total": len(items), "pages": 1}
 
+    def transcript_search(payload):
+        # Every transcript of the world holds the searched words.
+        assert "scenario_id" not in payload
+        return {"items": rows, "total": len(rows), "pages": 1}
+
     platform = FakePlatform(
         role=role,
         department_ids=(ids["department"],),
@@ -1064,6 +1074,7 @@ def _versioned_csm(
             "/departments": [{"id": ids["department"], "name": "Сопровождение", "code": "csm"}],
             "/scenarios": scenarios,
             "/calls": calls,
+            "/calls/transcript-search": transcript_search,
             **{f"/calls/{row['id']}": detail for row, detail in evaluated},
             **{
                 f"/calls/{row['id']}/transcript": {"transcript": "Менеджер: договорились о следующем шаге."}
@@ -2467,6 +2478,7 @@ async def test_supervisor_transcript_tools_use_private_catalog_and_enforce_emplo
             "/departments": [],
             "/employees/restricted": [supervisor],
             "/calls": {"items": [call], "total": 1, "page": 1, "page_size": 25, "pages": 1},
+            "/calls/transcript-search": {"items": [call], "total": 1, "page": 1, "pages": 1},
             f"/calls/{call_id}": call,
             f"/calls/{call_id}/transcript": {"transcript": transcript},
         },
@@ -2504,6 +2516,9 @@ async def test_supervisor_transcript_tools_use_private_catalog_and_enforce_emplo
     assert "audio.mp3" not in serialized
     call_query = dict(next(params for path, params in platform.calls if path == "/calls"))
     assert call_query["employee_id"] == supervisor_id
+    search_body = dict(next(params for path, params in platform.calls if path == "/calls/transcript-search"))
+    assert search_body["employee_id"] == supervisor_id
+    assert search_body["transcript_query"] == "следующий шаг"
 
 
 @pytest.mark.anyio
@@ -2684,11 +2699,12 @@ async def test_gateway_drops_a_hidden_department_call_even_if_upstream_list_leak
     assert not any(path.endswith("/transcript") for path, _params in platform.calls)
 
 
-@pytest.mark.anyio
-async def test_search_call_transcripts_matches_only_acl_visible_calls_and_reports_completeness():
+def _searched_sales(*, hidden_call: bool = False) -> tuple[FakePlatform, str, list[str]]:
+    """OKK found 1203 calls with the phrase; one page of them comes back. The second call's
+    transcript no longer holds the phrase (it changed after the match)."""
     department_id, employee_id = str(uuid4()), str(uuid4())
-    first_call_id, second_call_id = str(uuid4()), str(uuid4())
-    call_rows = [
+    call_ids = [str(uuid4()), str(uuid4())]
+    rows = [
         {
             "id": call_id,
             "employee_id": employee_id,
@@ -2699,21 +2715,32 @@ async def test_search_call_transcripts_matches_only_acl_visible_calls_and_report
                 "department": {"id": department_id, "name": "Sales", "code": "sales"},
             },
         }
-        for index, call_id in enumerate((first_call_id, second_call_id), start=1)
+        for index, call_id in enumerate(call_ids, start=1)
     ]
+    if hidden_call:
+        other_department = {"id": str(uuid4()), "name": "Hidden", "code": "hidden"}
+        rows.append(
+            {"id": str(uuid4()), "employee_id": str(uuid4()), "employee": {"department": other_department}}
+        )
     platform = FakePlatform(
         department_ids=(department_id,),
         responses={
             "/departments": [{"id": department_id, "name": "Sales", "code": "sales"}],
-            "/calls": {"items": call_rows, "total": 2, "pages": 1},
-            f"/calls/{first_call_id}/transcript": {
+            "/calls/transcript-search": {"items": rows, "total": 1203, "pages": 602},
+            f"/calls/{call_ids[0]}/transcript": {
                 "transcript": "Manager: We discussed delivery next Tuesday with the client."
             },
-            f"/calls/{second_call_id}/transcript": {
-                "transcript": "Manager: The customer asked only about pricing."
-            },
+            f"/calls/{call_ids[1]}/transcript": {"transcript": "Manager: The customer asked about pricing."},
         },
     )
+    return platform, department_id, call_ids
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("page", "result_complete"), [(1, False), (602, True)])
+async def test_search_call_transcripts_reports_the_exact_okk_count_and_pages(page, result_complete):
+    # Before: the gateway scanned at most 1000 calls itself, so a long period was never searched whole.
+    platform, department_id, call_ids = _searched_sales()
 
     result = await adapter(platform).search_call_transcripts(
         "delivery next Tuesday",
@@ -2721,53 +2748,39 @@ async def test_search_call_transcripts_matches_only_acl_visible_calls_and_report
         period="custom",
         start_date="2026-07-01",
         end_date="2026-07-18",
+        limit=2,
+        page=page,
     )
 
+    data = result["data"]
     assert result["status"] == "ok"
-    assert result["data"]["source_complete"] is True
-    assert result["data"]["scanned_calls"] == 2
-    assert result["data"]["returned_matches"] == 1
-    assert result["data"]["items"][0]["call"]["id"] == first_call_id
-    assert "delivery next Tuesday" in result["data"]["items"][0]["excerpts"][0]["text"]
-    calls_params = dict(next(params for path, params in platform.calls if path == "/calls"))
-    assert calls_params["department_id"] == department_id
+    assert (data["matching_calls_total"], data["pages"], data["page"]) == (1203, 602, page)
+    assert data["source_complete"] is True
+    assert data["result_complete"] is result_complete
+    assert [item["call"]["id"] for item in data["items"]] == call_ids
+    assert "delivery next Tuesday" in data["items"][0]["excerpts"][0]["text"]
+    assert (data["items"][1]["match_count"], data["items"][1]["excerpts"]) == (0, [])
+    body = dict(next(params for path, params in platform.calls if path == "/calls/transcript-search"))
+    assert body == {
+        "transcript_query": "delivery next Tuesday",
+        "transcript_match": "phrase",
+        "department_id": department_id,
+        "date_from": "2026-07-01",
+        "date_to": "2026-07-18",
+        "page": page,
+        "page_size": 2,
+    }
+    assert not any(path == "/calls" for path, _params in platform.calls)
 
 
 @pytest.mark.anyio
-async def test_transcript_search_cap_returns_partial_instead_of_false_exhaustive_no_data():
-    department_id, employee_id = str(uuid4()), str(uuid4())
-    call_ids = [str(uuid4()) for _ in range(30)]
-    calls = [
-        {
-            "id": call_id,
-            "employee_id": employee_id,
-            "employee": {
-                "id": employee_id,
-                "full_name": "Visible Employee",
-                "department": {"id": department_id, "name": "Sales", "code": "sales"},
-            },
-        }
-        for call_id in call_ids
-    ]
-    responses = {
-        "/departments": [{"id": department_id, "name": "Sales", "code": "sales"}],
-        "/calls": {"items": calls, "total": 30, "pages": 1},
-        **{
-            f"/calls/{call_id}/transcript": {"transcript": "No matching phrase here."}
-            for call_id in call_ids[:25]
-        },
-    }
-    platform = FakePlatform(department_ids=(department_id,), responses=responses)
-    analytics = AnalyticsAdapter(
-        platform,
-        str(platform.context.session_id),
-        Settings(transcript_search_max_calls=25),
-    )
+async def test_search_call_transcripts_marks_a_matched_call_outside_the_acl_as_partial():
+    platform, _department_id, call_ids = _searched_sales(hidden_call=True)
 
-    result = await analytics.search_call_transcripts("needle", period="today")
+    result = await adapter(platform).search_call_transcripts("delivery next Tuesday", department_ref="Sales")
 
     assert result["status"] == "partial"
-    assert result["data"]["returned_matches"] == 0
-    assert result["data"]["scanned_calls"] == 25
-    assert result["data"]["source_calls_total"] == 30
+    assert result["omitted_filters_count"] == 1
     assert result["data"]["source_complete"] is False
+    assert [item["call"]["id"] for item in result["data"]["items"]] == call_ids
+    assert "Hidden" not in str(result)

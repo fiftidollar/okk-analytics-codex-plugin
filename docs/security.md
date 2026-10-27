@@ -76,7 +76,11 @@ normal upstream call ACL, then validates the call's employee/department against
 the fresh live department or restricted-supervisor catalog. It returns no
 phone/audio/external-call fields, never
 persists or caches transcript bodies, and never includes search text, excerpts
-or transcript payloads in operational traces.
+or transcript payloads in operational traces. Transcript search sends the
+words to OKK only in the JSON body of the read-only
+`POST /calls/transcript-search` route, never in a URL, so they stay out of
+access logs; OKK applies the same journal ACL and the gateway re-checks every
+returned call.
 
 Operational observability is deliberately metadata-only. Structured traces
 record filter presence/counts, timing, status and safe completeness markers,

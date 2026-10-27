@@ -363,8 +363,8 @@ public OKK login API and does not mint OKK tokens.
    allowlist. Inject one foreign ID and one conflicting name in the adapter
    regression: the former must be absent, the latter must be normalized, and
    the result must be `partial` with non-zero diagnostic counters.
-9. Exercise all 28 tools (`server/scripts/smoke_release.py` checks the exact
-   inventory). For the 21 tools that are neither transcript tools nor
+9. Exercise all 25 tools (`server/scripts/smoke_release.py` checks the exact
+   inventory). For the 18 tools that are neither transcript tools nor
    `list_call_phone_records`, search saved JSON
    for forbidden fields/values: password, phone, audio, transcript, prompt,
    reasoning, script, Megafon, routing and pipeline. The phone tool returns
@@ -372,7 +372,7 @@ public OKK login API and does not mint OKK tokens.
    tools, verify text appears only under their documented transcript/preview/
    excerpt fields, while structured phone, audio, PBX/external IDs and internal
    processing fields remain absent. Test raw, diarized and segment formats,
-   search caps, result limits and a call ID outside the viewer ACL.
+   the exact search count and its pages, and a call ID outside the viewer ACL.
    For `get_client_statistics` on B2B, also require the reset window `30`, the
    first/repeat counters and the reactivated-first subset from repeat state;
    assert that no phone or per-number transition row is present.
@@ -402,7 +402,7 @@ public OKK login API and does not mint OKK tokens.
     `/.well-known/openai-apps-challenge` returns exactly that token as plain
     text, and verify `/userinfo` with a newly authorized `openid email` token
     returns only `sub`, normalized `email` and `email_verified=true`. Upload the
-    final skill tree, import `chatgpt-app-submission.json`, scan all 28 tools,
+    final skill tree, import `chatgpt-app-submission.json`, scan all 25 tools,
     and review the five positive and three negative cases before submission.
 
 ## Dokploy production compose

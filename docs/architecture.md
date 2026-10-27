@@ -19,6 +19,7 @@ Codex MCP client
             -> /auth/login, /auth/refresh, /auth/me
             -> existing read-only analytics GET endpoints
             -> POST /calls/phone-lookup (phone in JSON body)
+            -> POST /calls/transcript-search (search words in JSON body)
             -> ACL-protected /employees/restricted
             -> ACL-protected /calls/{call_id}/transcript
 ```
@@ -190,7 +191,9 @@ sessions are required.
 Expensive cross-employee and criterion aggregation uses bounded concurrency.
 `ANALYTICS_MAX_CALLS` and `ANALYTICS_MAX_EMPLOYEES` cap a single request; a
 truncated response returns `partial` rather than silently claiming completeness.
-Transcript full-text search has its own lower
-`TRANSCRIPT_SEARCH_MAX_CALLS` cap and bounded request concurrency. Transcript
-bodies live only for the duration of the MCP request and are not written to
-PostgreSQL, Redis or operational logs.
+Transcript full-text search runs in OKK (`POST /calls/transcript-search`, the
+words travel in the body, never in a URL): OKK filters the whole ACL-scoped
+journal and returns the exact number of matching calls, the gateway reads the
+transcripts of the returned page only to cut excerpts. Transcript bodies live
+only for the duration of the MCP request and are not written to PostgreSQL,
+Redis or operational logs.

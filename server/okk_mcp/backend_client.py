@@ -453,6 +453,15 @@ def _match_excerpts(
     return excerpts
 
 
+def _json_body(body: dict[str, Any]) -> dict[str, Any]:
+    """A POST body as JSON: period dates as ISO strings, no empty filters."""
+    return {
+        key: value.isoformat() if isinstance(value, date) else value
+        for key, value in body.items()
+        if value is not None
+    }
+
+
 class AnalyticsAdapter:
     def __init__(
         self,
@@ -476,15 +485,11 @@ class AnalyticsAdapter:
 
     async def _phone_lookup(self, **body: Any) -> Any:
         context = await self.context()
-        # The body goes out as JSON: period dates as ISO strings, not `date` objects.
-        return await self.platform.phone_lookup_with_context(
-            context,
-            {
-                key: value.isoformat() if isinstance(value, date) else value
-                for key, value in body.items()
-                if value is not None
-            },
-        )
+        return await self.platform.phone_lookup_with_context(context, _json_body(body))
+
+    async def _transcript_search(self, **body: Any) -> Any:
+        context = await self.context()
+        return await self.platform.transcript_search_with_context(context, _json_body(body))
 
     async def _bounded(self, factory: Callable[[], Awaitable[Any]]) -> Any:
         async with self._semaphore:
@@ -1139,6 +1144,90 @@ class AnalyticsAdapter:
                 return rows, total, True
             page += 1
         return rows[:cap], total, False
+
+    async def transcript_matches(
+        self,
+        *,
+        query: str,
+        match_mode: str,
+        start: date,
+        end: date,
+        department_id: str | None = None,
+        employee_id: str | None = None,
+    ) -> tuple[list[dict[str, Any]], int, bool]:
+        """Every call of the scope whose shown transcript matches, bounded like `calls`."""
+        cap = self.settings.analytics_max_calls
+        rows: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            payload = await self._transcript_search(
+                transcript_query=query,
+                transcript_match=match_mode,
+                department_id=department_id,
+                employee_id=employee_id,
+                date_from=start,
+                date_to=end,
+                page=page,
+                page_size=100,
+            )
+            total = int(payload.get("total") or 0)
+            rows.extend(payload.get("items") or [])
+            if len(rows) >= cap and (page < int(payload.get("pages") or 1) or len(rows) > cap):
+                return rows[:cap], total, False
+            if page >= int(payload.get("pages") or 1):
+                return rows, total, True
+            page += 1
+
+    async def _with_excerpts(
+        self,
+        calls: list[dict[str, Any]],
+        query: str,
+        match_mode: str,
+        context_chars: int,
+    ) -> list[dict[str, Any]]:
+        """Excerpts around the matches of the returned calls only. OKK already decided which calls
+        match; a call whose transcript became unavailable since stays in the result without excerpts."""
+
+        async def excerpts(call: dict[str, Any]) -> dict[str, Any]:
+            try:
+                payload = await self._bounded(lambda: self._call_transcript_payload(call["id"], "diarized"))
+            except OKKNotAvailable:
+                payload = {}
+            transcript = payload.get("transcript")
+            transcript = transcript if isinstance(transcript, str) else ""
+            positions = _match_positions(transcript, query, match_mode)
+            return {
+                "call": call,
+                "match_count": len(positions),
+                "excerpts": _match_excerpts(transcript, positions, context_chars=context_chars),
+                "transcript_chars": len(transcript),
+            }
+
+        return list(await asyncio.gather(*(excerpts(call) for call in calls)))
+
+    @staticmethod
+    def _search_data(
+        matches: list[dict[str, Any]],
+        query: str,
+        match_mode: str,
+        *,
+        total: int,
+        page: int,
+        limit: int,
+        complete: bool,
+    ) -> dict[str, Any]:
+        return {
+            "items": matches,
+            "query": query,
+            "match_mode": match_mode,
+            "matching_calls_total": total,
+            "returned_matches": len(matches),
+            "page": page,
+            "page_size": limit,
+            "pages": math.ceil(total / limit),
+            "source_complete": complete,
+            "result_complete": complete and page * limit >= total,
+        }
 
     async def dispatch(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         routes = {
@@ -2080,6 +2169,7 @@ class AnalyticsAdapter:
         match_mode: str = "phrase",
         context_chars: int = 240,
         limit: int = 25,
+        page: int = 1,
         **_: Any,
     ) -> dict[str, Any]:
         query = query.strip()
@@ -2103,29 +2193,37 @@ class AnalyticsAdapter:
         scenario = str(scenario_row.get("id")) if scenario_row else None
         scenario_code: str | None = None
         excluded: Counter[str] = Counter()
-        cap = self.settings.transcript_search_max_calls
         if scenario_row is None:
-            calls, total, calls_complete = await self.calls(
+            # OKK searches the whole ACL-scoped journal: `total` is the exact number of matching calls.
+            payload = await self._transcript_search(
+                transcript_query=query,
+                transcript_match=match_mode,
+                department_id=department,
+                employee_id=employee,
+                date_from=bounds[0],
+                date_to=bounds[1],
+                page=page,
+                page_size=limit,
+            )
+            rows, total, complete = payload.get("items") or [], int(payload.get("total") or 0), True
+        else:
+            # A scenario is all its versions and OKK filters `scenario_id` by the exact version: every
+            # matching call of the scope comes from OKK, the scenario's calls are taken here.
+            matched, _matched_total, complete = await self.transcript_matches(
+                query=query,
+                match_mode=match_mode,
                 start=bounds[0],
                 end=bounds[1],
                 department_id=department,
                 employee_id=employee,
-                max_calls=cap,
             )
-        else:
-            # A scenario is all its versions: its calls come from the whole scope, then the search cap.
-            selected, scope_complete, scenario_code, excluded = await self._scenario_scope_calls(
-                bounds=bounds,
-                department=department,
-                employee=employee,
-                scenario_row=scenario_row,
-                catalog=catalog,
-            )
-            calls, total = selected[:cap], len(selected)
-            calls_complete = scope_complete and len(selected) <= cap
+            version_codes = _scenario_versions_by_code(catalog, matched)
+            scenario_code = version_codes[str(scenario_row.get("id"))]
+            selected, excluded = _calls_of_scenario(matched, scenario_code, version_codes)
+            rows, total = selected[(page - 1) * limit : page * limit], len(selected)
         visible_calls: list[dict[str, Any]] = []
         omitted = 0
-        for row in calls:
+        for row in rows:
             call = await self._visible_call(
                 row,
                 department_id=department,
@@ -2135,62 +2233,13 @@ class AnalyticsAdapter:
                 visible_calls.append(call)
             else:
                 omitted += 1
-
-        async def search(call: dict[str, Any]) -> dict[str, Any] | None:
-            try:
-                payload = await self._bounded(lambda: self._call_transcript_payload(call["id"], "diarized"))
-            except OKKNotAvailable:
-                return None
-            transcript = payload.get("transcript")
-            if not isinstance(transcript, str) or not transcript.strip():
-                return None
-            positions = _match_positions(transcript, query, match_mode)
-            if not positions:
-                return None
-            return {
-                "call": call,
-                "match_count": len(positions),
-                "excerpts": _match_excerpts(
-                    transcript,
-                    positions,
-                    context_chars=context_chars,
-                ),
-                "transcript_chars": len(transcript),
-            }
-
-        matches: list[dict[str, Any]] = []
-        scanned = 0
-        batch_size = self.settings.analytics_parallel_requests
-        for start in range(0, len(visible_calls), batch_size):
-            batch = visible_calls[start : start + batch_size]
-            batch_matches = await asyncio.gather(*(search(call) for call in batch))
-            scanned += len(batch)
-            matches.extend(row for row in batch_matches if row is not None)
-            if len(matches) >= limit:
-                break
-        result_complete = len(matches) <= limit and scanned == len(visible_calls)
-        matches = matches[:limit]
-        source_complete = calls_complete and scanned == len(visible_calls)
-        data = {
-            "items": matches,
-            "query": query,
-            "match_mode": match_mode,
-            "returned_matches": len(matches),
-            "scanned_calls": scanned,
-            "candidate_calls_loaded": len(visible_calls),
-            "source_calls_total": total,
-            "source_complete": source_complete,
-            "result_complete": result_complete,
-            "search_call_cap": self.settings.transcript_search_max_calls,
-            "result_limit": limit,
-        }
+        matches = await self._with_excerpts(visible_calls, query, match_mode, context_chars)
+        data = self._search_data(
+            matches, query, match_mode, total=total, page=page, limit=limit, complete=complete and not omitted
+        )
         return await self.envelope(
             data,
-            status=(
-                "partial"
-                if not source_complete or not result_complete or excluded
-                else ("ok" if matches else "no_data")
-            ),
+            status="partial" if not data["source_complete"] or excluded else ("ok" if total else "no_data"),
             scope={
                 **self.department_scope(department_row),
                 "employee_id": employee,
@@ -2360,6 +2409,7 @@ class AnalyticsAdapter:
         match_mode: str = "phrase",
         context_chars: int = 240,
         limit: int = 25,
+        page: int = 1,
         **_: Any,
     ) -> dict[str, Any]:
         query = query.strip()
@@ -2369,75 +2419,34 @@ class AnalyticsAdapter:
         supervisor = await self.restricted_supervisor(supervisor_id)
         if not supervisor:
             return await self.envelope({}, status="not_available", period=bounds)
-        calls, total, calls_complete = await self.calls(
-            start=bounds[0],
-            end=bounds[1],
+        payload = await self._transcript_search(
+            transcript_query=query,
+            transcript_match=match_mode,
             employee_id=supervisor["id"],
-            max_calls=self.settings.transcript_search_max_calls,
+            date_from=bounds[0],
+            date_to=bounds[1],
+            page=page,
+            page_size=limit,
         )
+        total = int(payload.get("total") or 0)
         visible_calls: list[dict[str, Any]] = []
         omitted = 0
-        for row in calls:
+        for row in payload.get("items") or []:
             call = await self._visible_call(row, employee_id=supervisor["id"])
             if call and ((call.get("employee") or {}).get("section") == "supervisors"):
                 visible_calls.append(call)
             else:
                 omitted += 1
-
-        async def search(call: dict[str, Any]) -> dict[str, Any] | None:
-            try:
-                payload = await self._bounded(lambda: self._call_transcript_payload(call["id"], "diarized"))
-            except OKKNotAvailable:
-                return None
-            transcript = payload.get("transcript")
-            if not isinstance(transcript, str) or not transcript.strip():
-                return None
-            positions = _match_positions(transcript, query, match_mode)
-            if not positions:
-                return None
-            return {
-                "call": call,
-                "match_count": len(positions),
-                "excerpts": _match_excerpts(
-                    transcript,
-                    positions,
-                    context_chars=context_chars,
-                ),
-                "transcript_chars": len(transcript),
-            }
-
-        matches: list[dict[str, Any]] = []
-        scanned = 0
-        batch_size = self.settings.analytics_parallel_requests
-        for start in range(0, len(visible_calls), batch_size):
-            batch = visible_calls[start : start + batch_size]
-            batch_matches = await asyncio.gather(*(search(call) for call in batch))
-            scanned += len(batch)
-            matches.extend(row for row in batch_matches if row is not None)
-            if len(matches) >= limit:
-                break
-        result_complete = len(matches) <= limit and scanned == len(visible_calls)
-        matches = matches[:limit]
-        source_complete = calls_complete and scanned == len(visible_calls)
+        matches = await self._with_excerpts(visible_calls, query, match_mode, context_chars)
         data = {
             "supervisor": supervisor,
-            "items": matches,
-            "query": query,
-            "match_mode": match_mode,
-            "returned_matches": len(matches),
-            "scanned_calls": scanned,
-            "candidate_calls_loaded": len(visible_calls),
-            "source_calls_total": total,
-            "source_complete": source_complete,
-            "result_complete": result_complete,
-            "search_call_cap": self.settings.transcript_search_max_calls,
-            "result_limit": limit,
+            **self._search_data(
+                matches, query, match_mode, total=total, page=page, limit=limit, complete=not omitted
+            ),
         }
         return await self.envelope(
             data,
-            status=(
-                "partial" if not source_complete or not result_complete else ("ok" if matches else "no_data")
-            ),
+            status="partial" if omitted else ("ok" if total else "no_data"),
             scope={**self.supervisor_scope(supervisor), "transcript_format": "diarized"},
             period=bounds,
             omitted=omitted,

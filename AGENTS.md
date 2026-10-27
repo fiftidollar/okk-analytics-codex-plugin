@@ -6,6 +6,9 @@ from the private OKK platform repository.
 
 - Every MCP tool is read-only, idempotent and ACL-aware.
 - Use only existing OKK `GET` analytics endpoints after native `/auth/login`.
+  The only `POST` reads are the body-only journal filters
+  `/calls/phone-lookup` and `/calls/transcript-search`: their filter values
+  (a phone number, words of a conversation) must stay out of URLs.
 - Never persist, log or echo a user's password.
 - Store MCP tokens as SHA-256 hashes and upstream OKK session tokens only with
   authenticated encryption.

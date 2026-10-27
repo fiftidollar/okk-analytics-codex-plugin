@@ -596,9 +596,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     @mcp.tool(
         title="Поиск по транскрипциям",
         description=(
-            "Finds a phrase or words in call transcripts (поиск по разговорам) and returns the calls "
-            "with quotes. scanned_calls and result_complete show how much was searched: an incomplete "
-            "search is no proof that the phrase is absent — narrow the period or add employee_id."
+            "Finds a phrase or words in call transcripts (поиск по разговорам) across every visible "
+            "call of the period and returns the calls with quotes. matching_calls_total is the exact "
+            "number of matching calls; read further pages with page while result_complete=false."
         ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE, TRANSCRIPT_SCOPE),
@@ -618,6 +618,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         ] = "phrase",
         context_chars: Annotated[int, Field(ge=40, le=PREVIEW_MAX_CHARS)] = 240,
         limit: Annotated[int, Field(ge=1, le=PAGE_MAX_ITEMS)] = 25,
+        page: PageParam = 1,
     ) -> ToolResult:
         _require_scopes(STAT_SCOPE, TRANSCRIPT_SCOPE)
         return await _read(
@@ -630,6 +631,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             match_mode=match_mode,
             context_chars=context_chars,
             limit=limit,
+            page=page,
             **_period_params(period, start_date, end_date),
         )
 
@@ -695,7 +697,10 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Поиск по транскрипциям руководителя",
-        description="Finds a phrase or words in the transcripts of one supervisor from list_supervisors.",
+        description=(
+            "Finds a phrase or words in the transcripts of one supervisor from list_supervisors; "
+            "paged like search_call_transcripts."
+        ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE, TRANSCRIPT_SCOPE),
         structured_output=True,
@@ -712,6 +717,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         ] = "phrase",
         context_chars: Annotated[int, Field(ge=40, le=PREVIEW_MAX_CHARS)] = 240,
         limit: Annotated[int, Field(ge=1, le=PAGE_MAX_ITEMS)] = 25,
+        page: PageParam = 1,
     ) -> ToolResult:
         _require_scopes(STAT_SCOPE, TRANSCRIPT_SCOPE)
         return await _read(
@@ -722,6 +728,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             match_mode=match_mode,
             context_chars=context_chars,
             limit=limit,
+            page=page,
             **_period_params(period, start_date, end_date),
         )
 

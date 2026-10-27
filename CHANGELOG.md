@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.5.0 — not released
+
+Requires the OKK platform route `POST /calls/transcript-search`; until OKK
+serves it, both search tools answer `unavailable`. Update the plugin and start
+a new chat: the search answer changed.
+
+- Fix: transcript search read at most `TRANSCRIPT_SEARCH_MAX_CALLS` (1000)
+  calls of the period itself, so on a long period it never searched every
+  call and answered `partial`. Now OKK searches every visible call of the
+  period (the words travel in the JSON body, never in a URL) and returns the
+  exact count. `search_call_transcripts` and
+  `search_supervisor_call_transcripts` take `page`, and answer
+  `matching_calls_total`, `page`, `page_size`, `pages`; `scanned_calls`,
+  `candidate_calls_loaded`, `source_calls_total`, `search_call_cap` and
+  `result_limit` are gone. The gateway reads only the returned page's
+  transcripts, to cut excerpts. `TRANSCRIPT_SEARCH_MAX_CALLS` is removed.
+- The plugin folder has its own README (required by the Claude plugin
+  directory); stale tool counts in README and deployment docs corrected (25).
+
 ## 1.4.0 — released 2026-10-21
 
 Tool design measured on realistic questions (`docs/deployment.md`). Breaking

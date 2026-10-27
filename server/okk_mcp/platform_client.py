@@ -272,11 +272,28 @@ class OKKPlatformClient:
         context: AccountContext,
         payload: dict[str, Any],
     ) -> Any:
-        """Read phone history through the sole approved body-only POST route."""
+        """Read phone history through the approved body-only POST route."""
 
+        return await self._post_lookup(context, "/calls/phone-lookup", payload, "phone lookup")
+
+    async def transcript_search_with_context(
+        self,
+        context: AccountContext,
+        payload: dict[str, Any],
+    ) -> Any:
+        """Search shown transcripts through the approved body-only POST route: OKK filters the whole
+        ACL-scoped journal and returns the exact number of matching calls."""
+
+        return await self._post_lookup(context, "/calls/transcript-search", payload, "transcript search")
+
+    async def _post_lookup(
+        self, context: AccountContext, path: str, payload: dict[str, Any], contract: str
+    ) -> Any:
+        # Read-only journal reads whose filters (a phone number, words of a conversation) stay out
+        # of URLs and access logs. Only these two routes are ever posted to.
         try:
             response = await self.client.post(
-                "/calls/phone-lookup",
+                path,
                 json=payload,
                 headers={"Authorization": f"Bearer {context.access_token}"},
             )
@@ -285,7 +302,7 @@ class OKKPlatformClient:
         if response.status_code == 401:
             raise OKKAuthenticationError("OKK session is no longer valid")
         if response.status_code == 404:
-            raise OKKUnavailable("OKK phone lookup contract is temporarily unavailable")
+            raise OKKUnavailable(f"OKK {contract} contract is temporarily unavailable")
         if response.status_code == 403:
             raise OKKNotAvailable("Requested OKK data is not available")
         if response.status_code >= 500:
