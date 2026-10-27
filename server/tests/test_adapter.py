@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
+from datetime import date
 from uuid import uuid4
 
 import pytest
@@ -12,7 +14,7 @@ from okk_mcp.backend_client import AnalyticsAdapter, BackendClient, _match_posit
 from okk_mcp.config import Settings
 from okk_mcp.crypto import SessionCipher
 from okk_mcp.models import OAuthAuthorizationCode, OAuthToken, OkkAccountSession
-from okk_mcp.platform_client import AccountContext, OKKNotAvailable
+from okk_mcp.platform_client import AccountContext, OKKNotAvailable, OKKUnavailable
 
 
 @pytest.fixture
@@ -46,7 +48,12 @@ class FakePlatform:
         return await self.get(None, path, params=params)
 
     async def phone_lookup_with_context(self, _context, payload):
-        path = "/calls/phone-lookup"
+        return self._post("/calls/phone-lookup", payload)
+
+    async def transcript_search_with_context(self, _context, payload):
+        return self._post("/calls/transcript-search", payload)
+
+    def _post(self, path, payload):
         self.calls.append((path, list(payload.items())))
         value = self.responses[path]
         return value(payload) if callable(value) else value
@@ -166,9 +173,10 @@ async def test_phone_history_fails_closed_if_platform_ignores_new_filter():
             },
         },
     )
-    result = await adapter(platform).list_call_phone_records(phone_number="79991234567")
-    assert result["status"] == "temporarily_unavailable"
-    assert result["data"]["reason"] == "phone_filter_api_contract_unavailable"
+    # Before: an envelope status outside the tool's schema, so the client got a validation error
+    # instead of «OKK temporarily unavailable».
+    with pytest.raises(OKKUnavailable):
+        await adapter(platform).list_call_phone_records(phone_number="79991234567")
 
 
 @pytest.mark.anyio
@@ -1057,6 +1065,11 @@ def _versioned_csm(
         items = [row for row in rows if not wanted or row["scenario_id"] == wanted]
         return {"items": items, "total": len(items), "pages": 1}
 
+    def transcript_search(payload):
+        # Every transcript of the world holds the searched words.
+        assert "scenario_id" not in payload
+        return {"items": rows, "total": len(rows), "pages": 1}
+
     platform = FakePlatform(
         role=role,
         department_ids=(ids["department"],),
@@ -1064,6 +1077,7 @@ def _versioned_csm(
             "/departments": [{"id": ids["department"], "name": "Сопровождение", "code": "csm"}],
             "/scenarios": scenarios,
             "/calls": calls,
+            "/calls/transcript-search": transcript_search,
             **{f"/calls/{row['id']}": detail for row, detail in evaluated},
             **{
                 f"/calls/{row['id']}/transcript": {"transcript": "Менеджер: договорились о следующем шаге."}
@@ -1483,8 +1497,8 @@ async def test_department_card_by_name_returns_complete_department_sources_only(
 
     summary = await adapter(platform).get_department_statistics(department_ref="b2b", period="today")
     trend_paths = {"/dashboard/calls-trend", f"/departments/{b2b_id}/trends"}
-    # The default answer has no daily trends and does not ask OKK for them.
-    assert "daily_trend" not in summary["data"]
+    # The default answer has no trends and does not ask OKK for them.
+    assert "trend" not in summary["data"]
     assert not trend_paths & {path for path, _params in platform.calls}
 
     result = await adapter(platform).get_department_statistics(
@@ -1507,7 +1521,7 @@ async def test_department_card_by_name_returns_complete_department_sources_only(
         "summary",
         "complete_employee_ranking",
         "plan_fact",
-        "daily_trend",
+        "trend",
         "department_and_employee_trends",
     }
     assert result["employee_roster_grounding"] == {
@@ -1978,82 +1992,87 @@ async def test_employee_only_filter_derives_and_reports_the_real_department_scop
 
 
 @pytest.mark.anyio
-async def test_growth_mentions_count_unique_employees_not_duplicate_text_occurrences():
+async def test_department_growth_insights_keep_okk_order_and_cut_lists():
+    # Before: the gateway counted employees per criterion and broke ties alphabetically, so with
+    # limit=2 «Завершение» (1.1 points lost per call) fell out while «Аргументация» (0.3) stayed.
     department_id = str(uuid4())
-    first_id, second_id = str(uuid4()), str(uuid4())
-    employees = [
+    people = [{"employee_id": str(uuid4()), "name": f"Сотрудник {index}", "calls": 1} for index in range(7)]
+    zones = [
         {
-            "id": first_id,
-            "full_name": "First",
-            "department_id": department_id,
-            "department": {"id": department_id, "name": "B2B", "code": "b2b"},
+            "name": "Завершение",
+            "missed_calls": 1,
+            "evaluated_calls": 4,
+            "average_lost": 1.1,
+            "employees": people,
         },
-        {
-            "id": second_id,
-            "full_name": "Second",
-            "department_id": department_id,
-            "department": {"id": department_id, "name": "B2B", "code": "b2b"},
-        },
+        {"name": "Выявление", "missed_calls": 1, "evaluated_calls": 4, "average_lost": 0.8},
+        {"name": "Аргументация", "missed_calls": 1, "evaluated_calls": 4, "average_lost": 0.3},
     ]
-    platform = FakePlatform(
-        department_ids=(department_id,),
-        responses={
-            "/departments": [{"id": department_id, "name": "B2B", "code": "b2b"}],
-            "/employees": {"items": employees, "total": 2, "pages": 1},
-            f"/employees/{first_id}/page-data": {
-                "aggregated_strengths": ["Discovery", " discovery ", {"text": "DISCOVERY"}],
-            },
-            f"/employees/{second_id}/page-data": {"aggregated_strengths": ["DISCOVERY"]},
-        },
-    )
-
-    result = await adapter(platform).get_growth_insights(department_ref="b2b", period="today")
-
-    assert result["data"]["strengths"] == [{"text": "Discovery", "employee_mentions": 2}]
-
-
-@pytest.mark.anyio
-async def test_growth_mentions_count_criteria_when_okk_lines_carry_personal_numbers():
-    # The new OKK writes each employee's own numbers into the text lines: counted by line, every
-    # growth area had one mention. The shared criterion name lives in `insights.summary`.
-    department_id = str(uuid4())
-    first_id, second_id = str(uuid4()), str(uuid4())
-    employees = [
-        {
-            "id": employee_id,
-            "full_name": employee_id,
-            "department_id": department_id,
-            "department": {"id": department_id, "name": "Сопровождение", "code": "csm"},
-        }
-        for employee_id in (first_id, second_id)
-    ]
-
-    def page(missed: int, lost: str) -> dict:
-        return {
-            "aggregated_improvements": [
-                f"Следующий шаг — недобор в {missed} из 4 звонков, теряет в среднем {lost} балла"
-            ],
-            "insights": {
-                "summary": {
-                    "growth_zones": [{"name": "Следующий шаг", "missed_calls": missed, "evaluated_calls": 4}],
-                    "strengths": [],
-                }
-            },
-        }
-
     platform = FakePlatform(
         department_ids=(department_id,),
         responses={
             "/departments": [{"id": department_id, "name": "Сопровождение", "code": "csm"}],
-            "/employees": {"items": employees, "total": 2, "pages": 1},
-            f"/employees/{first_id}/page-data": page(1, "6,0"),
-            f"/employees/{second_id}/page-data": page(3, "4,5"),
+            f"/departments/{department_id}/insights": {
+                "calls": 4,
+                "growth_zones": zones,
+                "strengths": [],
+                "violations": [{"key": "stop_words", "name": "Стоп-слова", "calls": 1, "checked_calls": 4}],
+            },
         },
     )
 
-    result = await adapter(platform).get_growth_insights(department_ref="csm", period="today")
+    result = await adapter(platform).get_growth_insights(department_ref="csm", period="today", limit=2)
 
-    assert result["data"]["growth_areas"] == [{"text": "Следующий шаг", "employee_mentions": 2}]
+    data = result["data"]
+    assert [zone["name"] for zone in data["growth_zones"]] == ["Завершение", "Выявление"]
+    assert data["growth_zones_total"] == 3
+    assert (len(data["growth_zones"][0]["employees"]), data["growth_zones"][0]["employees_total"]) == (5, 7)
+    assert [row["key"] for row in data["violations"]] == ["stop_words"]
+    assert result["status"] == "ok"
+    asked = dict(next(params for path, params in platform.calls if path.endswith("/insights")))
+    assert (asked["period"], asked["start_date"]) == ("custom", result["period"]["start"])
+
+
+@pytest.mark.anyio
+async def test_employee_focus_never_sends_the_model_explanation_of_a_call():
+    department_id, employee_id = str(uuid4()), str(uuid4())
+    example = {
+        "call_id": str(uuid4()),
+        "text": "Модель: менеджер не назвал следующий шаг",
+        "start_seconds": 12,
+    }
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Сопровождение", "code": "csm"}],
+            "/employees/restricted": [],
+            f"/employees/{employee_id}": {
+                "id": employee_id,
+                "full_name": "Сотрудник",
+                "department_id": department_id,
+            },
+            f"/employees/{employee_id}/page-data": {
+                "insights": {
+                    "summary": {"calls": 3, "growth_zones": [], "strengths": [], "violations": []},
+                    "focus": {
+                        "week_start": "2026-10-19",
+                        "week_end": "2026-10-25",
+                        "calls": 3,
+                        "items": [{"name": "Следующий шаг", "average_lost": 2.0, "example": example}],
+                        "violations": [
+                            {"key": "stop_words", "name": "Стоп-слова", "calls": 1, "example": example}
+                        ],
+                    },
+                }
+            },
+        },
+    )
+
+    result = await adapter(platform).get_growth_insights(employee_id=employee_id, period="today")
+
+    focus = result["data"]["weekly_focus"]
+    assert [item["name"] for item in focus["growth_zones"]] == ["Следующий шаг"]
+    assert "Модель:" not in json.dumps(result, ensure_ascii=False)
 
 
 @pytest.mark.anyio
@@ -2467,6 +2486,7 @@ async def test_supervisor_transcript_tools_use_private_catalog_and_enforce_emplo
             "/departments": [],
             "/employees/restricted": [supervisor],
             "/calls": {"items": [call], "total": 1, "page": 1, "page_size": 25, "pages": 1},
+            "/calls/transcript-search": {"items": [call], "total": 1, "page": 1, "pages": 1},
             f"/calls/{call_id}": call,
             f"/calls/{call_id}/transcript": {"transcript": transcript},
         },
@@ -2504,6 +2524,9 @@ async def test_supervisor_transcript_tools_use_private_catalog_and_enforce_emplo
     assert "audio.mp3" not in serialized
     call_query = dict(next(params for path, params in platform.calls if path == "/calls"))
     assert call_query["employee_id"] == supervisor_id
+    search_body = dict(next(params for path, params in platform.calls if path == "/calls/transcript-search"))
+    assert search_body["employee_id"] == supervisor_id
+    assert search_body["transcript_query"] == "следующий шаг"
 
 
 @pytest.mark.anyio
@@ -2684,11 +2707,12 @@ async def test_gateway_drops_a_hidden_department_call_even_if_upstream_list_leak
     assert not any(path.endswith("/transcript") for path, _params in platform.calls)
 
 
-@pytest.mark.anyio
-async def test_search_call_transcripts_matches_only_acl_visible_calls_and_reports_completeness():
+def _searched_sales(*, hidden_call: bool = False) -> tuple[FakePlatform, str, list[str]]:
+    """OKK found 1203 calls with the phrase; one page of them comes back. The second call's
+    transcript no longer holds the phrase (it changed after the match)."""
     department_id, employee_id = str(uuid4()), str(uuid4())
-    first_call_id, second_call_id = str(uuid4()), str(uuid4())
-    call_rows = [
+    call_ids = [str(uuid4()), str(uuid4())]
+    rows = [
         {
             "id": call_id,
             "employee_id": employee_id,
@@ -2699,21 +2723,32 @@ async def test_search_call_transcripts_matches_only_acl_visible_calls_and_report
                 "department": {"id": department_id, "name": "Sales", "code": "sales"},
             },
         }
-        for index, call_id in enumerate((first_call_id, second_call_id), start=1)
+        for index, call_id in enumerate(call_ids, start=1)
     ]
+    if hidden_call:
+        other_department = {"id": str(uuid4()), "name": "Hidden", "code": "hidden"}
+        rows.append(
+            {"id": str(uuid4()), "employee_id": str(uuid4()), "employee": {"department": other_department}}
+        )
     platform = FakePlatform(
         department_ids=(department_id,),
         responses={
             "/departments": [{"id": department_id, "name": "Sales", "code": "sales"}],
-            "/calls": {"items": call_rows, "total": 2, "pages": 1},
-            f"/calls/{first_call_id}/transcript": {
+            "/calls/transcript-search": {"items": rows, "total": 1203, "pages": 602},
+            f"/calls/{call_ids[0]}/transcript": {
                 "transcript": "Manager: We discussed delivery next Tuesday with the client."
             },
-            f"/calls/{second_call_id}/transcript": {
-                "transcript": "Manager: The customer asked only about pricing."
-            },
+            f"/calls/{call_ids[1]}/transcript": {"transcript": "Manager: The customer asked about pricing."},
         },
     )
+    return platform, department_id, call_ids
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("page", "result_complete"), [(1, False), (602, True)])
+async def test_search_call_transcripts_reports_the_exact_okk_count_and_pages(page, result_complete):
+    # Before: the gateway scanned at most 1000 calls itself, so a long period was never searched whole.
+    platform, department_id, call_ids = _searched_sales()
 
     result = await adapter(platform).search_call_transcripts(
         "delivery next Tuesday",
@@ -2721,53 +2756,229 @@ async def test_search_call_transcripts_matches_only_acl_visible_calls_and_report
         period="custom",
         start_date="2026-07-01",
         end_date="2026-07-18",
+        limit=2,
+        page=page,
     )
 
+    data = result["data"]
     assert result["status"] == "ok"
-    assert result["data"]["source_complete"] is True
-    assert result["data"]["scanned_calls"] == 2
-    assert result["data"]["returned_matches"] == 1
-    assert result["data"]["items"][0]["call"]["id"] == first_call_id
-    assert "delivery next Tuesday" in result["data"]["items"][0]["excerpts"][0]["text"]
-    calls_params = dict(next(params for path, params in platform.calls if path == "/calls"))
-    assert calls_params["department_id"] == department_id
+    assert (data["matching_calls_total"], data["pages"], data["page"]) == (1203, 602, page)
+    assert data["source_complete"] is True
+    assert data["result_complete"] is result_complete
+    assert [item["call"]["id"] for item in data["items"]] == call_ids
+    assert "delivery next Tuesday" in data["items"][0]["excerpts"][0]["text"]
+    assert (data["items"][1]["match_count"], data["items"][1]["excerpts"]) == (0, [])
+    body = dict(next(params for path, params in platform.calls if path == "/calls/transcript-search"))
+    assert body == {
+        "transcript_query": "delivery next Tuesday",
+        "transcript_match": "phrase",
+        "department_id": department_id,
+        "date_from": "2026-07-01",
+        "date_to": "2026-07-18",
+        "page": page,
+        "page_size": 2,
+    }
+    assert not any(path == "/calls" for path, _params in platform.calls)
 
 
 @pytest.mark.anyio
-async def test_transcript_search_cap_returns_partial_instead_of_false_exhaustive_no_data():
-    department_id, employee_id = str(uuid4()), str(uuid4())
-    call_ids = [str(uuid4()) for _ in range(30)]
-    calls = [
-        {
-            "id": call_id,
-            "employee_id": employee_id,
-            "employee": {
-                "id": employee_id,
-                "full_name": "Visible Employee",
-                "department": {"id": department_id, "name": "Sales", "code": "sales"},
-            },
-        }
-        for call_id in call_ids
-    ]
-    responses = {
-        "/departments": [{"id": department_id, "name": "Sales", "code": "sales"}],
-        "/calls": {"items": calls, "total": 30, "pages": 1},
-        **{
-            f"/calls/{call_id}/transcript": {"transcript": "No matching phrase here."}
-            for call_id in call_ids[:25]
-        },
-    }
-    platform = FakePlatform(department_ids=(department_id,), responses=responses)
-    analytics = AnalyticsAdapter(
-        platform,
-        str(platform.context.session_id),
-        Settings(transcript_search_max_calls=25),
-    )
+async def test_search_call_transcripts_marks_a_matched_call_outside_the_acl_as_partial():
+    platform, _department_id, call_ids = _searched_sales(hidden_call=True)
 
-    result = await analytics.search_call_transcripts("needle", period="today")
+    result = await adapter(platform).search_call_transcripts("delivery next Tuesday", department_ref="Sales")
 
     assert result["status"] == "partial"
-    assert result["data"]["returned_matches"] == 0
-    assert result["data"]["scanned_calls"] == 25
-    assert result["data"]["source_calls_total"] == 30
+    assert result["omitted_filters_count"] == 1
     assert result["data"]["source_complete"] is False
+    assert [item["call"]["id"] for item in result["data"]["items"]] == call_ids
+    assert "Hidden" not in str(result)
+
+
+_JOURNAL_FILTERS = {
+    "quality": "below_norm",
+    "result": "successful",
+    "critical_errors": ["stop_words", "name:Хамство"],
+    "criteria_below": [{"criterion": "speech", "points": 7.0}],
+    "min_duration_seconds": 120,
+}
+_OKK_JOURNAL_PARAMS = {
+    ("quality", "below_norm"),
+    ("result", "successful"),
+    ("violation", "stop_words"),
+    ("violation", "name:Хамство"),
+    ("criterion", "speech:7"),
+    ("min_duration", "120"),
+}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("tool", ["list", "search", "phone"])
+async def test_journal_filters_reach_okk_as_its_own_journal_parameters(tool):
+    # OKK applies every filter rule: «below_norm» must arrive as its `quality`, a critical error as
+    # its `violation` key, a criterion condition as «key:points».
+    platform, _department_id, _call_ids = _searched_sales()
+    platform.responses["/calls"] = {"items": [], "total": 0, "pages": 0}
+    platform.responses["/calls/phone-lookup"] = {"items": [], "total": 0, "pages": 0}
+    analytics = adapter(platform)
+
+    if tool == "list":
+        result = await analytics.list_call_transcripts(department_ref="Sales", filters=_JOURNAL_FILTERS)
+        path = "/calls"
+    elif tool == "search":
+        result = await analytics.search_call_transcripts(
+            "delivery", department_ref="Sales", filters=_JOURNAL_FILTERS
+        )
+        path = "/calls/transcript-search"
+    else:
+        result = await analytics.list_call_phone_records(department_ref="Sales", filters=_JOURNAL_FILTERS)
+        path = "/calls/phone-lookup"
+
+    sent = next(params for asked, params in platform.calls if asked == path)
+    flat = {
+        (key, str(item)) for key, value in sent for item in (value if isinstance(value, list) else [value])
+    }
+    assert _OKK_JOURNAL_PARAMS <= flat
+    assert result["effective_scope"]["filters"] == _JOURNAL_FILTERS
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("tool", ["scenario", "criterion"])
+async def test_scenario_and_criterion_results_count_only_evaluated_calls_of_the_indicators(tool):
+    # Before: any call with a score counted, manually excluded and short ones too, so a scenario's
+    # average differed from its department's.
+    platform, _ids = _versioned_csm(role="admin")
+    analytics = adapter(platform)
+
+    if tool == "scenario":
+        await analytics.get_scenario_performance(
+            period="custom", start_date="2026-10-01", end_date="2026-10-20"
+        )
+    else:
+        await analytics.get_criterion_performance(
+            period="custom", start_date="2026-10-01", end_date="2026-10-20"
+        )
+
+    journal_reads = [dict(params) for path, params in platform.calls if path == "/calls"]
+    assert journal_reads and all(params.get("kpi_evaluated") == "true" for params in journal_reads)
+
+
+@pytest.mark.anyio
+async def test_a_call_that_moved_between_two_pages_is_counted_once():
+    # A new call arriving between page 1 and page 2 shifts the next page by one row.
+    department_id, employee_id = str(uuid4()), str(uuid4())
+    employee = {"id": employee_id, "department": {"id": department_id, "name": "Sales", "code": "sales"}}
+    rows = [{"id": str(uuid4()), "employee_id": employee_id, "employee": employee} for _ in range(150)]
+
+    def pages(params):
+        # Row 99 comes again at the top of page 2.
+        return {"items": rows[99:] if dict(params)["page"] == "2" else rows[:100], "total": 151, "pages": 2}
+
+    platform = FakePlatform(department_ids=(department_id,), responses={"/calls": pages})
+
+    calls, _total, complete = await adapter(platform).calls(start=date(2026, 7, 1), end=date(2026, 7, 31))
+
+    assert complete is True
+    assert len(calls) == len({call["id"] for call in calls}) == 150
+
+
+@pytest.mark.anyio
+async def test_past_call_of_a_transferred_employee_opens_by_the_call_department():
+    # Before: the card has no nested department, so the gateway took the employee's current
+    # department, and the old department's head could not open a call seen in the list.
+    old_department, new_department, employee_id, call_id = (str(uuid4()) for _ in range(4))
+    platform = FakePlatform(
+        department_ids=(old_department,),
+        responses={
+            "/departments": [{"id": old_department, "name": "Сопровождение", "code": "csm"}],
+            "/employees/restricted": [],
+            f"/employees/{employee_id}": {
+                "id": employee_id,
+                "full_name": "Сотрудник",
+                "department_id": new_department,
+            },
+            f"/calls/{call_id}": {
+                "id": call_id,
+                "employee_id": employee_id,
+                "department_id": old_department,
+                "employee": {"id": employee_id, "full_name": "Сотрудник", "department_id": new_department},
+            },
+            f"/calls/{call_id}/transcript": {"transcript": "Менеджер: добрый день."},
+        },
+    )
+
+    result = await adapter(platform).get_call_transcript(call_id)
+
+    assert result["status"] == "ok"
+    assert result["data"]["call"]["employee"]["department"]["code"] == "csm"
+
+
+@pytest.mark.anyio
+async def test_trends_ask_okk_for_points_that_fit_the_period():
+    # Before: daily points only — 252 of them for «all time».
+    department_id = str(uuid4())
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Sales", "code": "sales"}],
+            "/calls/stats/summary": {},
+            "/dashboard/calls-trend": [{"date": "2026-01-01", "step": "month", "total": 3}],
+        },
+    )
+
+    result = await adapter(platform).get_call_statistics(department_ref="sales", period="year")
+
+    asked = dict(next(params for path, params in platform.calls if path == "/dashboard/calls-trend"))
+    assert asked["step"] == "auto"
+    assert result["data"]["trend"][0]["step"] == "month"
+
+
+@pytest.mark.anyio
+async def test_criterion_results_survive_a_call_deleted_after_the_list_was_read():
+    platform, _ids = _versioned_csm(role="admin")
+    # The detail of one evaluated call (`/calls/<id>`, not a transcript or the search route).
+    deleted = next(path for path in platform.responses if re.fullmatch(r"/calls/[0-9a-f-]{36}", path))
+
+    def gone(_params):
+        raise OKKNotAvailable("deleted")
+
+    platform.responses[deleted] = gone
+
+    result = await adapter(platform).get_criterion_performance(
+        period="custom", start_date="2026-10-01", end_date="2026-10-20"
+    )
+
+    assert result["status"] == "partial"
+    assert result["effective_scope"]["excluded_evaluation_reasons"]["evaluation_items_unavailable"] == 1
+    assert result["data"]["criteria"]
+
+
+@pytest.mark.anyio
+async def test_employee_card_survives_crm_being_down():
+    # Before: OKK answering 503 for Bitrix failed the whole card.
+    department_id, employee_id = str(uuid4()), str(uuid4())
+
+    def crm_down(_params):
+        raise OKKUnavailable("bitrix")
+
+    platform = FakePlatform(
+        department_ids=(department_id,),
+        responses={
+            "/departments": [{"id": department_id, "name": "Sales", "code": "sales"}],
+            "/employees/restricted": [],
+            f"/employees/{employee_id}": {
+                "id": employee_id,
+                "full_name": "Сотрудник",
+                "department_id": department_id,
+            },
+            f"/employees/{employee_id}/page-data": {"kpi": {"calls_total": 2}},
+            f"/employees/{employee_id}/summary": {"calls_total": 2, "quality_by_call": [{"score": 80}]},
+            f"/employees/{employee_id}/bitrix-metrics": crm_down,
+            "/call-plans/plan-fact": {"mode": None, "weeks": [], "items": []},
+        },
+    )
+
+    result = await adapter(platform).get_employee_card(employee_id, period="today")
+
+    assert result["status"] == "partial"
+    assert result["data"]["kpi"] == {"calls_total": 2}
+    assert "quality_by_call" not in result["data"]["period_summary"]

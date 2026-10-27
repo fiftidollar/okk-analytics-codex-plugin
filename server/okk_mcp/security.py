@@ -133,8 +133,17 @@ def _serialize_redirect_host(host: str) -> str:
     return address.compressed
 
 
+_PKCE_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
+
+
+def _valid_pkce_string(value: str) -> bool:
+    """RFC 7636: 43-128 unreserved characters, for both the verifier and the challenge."""
+
+    return 43 <= len(value) <= 128 and all(char in _PKCE_CHARACTERS for char in value)
+
+
 def verify_pkce(verifier: str, challenge: str) -> bool:
-    if not 43 <= len(verifier) <= 128:
+    if not _valid_pkce_string(verifier):
         return False
     digest = hashlib.sha256(verifier.encode("ascii")).digest()
     calculated = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
@@ -142,7 +151,4 @@ def verify_pkce(verifier: str, challenge: str) -> bool:
 
 
 def valid_pkce_challenge(challenge: str, method: str) -> bool:
-    if method != "S256" or not 43 <= len(challenge) <= 128:
-        return False
-    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
-    return all(char in allowed for char in challenge)
+    return method == "S256" and _valid_pkce_string(challenge)

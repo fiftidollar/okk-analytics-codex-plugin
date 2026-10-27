@@ -19,6 +19,7 @@ Codex MCP client
             -> /auth/login, /auth/refresh, /auth/me
             -> existing read-only analytics GET endpoints
             -> POST /calls/phone-lookup (phone in JSON body)
+            -> POST /calls/transcript-search (search words in JSON body)
             -> ACL-protected /employees/restricted
             -> ACL-protected /calls/{call_id}/transcript
 ```
@@ -57,7 +58,11 @@ The published deployment is production-only: the upstream base URL is
    only as SHA-256 hashes.
 5. Each MCP request validates the opaque MCP token, calls `/auth/me`, rotates the
    upstream refresh cookie if necessary and uses the newly returned live role
-   and `department_ids`.
+   and `department_ids`. If the OKK access token expires while a tool call
+   runs, the first read that gets 401 renews it through the same rotation and
+   repeats once; the gateway remembers the renewal per OKK session, so the
+   call's later reads (and other calls still holding the old token) use the
+   new token at once. A second 401 ends the call with the reconnect error.
 6. Every analytics call uses only an upstream GET route. Results pass through an
    explicit safe projection before MCP serialization.
 
@@ -187,10 +192,19 @@ call, because OKK ends its session when a rotating refresh token is used twice;
 a request that waited for the lock finds the token already renewed. No sticky
 sessions are required.
 
+A read that fails in transit — a dropped connection, a timeout, or 502/503/504 —
+is repeated twice, after 0.3 s and 1 s. Only reads take this path (the GET
+routes and the two body-only POST reads), so a repeat cannot change anything in
+OKK; a 4xx is OKK's answer and is never repeated. A final failure is reported as
+OKK temporarily unavailable. One read can therefore take up to about three
+`MCP_HTTP_TIMEOUT_SECONDS` (30 s by default) before it fails.
+
 Expensive cross-employee and criterion aggregation uses bounded concurrency.
 `ANALYTICS_MAX_CALLS` and `ANALYTICS_MAX_EMPLOYEES` cap a single request; a
 truncated response returns `partial` rather than silently claiming completeness.
-Transcript full-text search has its own lower
-`TRANSCRIPT_SEARCH_MAX_CALLS` cap and bounded request concurrency. Transcript
-bodies live only for the duration of the MCP request and are not written to
-PostgreSQL, Redis or operational logs.
+Transcript full-text search runs in OKK (`POST /calls/transcript-search`, the
+words travel in the body, never in a URL): OKK filters the whole ACL-scoped
+journal and returns the exact number of matching calls, the gateway reads the
+transcripts of the returned page only to cut excerpts. Transcript bodies live
+only for the duration of the MCP request and are not written to PostgreSQL,
+Redis or operational logs.

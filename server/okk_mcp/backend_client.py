@@ -27,7 +27,12 @@ from okk_mcp.platform_client import (
     OKKPlatformClient,
     OKKUnavailable,
 )
-from okk_mcp.reporting import department_report_contract, plan_fact_report_contract, safe_plan_fact
+from okk_mcp.reporting import (
+    department_report_contract,
+    plan_fact_report_contract,
+    safe_plan_fact,
+    safe_plan_item,
+)
 
 MSK = ZoneInfo("Europe/Moscow")
 # OKK phone search (`POST /calls/phone-lookup`): a whole number from 10 digits, its ending from 4.
@@ -262,30 +267,56 @@ def _crm_snapshot_state(metrics: dict[str, Any]) -> str:
     return _CRM_SNAPSHOT_STATES.get(str(metrics.get("status") or ""), "unknown_status")
 
 
-def _insight_text(value: Any) -> str | None:
-    if isinstance(value, str):
-        return value.strip() or None
-    if isinstance(value, dict):
-        for key in ("text", "name", "criterion", "description", "title"):
-            candidate = value.get(key)
-            if isinstance(candidate, str) and candidate.strip():
-                return candidate.strip()
-    return None
+def _without_plan_history(row: dict[str, Any]) -> dict[str, Any]:
+    """A ranking row whose plan items lost their edit history: who edited a plan is not analytics
+    (the rule of `safe_plan_item`, which the plan report already follows)."""
+    metrics = row.get("metrics")
+    if not isinstance(metrics, dict) or not isinstance(metrics.get("plan_items"), list):
+        return row
+    items = [safe_plan_item(item) for item in metrics["plan_items"] if isinstance(item, dict)]
+    return {**row, "metrics": {**metrics, "plan_items": items}}
 
 
-_STRUCTURED_INSIGHTS = {"strengths": "strengths", "growth_areas": "growth_zones"}
-_TEXT_INSIGHTS = {"strengths": "aggregated_strengths", "growth_areas": "aggregated_improvements"}
+# People named under one insight item: the first ones by OKK's order; the answer says how many.
+INSIGHT_PEOPLE_SHOWN = 5
 
 
-def _insight_labels(page: dict[str, Any], field: str) -> list[Any]:
-    """What to count across employees: criterion names from structured insights when OKK sends
-    them (`insights.summary`); its text lines carry each employee's own numbers and never match."""
-    insights = page.get("insights")
-    summary = insights.get("summary") if isinstance(insights, dict) else None
-    items = summary.get(_STRUCTURED_INSIGHTS[field]) if isinstance(summary, dict) else None
-    if isinstance(items, list):
-        return [item["name"] for item in items if isinstance(item, dict) and item.get("name")]
-    return page.get(_TEXT_INSIGHTS[field]) or []
+def _insights_view(summary: Any, limit: int) -> dict[str, Any]:
+    """OKK's period insights (`PeriodInsights`) in OKK's order, each list cut to `limit`."""
+    summary = summary if isinstance(summary, dict) else {}
+    view: dict[str, Any] = {"evaluated_calls": summary.get("calls")}
+    for field in ("growth_zones", "strengths", "violations"):
+        items = [item for item in summary.get(field) or [] if isinstance(item, dict)]
+        view[field] = [_insight_item(item) for item in items[:limit]]
+        view[f"{field}_total"] = len(items)
+    return view
+
+
+def _insight_item(item: dict[str, Any]) -> dict[str, Any]:
+    # An example under a focus item is the model's explanation of one call: never sent out.
+    shown = {key: value for key, value in item.items() if key not in {"employees", "example"}}
+    people = [row for row in item.get("employees") or [] if isinstance(row, dict)]
+    if people:
+        shown["employees"] = people[:INSIGHT_PEOPLE_SHOWN]
+        shown["employees_total"] = len(people)
+    return shown
+
+
+def _focus_view(focus: Any, limit: int) -> dict[str, Any] | None:
+    """The employee's focus for last week: violations first, then growth zones, without examples."""
+    if not isinstance(focus, dict):
+        return None
+    return {
+        "week_start": focus.get("week_start"),
+        "week_end": focus.get("week_end"),
+        "evaluated_calls": focus.get("calls"),
+        "violations": [
+            _insight_item(item) for item in focus.get("violations") or [] if isinstance(item, dict)
+        ],
+        "growth_zones": [
+            _insight_item(item) for item in (focus.get("items") or [])[:limit] if isinstance(item, dict)
+        ],
+    }
 
 
 def _aware_datetime(value: Any) -> datetime | None:
@@ -453,6 +484,38 @@ def _match_excerpts(
     return excerpts
 
 
+def _journal_params(filters: dict[str, Any] | None) -> dict[str, Any]:
+    """The tool's journal filters as OKK journal parameters. OKK applies every rule: «below_norm»
+    is exactly the KPI «Требуют внимания», the outcome — the KPI outcomes."""
+    chosen = filters or {}
+    params = {
+        "direction": chosen.get("direction"),
+        "result": chosen.get("result"),
+        "quality": chosen.get("quality"),
+        "status": chosen.get("evaluation"),
+        "not_evaluated_reason": chosen.get("not_evaluated_reason"),
+        "violation": list(chosen.get("critical_errors") or []) or None,
+        "violation_any": True if chosen.get("any_critical_error") else None,
+        "criterion": [
+            f"{item['criterion']}:{item['points']:g}" for item in chosen.get("criteria_below") or []
+        ]
+        or None,
+        "min_score": chosen.get("score_from"),
+        "max_score": chosen.get("score_to"),
+        "min_duration": chosen.get("min_duration_seconds"),
+    }
+    return {key: value for key, value in params.items() if value is not None}
+
+
+def _json_body(body: dict[str, Any]) -> dict[str, Any]:
+    """A POST body as JSON: period dates as ISO strings, no empty filters."""
+    return {
+        key: value.isoformat() if isinstance(value, date) else value
+        for key, value in body.items()
+        if value is not None
+    }
+
+
 class AnalyticsAdapter:
     def __init__(
         self,
@@ -476,15 +539,11 @@ class AnalyticsAdapter:
 
     async def _phone_lookup(self, **body: Any) -> Any:
         context = await self.context()
-        # The body goes out as JSON: period dates as ISO strings, not `date` objects.
-        return await self.platform.phone_lookup_with_context(
-            context,
-            {
-                key: value.isoformat() if isinstance(value, date) else value
-                for key, value in body.items()
-                if value is not None
-            },
-        )
+        return await self.platform.phone_lookup_with_context(context, _json_body(body))
+
+    async def _transcript_search(self, **body: Any) -> Any:
+        context = await self.context()
+        return await self.platform.transcript_search_with_context(context, _json_body(body))
 
     async def _bounded(self, factory: Callable[[], Awaitable[Any]]) -> Any:
         async with self._semaphore:
@@ -818,10 +877,24 @@ class AnalyticsAdapter:
             "manual_tag": row.get("manual_tag"),
             "call_summary": row.get("call_summary"),
             # The new OKK API: the norm verdict of the score and the client status (new / existing)
-            # instead of a client card.
+            # instead of a client card; why a call is not evaluated or not counted in the
+            # indicators; the B2B touch cycle; a missed call the manager followed up.
             **{
                 key: row[key]
-                for key in ("quality_status", "quality_threshold", "client_status")
+                for key in (
+                    "quality_status",
+                    "quality_threshold",
+                    "client_status",
+                    "client_category",
+                    "skip_reason",
+                    "is_manual_excluded",
+                    "is_phone_excluded",
+                    "new_client_touch_status",
+                    "new_client_touch_reason",
+                    "new_client_touch_idle_days",
+                    "unanswered",
+                    "missed_follow_up_minutes",
+                )
                 if key in row
             },
             "employee": {
@@ -888,9 +961,25 @@ class AnalyticsAdapter:
             supervisor = await self.restricted_supervisor(call_employee_id)
             if supervisor and not department_id:
                 return self._safe_supervisor_call(row, supervisor)
-            # /calls/{id} uses EmployeeResponse, which has department_id but
-            # no nested department. Resolve the live directory record before
-            # deciding that a visible call is unavailable.
+        if not call_department_id and row.get("department_id"):
+            # The call card names the call's department, which stays the old one after the
+            # employee moves: OKK grants access by it, and so does the gateway.
+            call_department_id = str(row["department_id"])
+            department = next(
+                (item for item in await self.departments() if str(item.get("id")) == call_department_id),
+                None,
+            )
+            safe["employee"] = {
+                "id": call_employee_id,
+                "full_name": nested_employee.get("full_name"),
+                "department": {key: department.get(key) for key in ("id", "name", "code")}
+                if department
+                else None,
+            }
+        elif not call_department_id:
+            # An older OKK card has no department of the call: /calls/{id} uses
+            # EmployeeResponse, which has department_id but no nested department. Resolve the
+            # live directory record before deciding that a visible call is unavailable.
             if call_employee_id not in self._call_employees:
                 self._call_employees[call_employee_id] = await self.employee(call_employee_id)
             canonical_employee = self._call_employees[call_employee_id]
@@ -1114,31 +1203,129 @@ class AnalyticsAdapter:
         department_id: str | None = None,
         employee_id: str | None = None,
         max_calls: int | None = None,
+        filters: dict[str, Any] | None = None,
+        kpi_evaluated: bool = False,
     ) -> tuple[list[dict[str, Any]], int, bool]:
+        """Journal calls of the scope, newest first, bounded by `analytics_max_calls`.
+        `kpi_evaluated` — only the evaluated calls of the indicators (the summary's «Оценено»)."""
         # No scenario filter on purpose: OKK filters `scenario_id` by the exact version, and a
         # scenario is all its versions (`_calls_of_scenario`).
         cap = min(max_calls or self.settings.analytics_max_calls, self.settings.analytics_max_calls)
-        rows: list[dict[str, Any]] = []
-        page = 1
-        total = 0
-        while len(rows) < cap:
-            payload = await self._get(
+        return await self._journal_pages(
+            lambda page: self._get(
                 "/calls",
+                department_id=department_id,
+                employee_id=employee_id,
+                date_from=start,
+                date_to=end,
+                kpi_evaluated=True if kpi_evaluated else None,
+                page=page,
+                page_size=100,
+                **_journal_params(filters),
+            ),
+            cap,
+        )
+
+    @staticmethod
+    async def _journal_pages(
+        fetch: Callable[[int], Awaitable[Any]], cap: int
+    ) -> tuple[list[dict[str, Any]], int, bool]:
+        """Every page of one journal read up to `cap` calls: the calls, OKK's total and whether
+        all of them were read."""
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        page = 1
+        while True:
+            payload = await fetch(page)
+            total = int(payload.get("total") or 0)
+            pages = int(payload.get("pages") or 1)
+            # A call that arrived between two pages shifts the next page: never count a call twice.
+            fresh = [row for row in payload.get("items") or [] if str(row.get("id")) not in seen]
+            seen.update(str(row.get("id")) for row in fresh)
+            rows.extend(fresh)
+            if len(rows) >= cap and (page < pages or len(rows) > cap):
+                return rows[:cap], total, False
+            if page >= pages:
+                return rows, total, True
+            page += 1
+
+    async def transcript_matches(
+        self,
+        *,
+        query: str,
+        match_mode: str,
+        start: date,
+        end: date,
+        department_id: str | None = None,
+        employee_id: str | None = None,
+        filters: dict[str, Any] | None = None,
+    ) -> tuple[list[dict[str, Any]], int, bool]:
+        """Every call of the scope whose shown transcript matches, bounded like `calls`."""
+        return await self._journal_pages(
+            lambda page: self._transcript_search(
+                transcript_query=query,
+                transcript_match=match_mode,
                 department_id=department_id,
                 employee_id=employee_id,
                 date_from=start,
                 date_to=end,
                 page=page,
                 page_size=100,
-            )
-            total = int(payload.get("total") or 0)
-            rows.extend(payload.get("items") or [])
-            if len(rows) >= cap and (page < int(payload.get("pages") or 1) or len(rows) > cap):
-                return rows[:cap], total, False
-            if page >= int(payload.get("pages") or 1):
-                return rows, total, True
-            page += 1
-        return rows[:cap], total, False
+                **_journal_params(filters),
+            ),
+            self.settings.analytics_max_calls,
+        )
+
+    async def _with_excerpts(
+        self,
+        calls: list[dict[str, Any]],
+        query: str,
+        match_mode: str,
+        context_chars: int,
+    ) -> list[dict[str, Any]]:
+        """Excerpts around the matches of the returned calls only. OKK already decided which calls
+        match; a call whose transcript became unavailable since stays in the result without excerpts."""
+
+        async def excerpts(call: dict[str, Any]) -> dict[str, Any]:
+            try:
+                payload = await self._bounded(lambda: self._call_transcript_payload(call["id"], "diarized"))
+            except OKKNotAvailable:
+                payload = {}
+            transcript = payload.get("transcript")
+            transcript = transcript if isinstance(transcript, str) else ""
+            positions = _match_positions(transcript, query, match_mode)
+            return {
+                "call": call,
+                "match_count": len(positions),
+                "excerpts": _match_excerpts(transcript, positions, context_chars=context_chars),
+                "transcript_chars": len(transcript),
+            }
+
+        return list(await asyncio.gather(*(excerpts(call) for call in calls)))
+
+    @staticmethod
+    def _search_data(
+        matches: list[dict[str, Any]],
+        query: str,
+        match_mode: str,
+        *,
+        total: int,
+        page: int,
+        limit: int,
+        complete: bool,
+    ) -> dict[str, Any]:
+        return {
+            "items": matches,
+            "query": query,
+            "match_mode": match_mode,
+            "matching_calls_total": total,
+            "returned_matches": len(matches),
+            "page": page,
+            "page_size": limit,
+            "pages": math.ceil(total / limit),
+            "source_complete": complete,
+            "result_complete": complete and page * limit >= total,
+        }
 
     async def dispatch(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         routes = {
@@ -1155,6 +1342,7 @@ class AnalyticsAdapter:
             "/mcp-read/call-statistics": self.get_call_statistics,
             "/mcp-read/call-phone-records": self.list_call_phone_records,
             "/mcp-read/call-transcripts": self.list_call_transcripts,
+            "/mcp-read/call-filter-options": self.get_call_filter_options,
             "/mcp-read/search-call-transcripts": self.search_call_transcripts,
             "/mcp-read/plan-fact-statistics": self.get_plan_fact_statistics,
             "/mcp-read/client-statistics": self.get_client_statistics,
@@ -1228,7 +1416,7 @@ class AnalyticsAdapter:
         common = _period_query(period, start_date, end_date)
         summary, trend, ranking, departments = await asyncio.gather(
             self._get("/dashboard/summary", department_id=department, **common),
-            self._get("/dashboard/calls-trend", department_id=department, **common),
+            self._get("/dashboard/calls-trend", department_id=department, step="auto", **common),
             self._get("/dashboard/top-employees", department_id=department, limit=top_limit, **common),
             self._get("/dashboard/by-department", **common),
         )
@@ -1257,7 +1445,7 @@ class AnalyticsAdapter:
         return await self.envelope(
             {
                 "summary": summary,
-                "daily_trend": trend,
+                "trend": trend,
                 "employee_ranking": ranking,
                 "departments": departments,
             },
@@ -1292,12 +1480,17 @@ class AnalyticsAdapter:
         common = _period_query(period, start_date, end_date)
         with_trends = detail == "full"
 
-        async def daily_trends() -> tuple[Any, Any]:
+        async def trends() -> tuple[Any, Any]:
             if not with_trends:
                 return None, None
             return await asyncio.gather(
-                self._get("/dashboard/calls-trend", department_id=resolved_id, **common),
-                self._get(f"/departments/{resolved_id}/trends", start_date=bounds[0], end_date=bounds[1]),
+                self._get("/dashboard/calls-trend", department_id=resolved_id, step="auto", **common),
+                self._get(
+                    f"/departments/{resolved_id}/trends",
+                    start_date=bounds[0],
+                    end_date=bounds[1],
+                    step="auto",
+                ),
             )
 
         # One summary and one complete ranking: the dashboard summary and the department ranking
@@ -1311,7 +1504,7 @@ class AnalyticsAdapter:
                 start_date=bounds[0],
                 end_date=bounds[1],
             ),
-            daily_trends(),
+            trends(),
             self.employees(department_id=resolved_id, include_inactive=False),
         )
         roster, roster_complete, _, roster_excluded = roster_result
@@ -1322,6 +1515,9 @@ class AnalyticsAdapter:
             removed_ranking,
             normalized_ranking,
         ) = self._ground_employee_rows(department_ranking.get("employees"), roster, "employee_id", "id")
+        department_ranking["employees"] = [
+            _without_plan_history(row) for row in department_ranking["employees"]
+        ]
         removed_trends = normalized_trends = 0
         if department_trends is not None:
             department_trends = dict(department_trends)
@@ -1352,7 +1548,7 @@ class AnalyticsAdapter:
             "plan_fact": plan_fact,
         }
         if with_trends:
-            data["daily_trend"] = trend
+            data["trend"] = trend
             data["department_and_employee_trends"] = department_trends
         return await self.envelope(
             data,
@@ -1403,7 +1599,7 @@ class AnalyticsAdapter:
         common = _period_query(period, start_date, end_date)
         stats, trends = await asyncio.gather(
             self._get("/dashboard/by-department", **common),
-            self._get("/dashboard/departments-trend", **common),
+            self._get("/dashboard/departments-trend", step="auto", **common),
         )
         data = {
             "statistics": [
@@ -1588,12 +1784,14 @@ class AnalyticsAdapter:
                 f"/employees/{employee_id}/summary", period="custom", start_date=bounds[0], end_date=bounds[1]
             ),
             self.optional_plan_fact(department_row, *bounds, [employee], employee_id=employee["id"]),
-            self._get(f"/employees/{employee_id}/bitrix-metrics"),
+            self._crm_metrics(employee_id),
         )
         data = {
             "employee": employee,
             "kpi": page_data.get("kpi") or {},
-            "period_summary": summary,
+            # Without the score of every call: ~190 characters each made a long period's card exceed
+            # what clients accept (50,000). The points of the chart (`quality_points`) stay.
+            "period_summary": {key: value for key, value in summary.items() if key != "quality_by_call"},
             "plan_fact": plan,
             "ai_insights": {
                 "strengths": page_data.get("aggregated_strengths") or [],
@@ -1725,13 +1923,14 @@ class AnalyticsAdapter:
         employee: str | None,
         scenario_row: dict[str, Any],
         catalog: list[dict[str, Any]],
+        filters: dict[str, Any] | None = None,
     ) -> tuple[list[dict[str, Any]], bool, str, Counter[str]]:
         """Calls of every version of the requested scenario in the scope. OKK filters `scenario_id`
         by the exact version, so the scope is read whole and the scenario's calls are taken here.
         Returns the calls, whether the scope was read completely, the scenario code and what could
         not be placed."""
         calls, _, complete = await self.calls(
-            start=bounds[0], end=bounds[1], department_id=department, employee_id=employee
+            start=bounds[0], end=bounds[1], department_id=department, employee_id=employee, filters=filters
         )
         version_codes = _scenario_versions_by_code(catalog, calls)
         scenario_code = version_codes[str(scenario_row.get("id"))]
@@ -1749,6 +1948,7 @@ class AnalyticsAdapter:
         end_date: str | None = None,
         transcript_format: str = "diarized",
         preview_chars: int = 300,
+        filters: dict[str, Any] | None = None,
         page: int = 1,
         page_size: int = 25,
         **_: Any,
@@ -1781,6 +1981,7 @@ class AnalyticsAdapter:
                 date_to=bounds[1],
                 page=page,
                 page_size=page_size,
+                **_journal_params(filters),
             )
         else:
             # A scenario is all its versions: its calls are taken from the whole scope and paged here.
@@ -1790,6 +1991,7 @@ class AnalyticsAdapter:
                 employee=employee,
                 scenario_row=scenario_row,
                 catalog=catalog,
+                filters=filters,
             )
             payload = {
                 "items": selected[(page - 1) * page_size : page * page_size],
@@ -1824,6 +2026,7 @@ class AnalyticsAdapter:
                 preview = text[:preview_chars] if preview_chars else ""
                 available = bool(text.strip())
                 transcript_size = len(text)
+            phrase = row.get("violation_phrase")
             return {
                 "call": call,
                 "transcript_format": transcript_format,
@@ -1831,6 +2034,17 @@ class AnalyticsAdapter:
                 "transcript_size": transcript_size,
                 "preview": preview,
                 "preview_truncated": bool(available and transcript_size > len(preview)),
+                # The critical error phrase the journal row shows, with its second in the recording.
+                **(
+                    {
+                        "violation_phrase": {
+                            "text": phrase.get("text"),
+                            "start_seconds": phrase.get("start_seconds"),
+                        }
+                    }
+                    if isinstance(phrase, dict)
+                    else {}
+                ),
             }
 
         loaded = await asyncio.gather(*(load(row) for row in payload.get("items") or []))
@@ -1857,10 +2071,42 @@ class AnalyticsAdapter:
                 "transcript_format": transcript_format,
                 "excluded_calls": sum(excluded.values()),
                 "excluded_call_reasons": dict(sorted(excluded.items())),
+                **({"filters": filters} if filters else {}),
             },
             period=bounds,
             omitted=omitted,
         )
+
+    async def get_call_filter_options(
+        self, department_id: Any = None, department_ref: Any = None, **_: Any
+    ) -> dict[str, Any]:
+        """The journal filter values with OKK's labels; keys of critical errors and criteria come
+        from the active scenarios (of the department when given)."""
+        department_row, selector_supplied = await self.resolve_department(
+            department_id=department_id, department_ref=department_ref
+        )
+        if selector_supplied and not department_row:
+            return await self.unavailable_department()
+        payload = await self._get(
+            "/calls/filter-options", department_id=str(department_row["id"]) if department_row else None
+        )
+
+        def options(key: str, *fields: str) -> list[dict[str, Any]]:
+            return [
+                {field: item.get(field) for field in ("value", "label", *fields)}
+                for item in payload.get(key) or []
+                if isinstance(item, dict)
+            ]
+
+        data = {
+            "directions": options("directions"),
+            "results": options("results"),
+            "qualities": options("qualities"),
+            "not_evaluated_reasons": options("not_evaluated_reasons"),
+            "critical_errors": options("violations"),
+            "criteria": options("criteria", "hint"),
+        }
+        return await self.envelope(data, scope=self.department_scope(department_row))
 
     async def get_call_transcript(
         self,
@@ -1962,6 +2208,7 @@ class AnalyticsAdapter:
         supervisor_id: str | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
+        filters: dict[str, Any] | None = None,
         page: int = 1,
         page_size: int = 25,
         **_: Any,
@@ -1997,7 +2244,10 @@ class AnalyticsAdapter:
             date_to=bounds[1] if bounds else None,
             page=page,
             page_size=page_size,
+            **_journal_params(filters),
         )
+        if filters:
+            scope = {**scope, "filters": filters}
         rows = payload.get("items") or []
         if normalized_phone and not rows and int(payload.get("total") or 0) > 0:
             return await self.envelope(
@@ -2016,12 +2266,8 @@ class AnalyticsAdapter:
             )
             for row in rows
         ):
-            return await self.envelope(
-                {"reason": "phone_filter_api_contract_unavailable"},
-                status="temporarily_unavailable",
-                scope=scope,
-                period=bounds,
-            )
+            # An OKK that ignored the phone filter: no answer is safer than an unfiltered one.
+            raise OKKUnavailable("OKK phone filter contract is unavailable")
         visible = await asyncio.gather(
             *(
                 self._bounded(
@@ -2080,6 +2326,8 @@ class AnalyticsAdapter:
         match_mode: str = "phrase",
         context_chars: int = 240,
         limit: int = 25,
+        page: int = 1,
+        filters: dict[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
         query = query.strip()
@@ -2103,29 +2351,39 @@ class AnalyticsAdapter:
         scenario = str(scenario_row.get("id")) if scenario_row else None
         scenario_code: str | None = None
         excluded: Counter[str] = Counter()
-        cap = self.settings.transcript_search_max_calls
         if scenario_row is None:
-            calls, total, calls_complete = await self.calls(
+            # OKK searches the whole ACL-scoped journal: `total` is the exact number of matching calls.
+            payload = await self._transcript_search(
+                transcript_query=query,
+                transcript_match=match_mode,
+                department_id=department,
+                employee_id=employee,
+                date_from=bounds[0],
+                date_to=bounds[1],
+                page=page,
+                page_size=limit,
+                **_journal_params(filters),
+            )
+            rows, total, complete = payload.get("items") or [], int(payload.get("total") or 0), True
+        else:
+            # A scenario is all its versions and OKK filters `scenario_id` by the exact version: every
+            # matching call of the scope comes from OKK, the scenario's calls are taken here.
+            matched, _matched_total, complete = await self.transcript_matches(
+                query=query,
+                match_mode=match_mode,
                 start=bounds[0],
                 end=bounds[1],
                 department_id=department,
                 employee_id=employee,
-                max_calls=cap,
+                filters=filters,
             )
-        else:
-            # A scenario is all its versions: its calls come from the whole scope, then the search cap.
-            selected, scope_complete, scenario_code, excluded = await self._scenario_scope_calls(
-                bounds=bounds,
-                department=department,
-                employee=employee,
-                scenario_row=scenario_row,
-                catalog=catalog,
-            )
-            calls, total = selected[:cap], len(selected)
-            calls_complete = scope_complete and len(selected) <= cap
+            version_codes = _scenario_versions_by_code(catalog, matched)
+            scenario_code = version_codes[str(scenario_row.get("id"))]
+            selected, excluded = _calls_of_scenario(matched, scenario_code, version_codes)
+            rows, total = selected[(page - 1) * limit : page * limit], len(selected)
         visible_calls: list[dict[str, Any]] = []
         omitted = 0
-        for row in calls:
+        for row in rows:
             call = await self._visible_call(
                 row,
                 department_id=department,
@@ -2135,62 +2393,13 @@ class AnalyticsAdapter:
                 visible_calls.append(call)
             else:
                 omitted += 1
-
-        async def search(call: dict[str, Any]) -> dict[str, Any] | None:
-            try:
-                payload = await self._bounded(lambda: self._call_transcript_payload(call["id"], "diarized"))
-            except OKKNotAvailable:
-                return None
-            transcript = payload.get("transcript")
-            if not isinstance(transcript, str) or not transcript.strip():
-                return None
-            positions = _match_positions(transcript, query, match_mode)
-            if not positions:
-                return None
-            return {
-                "call": call,
-                "match_count": len(positions),
-                "excerpts": _match_excerpts(
-                    transcript,
-                    positions,
-                    context_chars=context_chars,
-                ),
-                "transcript_chars": len(transcript),
-            }
-
-        matches: list[dict[str, Any]] = []
-        scanned = 0
-        batch_size = self.settings.analytics_parallel_requests
-        for start in range(0, len(visible_calls), batch_size):
-            batch = visible_calls[start : start + batch_size]
-            batch_matches = await asyncio.gather(*(search(call) for call in batch))
-            scanned += len(batch)
-            matches.extend(row for row in batch_matches if row is not None)
-            if len(matches) >= limit:
-                break
-        result_complete = len(matches) <= limit and scanned == len(visible_calls)
-        matches = matches[:limit]
-        source_complete = calls_complete and scanned == len(visible_calls)
-        data = {
-            "items": matches,
-            "query": query,
-            "match_mode": match_mode,
-            "returned_matches": len(matches),
-            "scanned_calls": scanned,
-            "candidate_calls_loaded": len(visible_calls),
-            "source_calls_total": total,
-            "source_complete": source_complete,
-            "result_complete": result_complete,
-            "search_call_cap": self.settings.transcript_search_max_calls,
-            "result_limit": limit,
-        }
+        matches = await self._with_excerpts(visible_calls, query, match_mode, context_chars)
+        data = self._search_data(
+            matches, query, match_mode, total=total, page=page, limit=limit, complete=complete and not omitted
+        )
         return await self.envelope(
             data,
-            status=(
-                "partial"
-                if not source_complete or not result_complete or excluded
-                else ("ok" if matches else "no_data")
-            ),
+            status="partial" if not data["source_complete"] or excluded else ("ok" if total else "no_data"),
             scope={
                 **self.department_scope(department_row),
                 "employee_id": employee,
@@ -2199,6 +2408,7 @@ class AnalyticsAdapter:
                 "transcript_format": "diarized",
                 "excluded_calls": sum(excluded.values()),
                 "excluded_call_reasons": dict(sorted(excluded.items())),
+                **({"filters": filters} if filters else {}),
             },
             period=bounds,
             omitted=omitted,
@@ -2360,6 +2570,7 @@ class AnalyticsAdapter:
         match_mode: str = "phrase",
         context_chars: int = 240,
         limit: int = 25,
+        page: int = 1,
         **_: Any,
     ) -> dict[str, Any]:
         query = query.strip()
@@ -2369,75 +2580,34 @@ class AnalyticsAdapter:
         supervisor = await self.restricted_supervisor(supervisor_id)
         if not supervisor:
             return await self.envelope({}, status="not_available", period=bounds)
-        calls, total, calls_complete = await self.calls(
-            start=bounds[0],
-            end=bounds[1],
+        payload = await self._transcript_search(
+            transcript_query=query,
+            transcript_match=match_mode,
             employee_id=supervisor["id"],
-            max_calls=self.settings.transcript_search_max_calls,
+            date_from=bounds[0],
+            date_to=bounds[1],
+            page=page,
+            page_size=limit,
         )
+        total = int(payload.get("total") or 0)
         visible_calls: list[dict[str, Any]] = []
         omitted = 0
-        for row in calls:
+        for row in payload.get("items") or []:
             call = await self._visible_call(row, employee_id=supervisor["id"])
             if call and ((call.get("employee") or {}).get("section") == "supervisors"):
                 visible_calls.append(call)
             else:
                 omitted += 1
-
-        async def search(call: dict[str, Any]) -> dict[str, Any] | None:
-            try:
-                payload = await self._bounded(lambda: self._call_transcript_payload(call["id"], "diarized"))
-            except OKKNotAvailable:
-                return None
-            transcript = payload.get("transcript")
-            if not isinstance(transcript, str) or not transcript.strip():
-                return None
-            positions = _match_positions(transcript, query, match_mode)
-            if not positions:
-                return None
-            return {
-                "call": call,
-                "match_count": len(positions),
-                "excerpts": _match_excerpts(
-                    transcript,
-                    positions,
-                    context_chars=context_chars,
-                ),
-                "transcript_chars": len(transcript),
-            }
-
-        matches: list[dict[str, Any]] = []
-        scanned = 0
-        batch_size = self.settings.analytics_parallel_requests
-        for start in range(0, len(visible_calls), batch_size):
-            batch = visible_calls[start : start + batch_size]
-            batch_matches = await asyncio.gather(*(search(call) for call in batch))
-            scanned += len(batch)
-            matches.extend(row for row in batch_matches if row is not None)
-            if len(matches) >= limit:
-                break
-        result_complete = len(matches) <= limit and scanned == len(visible_calls)
-        matches = matches[:limit]
-        source_complete = calls_complete and scanned == len(visible_calls)
+        matches = await self._with_excerpts(visible_calls, query, match_mode, context_chars)
         data = {
             "supervisor": supervisor,
-            "items": matches,
-            "query": query,
-            "match_mode": match_mode,
-            "returned_matches": len(matches),
-            "scanned_calls": scanned,
-            "candidate_calls_loaded": len(visible_calls),
-            "source_calls_total": total,
-            "source_complete": source_complete,
-            "result_complete": result_complete,
-            "search_call_cap": self.settings.transcript_search_max_calls,
-            "result_limit": limit,
+            **self._search_data(
+                matches, query, match_mode, total=total, page=page, limit=limit, complete=not omitted
+            ),
         }
         return await self.envelope(
             data,
-            status=(
-                "partial" if not source_complete or not result_complete else ("ok" if matches else "no_data")
-            ),
+            status="partial" if omitted else ("ok" if total else "no_data"),
             scope={**self.supervisor_scope(supervisor), "transcript_format": "diarized"},
             period=bounds,
             omitted=omitted,
@@ -2484,10 +2654,11 @@ class AnalyticsAdapter:
                 period="custom",
                 start_date=bounds[0],
                 end_date=bounds[1],
+                step="auto",
             ),
         )
         return await self.envelope(
-            {"summary": summary, "daily_trend": trend},
+            {"summary": summary, "trend": trend},
             scope={**self.department_scope(department_row), "employee_id": employee},
             period=bounds,
         )
@@ -2661,7 +2832,7 @@ class AnalyticsAdapter:
             )
 
         async def load(row: dict[str, Any]) -> dict[str, Any]:
-            value = await self._bounded(lambda: self._get(f"/employees/{row['id']}/bitrix-metrics"))
+            value = await self._bounded(lambda: self._crm_metrics(row["id"]))
             return {"employee": row, "metrics": self._safe_crm(value)}
 
         rows = await asyncio.gather(*(load(row) for row in employees))
@@ -2759,54 +2930,59 @@ class AnalyticsAdapter:
         )
         if invalid:
             return await self.envelope({"reason": "requested_scope_not_available"}, status="not_available")
-        department = str(department_row["id"]) if department_row else None
         employee = str(employee_row["id"]) if employee_row else None
+        # OKK's own period insights (block 11), ranked as on its pages: growth zones by points lost
+        # per call. The gateway only cuts the lists.
         if employee_row:
-            employees, complete = [employee_row], True
-        else:
-            employees, complete, _, _ = await self.employees(department_id=department, include_inactive=False)
-
-        async def load(row: dict[str, Any]) -> tuple[dict[str, Any], dict[str, list[Any]]]:
-            page = await self._bounded(lambda: self._page_data(row["id"], *bounds))
-            shown = {
-                "employee": row,
-                "strengths": page.get("aggregated_strengths") or [],
-                "growth_areas": page.get("aggregated_improvements") or [],
-                "weekly_focus": page.get("weekly_focus") or [],
+            page = await self._page_data(str(employee_row["id"]), *bounds)
+            insights = page.get("insights") or {}
+            data = {
+                **_insights_view(insights.get("summary"), limit),
+                "weekly_focus": _focus_view(insights.get("focus"), limit),
             }
-            return shown, {field: _insight_labels(page, field) for field in _TEXT_INSIGHTS}
-
-        loaded = await asyncio.gather(*(load(row) for row in employees))
-        rows = [shown for shown, _ in loaded]
-
-        def employee_mentions(field: str) -> list[dict[str, Any]]:
-            labels: dict[str, str] = {}
-            mentions: dict[str, set[str]] = defaultdict(set)
-            for row, counted in loaded:
-                employee_key = str(row["employee"]["id"])
-                for value in counted[field]:
-                    text = _insight_text(value)
-                    if not text:
-                        continue
-                    key = " ".join(unicodedata.normalize("NFKC", text).casefold().split())
-                    labels.setdefault(key, text)
-                    mentions[key].add(employee_key)
-            ranked = sorted(
-                mentions,
-                key=lambda key: (-len(mentions[key]), labels[key].casefold()),
+            evaluated = data["evaluated_calls"]
+        elif department_row:
+            data = _insights_view(await self._department_insights(str(department_row["id"]), bounds), limit)
+            evaluated = data["evaluated_calls"]
+        else:
+            departments = await self.departments()
+            loaded = await asyncio.gather(
+                *(
+                    self._bounded(lambda row=row: self._department_insights(str(row["id"]), bounds))
+                    for row in departments
+                )
             )
-            return [{"text": labels[key], "employee_mentions": len(mentions[key])} for key in ranked[:limit]]
-
-        data = {
-            "strengths": employee_mentions("strengths"),
-            "growth_areas": employee_mentions("growth_areas"),
-            "employees": rows,
-        }
+            data = {
+                "departments": [
+                    {
+                        "department": {key: row.get(key) for key in ("id", "code", "name")},
+                        **_insights_view(answer, limit),
+                    }
+                    for row, answer in zip(departments, loaded, strict=True)
+                ]
+            }
+            evaluated = sum(row["evaluated_calls"] or 0 for row in data["departments"])
         return await self.envelope(
             data,
-            status="partial" if not complete else ("ok" if rows else "no_data"),
+            status="ok" if evaluated else "no_data",
             scope={**self.department_scope(department_row), "employee_id": employee},
             period=bounds,
+        )
+
+    async def _crm_metrics(self, employee_id: str) -> dict[str, Any]:
+        """The employee's CRM snapshot; OKK down for Bitrix is an unusable snapshot (`error`),
+        not a failed answer: the rest of a card or list is still true."""
+        try:
+            return await self._get(f"/employees/{employee_id}/bitrix-metrics")
+        except OKKUnavailable:
+            return {"status": "error"}
+
+    async def _department_insights(self, department_id: str, bounds: tuple[date, date]) -> Any:
+        return await self._get(
+            f"/departments/{department_id}/insights",
+            period="custom",
+            start_date=bounds[0],
+            end_date=bounds[1],
         )
 
     async def list_scenarios(
@@ -2933,11 +3109,14 @@ class AnalyticsAdapter:
             )
             if department_row is not None:
                 department = str(department_row["id"])
+        # Only the evaluated calls of the indicators — the summary's «Оценено». A score alone is not
+        # enough: manually excluded, short and skipped calls keep theirs.
         calls, total, complete = await self.calls(
             start=bounds[0],
             end=bounds[1],
             department_id=department,
             employee_id=employee,
+            kpi_evaluated=True,
         )
         # A scenario is every version under one code: a requested version stands for its scenario,
         # shown by the current version when the account can read it.
@@ -3061,13 +3240,14 @@ class AnalyticsAdapter:
                     period=bounds,
                 )
             department = str(department_row["id"])
-        # Calls of the whole scope: OKK filters `scenario_id` by the exact version, which would leave
-        # out the evaluations made on the scenario's archived versions.
+        # The evaluated calls of the indicators of the whole scope: OKK filters `scenario_id` by the
+        # exact version, which would leave out the evaluations made on archived versions.
         calls, total, complete = await self.calls(
             start=bounds[0],
             end=bounds[1],
             department_id=department,
             employee_id=employee,
+            kpi_evaluated=True,
         )
         version_codes = _scenario_versions_by_code(catalog, calls)
         scenario_code = version_codes[scenario] if scenario_row is not None else None
@@ -3117,8 +3297,12 @@ class AnalyticsAdapter:
                     continue
             evaluated.append(call)
 
-        async def detail(call: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-            return call, await self._bounded(lambda: self._get(f"/calls/{call['id']}"))
+        async def detail(call: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+            try:
+                return call, await self._bounded(lambda: self._get(f"/calls/{call['id']}"))
+            except OKKNotAvailable:
+                # Deleted or closed since the list was read: one call, not the whole answer.
+                return call, None
 
         detailed = await asyncio.gather(*(detail(call) for call in evaluated))
         aggregate: dict[tuple[str, str], dict[str, Any]] = {}
@@ -3190,9 +3374,11 @@ class AnalyticsAdapter:
         quality.sort(key=lambda row: (row["avg_score_percent"] is None, row["avg_score_percent"] or 0))
         critical.sort(key=lambda row: -row["violations"])
         matching_criteria_total = len(quality) + len(critical)
-        truncated = not complete or total > len(calls) or matching_criteria_total > limit
+        # The limit applies to each list: «10 weakest criteria» must not hide the critical errors.
+        returned = min(len(quality), limit) + min(len(critical), limit)
+        truncated = not complete or total > len(calls) or returned < matching_criteria_total
         return await self.envelope(
-            {"criteria": quality[:limit], "critical_errors": critical[: max(limit - len(quality), 0)]},
+            {"criteria": quality[:limit], "critical_errors": critical[:limit]},
             status="partial" if truncated or excluded else ("ok" if matching_criteria_total else "no_data"),
             scope={
                 "scenario_id": scenario,
@@ -3203,7 +3389,7 @@ class AnalyticsAdapter:
                 "source_calls": len(calls),
                 "source_calls_total": total,
                 "matching_criteria_total": matching_criteria_total,
-                "returned_criteria": min(matching_criteria_total, limit),
+                "returned_criteria": returned,
                 "criteria_limit": limit,
                 "excluded_evaluations": sum(excluded.values()),
                 "excluded_evaluation_reasons": dict(sorted(excluded.items())),
@@ -3332,6 +3518,7 @@ class BackendClient:
             "criterion_filter_count": len(params.get("criterion_ids") or []),
             "search_filter": bool(params.get("search")),
             "phone_filter": bool(params.get("phone_number")),
+            "journal_filter_count": len(params.get("filters") or {}),
             "page": params.get("page"),
             "page_size": params.get("page_size"),
         }

@@ -300,8 +300,11 @@ def _render_login(
     csrf_token: str,
     redirect_uri: str,
     scope: str,
+    granted_scope: str | None = None,
     error: str | None = None,
 ) -> HTMLResponse:
+    """`granted_scope` is the person's choice from a submitted form; a new page has every box checked."""
+
     error_html = f'<div class="error">{html.escape(error)}</div>' if error else ""
     destination, known_destination = redirect_destination(redirect_uri, settings.oauth_redirect_uris)
     destination_html = (
@@ -310,8 +313,10 @@ def _render_login(
         else '<div class="error">Этот адрес возврата не относится к известным приложениям. '
         "Не входите, если не начинали подключение сами.</div>"
     )
+    checked_scopes = set((scope if granted_scope is None else granted_scope).split())
     optional_grants = "".join(
-        f'<label class="grant"><input type="checkbox" name="{field}" value="1" checked> {html.escape(label)}</label>'
+        f'<label class="grant"><input type="checkbox" name="{field}" value="1"'
+        f"{' checked' if scope_name in checked_scopes else ''}> {html.escape(label)}</label>"
         for scope_name, (field, label) in OPTIONAL_GRANTS.items()
         if scope_name in scope.split()
     )
@@ -340,6 +345,7 @@ async def _refresh_authorization_form(
     authorization_request: str,
     db: AsyncSession,
     settings: Settings,
+    granted_scope: str,
     error: str,
 ) -> HTMLResponse:
     try:
@@ -359,6 +365,7 @@ async def _refresh_authorization_form(
         csrf_token=refreshed_csrf,
         redirect_uri=auth_request["redirect_uri"],
         scope=auth_request["scope"],
+        granted_scope=granted_scope,
         error=error,
     )
 
@@ -463,6 +470,7 @@ async def authorize_login(
             authorization_request=authorization_request,
             db=db,
             settings=settings,
+            granted_scope=granted_scope,
             error="Сеанс входа был обновлён. Введите логин и пароль ещё раз.",
         )
     client = await _load_client(db, auth_request["client_id"], auth_request["redirect_uri"], settings)
@@ -477,6 +485,7 @@ async def authorize_login(
             csrf_token=csrf_token,
             redirect_uri=auth_request["redirect_uri"],
             scope=auth_request["scope"],
+            granted_scope=granted_scope,
             error="Неверный логин или пароль",
         )
     except OKKUnavailable as exc:
@@ -589,9 +598,11 @@ async def token_endpoint(
                 .with_for_update()
             )
         ).scalar_one_or_none()
+        if stored is not None and stored.consumed_at is not None:
+            await _revoke_replayed_code_grant(db, stored)
+            return _oauth_error("invalid_grant", "Authorization code reuse detected; session revoked")
         if (
             not stored
-            or stored.consumed_at is not None
             or stored.expires_at <= _now()
             or stored.client_id != client_id
             or stored.redirect_uri != redirect_uri
@@ -671,6 +682,21 @@ async def token_endpoint(
         await db.flush()
         return _token_response(raw_access, raw_refresh, requested_scope, settings)
     return _oauth_error("unsupported_grant_type", "Unsupported grant type")
+
+
+async def _revoke_replayed_code_grant(db: AsyncSession, code: OAuthAuthorizationCode) -> None:
+    """A code used twice may have leaked: revoke what it issued (RFC 6749 §4.1.2).
+
+    Each sign-in creates its own OKK account session and one code, so the tokens of that session
+    are exactly the tokens this code issued, including their refreshed successors.
+    """
+
+    await db.execute(
+        update(OAuthToken)
+        .where(OAuthToken.session_id == code.session_id, OAuthToken.revoked_at.is_(None))
+        .values(revoked_at=_now())
+    )
+    await platform_client.revoke_upstream(code.session_id)
 
 
 async def _retried_rotation(

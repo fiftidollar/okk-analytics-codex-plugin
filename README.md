@@ -65,7 +65,8 @@ the Codex/Claude Code plugin packages.
 - Scenario catalog and complete business criterion configuration without
   prompts or scripts, plus scenario/criterion performance aggregation.
 - OAuth Authorization Code + PKCE S256, dynamic client registration, refresh
-  rotation/reuse detection and revocation. A client may only use return
+  rotation/reuse detection and revocation; a replayed authorization code
+  revokes the tokens it issued. A client may only use return
   addresses on this computer (Codex, Claude Code) or the exact web callbacks
   in `MCP_OAUTH_REDIRECT_URIS` (Claude and our ChatGPT app); the login page
   shows where the browser will return.
@@ -109,7 +110,7 @@ its separate OAuth permission.
 plugins/okk-analytics/   Shared skill plus Codex and Claude Code plugin manifests
 .agents/plugins/         Codex community marketplace manifest
 .claude-plugin/          Claude Code community marketplace manifest
-server/okk_mcp/          OAuth server, encrypted sessions and 28 MCP tools
+server/okk_mcp/          OAuth server, encrypted sessions and 26 MCP tools
 server/migrations/       Standalone PostgreSQL schema
 server/tests/            Security, ACL, projection and tool-contract tests
 docs/                    Architecture, tools, security and deployment runbooks
@@ -272,7 +273,7 @@ the OKK API. See
 Create the release as **With MCP → Universal** with
 `https://okk-mcp.akfixdev.ru/mcp`, and upload the final
 `plugins/okk-analytics/skills/okk-analytics/` bundle to the same draft. The
-portal must scan all 28 tools and retain the exact five positive and three
+portal must scan all 26 tools and retain the exact five positive and three
 negative cases from `chatgpt-app-submission.json`. OAuth discovery advertises
 `openid` and `email`; `/userinfo` returns only the live account subject and
 verified email for workspace domain policy. Domain ownership is proved by
@@ -283,8 +284,8 @@ well-known route returns only that token.
 
 This is a live production plugin, not a test-stand connector. Its public MCP URL
 is `https://okk-mcp.akfixdev.ru/mcp`, and its upstream is the production OKK API
-above. Release `1.3.1` is live: public `/health` reported `1.3.1` on
-`2026-10-20` (`1.3.0` earlier that day). It registers 28 read-only tools, including the ACL-safe private
+above. Release `1.4.0` is live: public `/health` reported `1.4.0` on
+`2026-10-21`. It registers 25 read-only tools, including the ACL-safe private
 Supervisors catalog, its dedicated call/transcript tools and the phone-history
 tool. The verification evidence of
 each production release (roster grounding, report semantics, phone lookup) is

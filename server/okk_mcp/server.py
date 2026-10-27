@@ -15,7 +15,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import AnyHttpUrl, BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
 from starlette.applications import Starlette
 from starlette.routing import Route
 
@@ -57,6 +57,51 @@ PageParam = Annotated[int, Field(ge=1)]
 FormatParam = Annotated[
     TranscriptFormat, Field(description="diarized — with speaker labels; segments — timed turns.")
 ]
+
+
+class CriterionBelow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    criterion: str = Field(min_length=1, max_length=200, description="Key from get_call_filter_options.")
+    points: float = Field(gt=0, le=100, description="The criterion scored less than this many points.")
+
+
+class CallFilters(BaseModel):
+    """The OKK journal filters. OKK applies every rule: below_norm is exactly the KPI «Требуют
+    внимания», result the same outcomes as the KPI."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    direction: Literal["inbound", "outbound"] | None = None
+    result: Literal["successful", "missed", "no_answer"] | None = Field(
+        default=None,
+        description="successful — состоялся; missed — пропущенный входящий; no_answer — недозвон.",
+    )
+    quality: Literal["below_norm", "norm"] | None = Field(
+        default=None, description="Evaluated calls against their norm: «Ниже нормы» / «Норма»."
+    )
+    evaluation: Literal["evaluated", "not_evaluated"] | None = None
+    not_evaluated_reason: str | None = Field(
+        default=None, max_length=50, description="Value from get_call_filter_options."
+    )
+    critical_errors: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(
+        default_factory=list, max_length=20, description="Keys from get_call_filter_options; calls with any."
+    )
+    any_critical_error: bool = False
+    criteria_below: list[CriterionBelow] = Field(default_factory=list, max_length=20)
+    score_from: float | None = Field(default=None, ge=0, le=100)
+    score_to: float | None = Field(default=None, ge=0, le=100)
+    min_duration_seconds: int | None = Field(default=None, ge=0, le=86400)
+
+
+CallFiltersParam = Annotated[CallFilters | None, Field(description="Journal filters; omit for all calls.")]
+
+
+def _filters(filters: CallFilters | None) -> dict[str, Any] | None:
+    """Only the filters the caller set; none — no `filters` at all."""
+    chosen = filters.model_dump(exclude_defaults=True) if filters else {}
+    return chosen or None
+
 
 # Response size limits. Claude Code warns above ~10k tokens and moves results over 50,000
 # characters into a file; Codex cuts results to the model's budget. A full transcript is read
@@ -236,7 +281,8 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         title="Сводная статистика",
         description=(
             "Company-wide or one-department dashboard (сводка): calls, scores, clients, a ranking of "
-            "departments or employees, daily trend. Use for «как дела в целом». For one department "
+            "departments or employees, trend (points by day, week, month or quarter — each point "
+            "has date and step). Use for «как дела в целом». For one department "
             "prefer get_department_statistics."
         ),
         annotations=READ_ONLY,
@@ -266,7 +312,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             "at or above the norm, missed calls, duration, every employee's metrics "
             "(complete_employee_ranking) and the call plan. Field meanings are in "
             "data.reporting_contract: successful calls, calls from the minimum duration and evaluated "
-            "calls are different counts. detail=full adds daily trends. Name only employees from "
+            "calls are different counts. detail=full adds trends. Name only employees from "
             "employee_roster_grounding."
         ),
         annotations=READ_ONLY,
@@ -287,7 +333,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         end_date: EndDate = None,
         detail: Annotated[
             Literal["summary", "full"],
-            Field(description="full adds daily trends per department and employee."),
+            Field(description="full adds trends per department and employee."),
         ] = "summary",
     ) -> ToolResult:
         _require_scopes(STAT_SCOPE)
@@ -453,7 +499,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         title="Статистика звонков",
         description=(
             "Evaluated calls only: count, average, min and max score, share at or above the norm "
-            "(pass rate), duration and daily trend, for the company, a department or an employee. "
+            "(pass rate), duration and trend, for the company, a department or an employee. "
             "Missed and short calls are in get_department_statistics."
         ),
         annotations=READ_ONLY,
@@ -507,6 +553,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         ] = None,
         start_date: StartDate = None,
         end_date: EndDate = None,
+        filters: CallFiltersParam = None,
         page: PageParam = 1,
         page_size: Annotated[int, Field(ge=1, le=100)] = 25,
     ) -> ToolResult:
@@ -518,6 +565,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             department_ref=department,
             employee_id=employee_id,
             supervisor_id=supervisor_id,
+            filters=_filters(filters),
             page=page,
             page_size=page_size,
             **_period_params(period, start_date, end_date, default="all"),
@@ -526,9 +574,10 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     @mcp.tool(
         title="Каталог транскрипций звонков",
         description=(
-            "Lists calls (звонки) newest first with score, scenario, employee and a short transcript "
-            "preview; filter by department, employee, scenario and period. Use it to find a call, "
-            "then read it with get_call_transcript."
+            "Lists calls (звонки, журнал) newest first with score, scenario, employee and a short "
+            "transcript preview; filters as in the OKK journal (below norm, outcome, critical "
+            "errors, criteria, score, duration). total_calls is exact. Read a call with "
+            "get_call_transcript."
         ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE, TRANSCRIPT_SCOPE),
@@ -541,6 +590,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         scenario_id: ScenarioParam = None,
         start_date: StartDate = None,
         end_date: EndDate = None,
+        filters: CallFiltersParam = None,
         transcript_format: FormatParam = "diarized",
         preview_chars: Annotated[int, Field(ge=0, le=PREVIEW_MAX_CHARS)] = 300,
         page: PageParam = 1,
@@ -553,12 +603,27 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             department_ref=department,
             employee_id=employee_id,
             scenario_id=scenario_id,
+            filters=_filters(filters),
             transcript_format=transcript_format,
             preview_chars=preview_chars,
             page=page,
             page_size=page_size,
             **_period_params(period, start_date, end_date),
         )
+
+    @mcp.tool(
+        title="Варианты фильтров журнала",
+        description=(
+            "Values with labels for the journal filters: critical error and criterion keys of the "
+            "active scenarios (of one department when given), reasons a call is not evaluated."
+        ),
+        annotations=READ_ONLY,
+        meta=_security_meta(STAT_SCOPE),
+        structured_output=True,
+    )
+    async def get_call_filter_options(department: DepartmentParam = None) -> ToolResult:
+        _require_scopes(STAT_SCOPE)
+        return await _read(client, "/mcp-read/call-filter-options", department_ref=department)
 
     @mcp.tool(
         title="Полная транскрипция звонка",
@@ -596,9 +661,9 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
     @mcp.tool(
         title="Поиск по транскрипциям",
         description=(
-            "Finds a phrase or words in call transcripts (поиск по разговорам) and returns the calls "
-            "with quotes. scanned_calls and result_complete show how much was searched: an incomplete "
-            "search is no proof that the phrase is absent — narrow the period or add employee_id."
+            "Finds a phrase or words in call transcripts (поиск по разговорам) across every visible "
+            "call of the period and returns the calls with quotes. matching_calls_total is the exact "
+            "number of matching calls; read further pages with page while result_complete=false."
         ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE, TRANSCRIPT_SCOPE),
@@ -616,8 +681,10 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             TranscriptMatchMode,
             Field(description="phrase — exact phrase; all_terms — every word; any_terms — any word."),
         ] = "phrase",
+        filters: CallFiltersParam = None,
         context_chars: Annotated[int, Field(ge=40, le=PREVIEW_MAX_CHARS)] = 240,
         limit: Annotated[int, Field(ge=1, le=PAGE_MAX_ITEMS)] = 25,
+        page: PageParam = 1,
     ) -> ToolResult:
         _require_scopes(STAT_SCOPE, TRANSCRIPT_SCOPE)
         return await _read(
@@ -628,8 +695,10 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             employee_id=employee_id,
             scenario_id=scenario_id,
             match_mode=match_mode,
+            filters=_filters(filters),
             context_chars=context_chars,
             limit=limit,
+            page=page,
             **_period_params(period, start_date, end_date),
         )
 
@@ -695,7 +764,10 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
 
     @mcp.tool(
         title="Поиск по транскрипциям руководителя",
-        description="Finds a phrase or words in the transcripts of one supervisor from list_supervisors.",
+        description=(
+            "Finds a phrase or words in the transcripts of one supervisor from list_supervisors; "
+            "paged like search_call_transcripts."
+        ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE, TRANSCRIPT_SCOPE),
         structured_output=True,
@@ -712,6 +784,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         ] = "phrase",
         context_chars: Annotated[int, Field(ge=40, le=PREVIEW_MAX_CHARS)] = 240,
         limit: Annotated[int, Field(ge=1, le=PAGE_MAX_ITEMS)] = 25,
+        page: PageParam = 1,
     ) -> ToolResult:
         _require_scopes(STAT_SCOPE, TRANSCRIPT_SCOPE)
         return await _read(
@@ -722,6 +795,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
             match_mode=match_mode,
             context_chars=context_chars,
             limit=limit,
+            page=page,
             **_period_params(period, start_date, end_date),
         )
 

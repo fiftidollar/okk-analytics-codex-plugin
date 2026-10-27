@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from http.cookiejar import Cookie, CookieJar, DefaultCookiePolicy
 from typing import Any
+from urllib.request import Request
 from uuid import UUID
 
 import httpx
@@ -14,6 +17,11 @@ from okk_mcp.config import Settings
 from okk_mcp.crypto import SessionCipher
 from okk_mcp.db import session_factory
 from okk_mcp.models import OkkAccountSession
+
+# Pauses before the second and the third attempt of a read that failed in transit.
+_READ_RETRY_DELAYS_SECONDS = (0.3, 1.0)
+_TRANSIENT_STATUSES = frozenset({502, 503, 504})
+_RENEWALS_KEPT = 1000
 
 
 class OKKAuthenticationError(PermissionError):
@@ -42,8 +50,15 @@ class AccountContext:
         return self.role == "admin"
 
 
+class _StoreNoCookies(DefaultCookiePolicy):
+    """One HTTP client serves every person: a cookie OKK sets for one must never reach another."""
+
+    def set_ok(self, cookie: Cookie, request: Request) -> bool:
+        return False
+
+
 class OKKPlatformClient:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None):
         self.settings = settings
         self.cipher = SessionCipher(settings.mcp_session_encryption_secret)
         self.client = httpx.AsyncClient(
@@ -52,10 +67,19 @@ class OKKPlatformClient:
             limits=httpx.Limits(max_connections=100, max_keepalive_connections=30),
             follow_redirects=False,
             headers={"Accept": "application/json", "X-OKK-Client": "codex-mcp-readonly"},
+            cookies=CookieJar(policy=_StoreNoCookies()),
+            transport=transport,
         )
+        # Session id -> (expired, renewed) OKK access token. A tool call keeps the context it started
+        # with; its later requests take the renewed token from here instead of meeting a 401 each.
+        self._renewed_access: dict[UUID, tuple[str, str]] = {}
 
     async def close(self) -> None:
         await self.client.aclose()
+
+    @staticmethod
+    def _refresh_cookie_header(refresh_token: str) -> dict[str, str]:
+        return {"Cookie": f"refresh_token={refresh_token}"}
 
     @staticmethod
     def _refresh_cookie(response: httpx.Response) -> str:
@@ -118,8 +142,7 @@ class OKKPlatformClient:
     async def _refresh(self, refresh_token: str) -> tuple[str, str, dict[str, Any]]:
         try:
             response = await self.client.post(
-                "/auth/refresh",
-                cookies={"refresh_token": refresh_token},
+                "/auth/refresh", headers=self._refresh_cookie_header(refresh_token)
             )
         except httpx.HTTPError as exc:
             raise OKKUnavailable("OKK session refresh is temporarily unavailable") from exc
@@ -219,9 +242,22 @@ class OKKPlatformClient:
                 row.encrypted_access_token = self.cipher.seal(access_token)
                 row.encrypted_refresh_token = self.cipher.seal(rotated_refresh)
                 await db.commit()
+                self._remember_renewal(session_id, expired_access, access_token)
                 return access_token, user
         # Another request renewed the token while this one waited for the lock.
-        return current_access, self._me_payload(await self._get_me(current_access))
+        user = self._me_payload(await self._get_me(current_access))
+        self._remember_renewal(session_id, expired_access, current_access)
+        return current_access, user
+
+    def _remember_renewal(self, session_id: UUID, expired_access: str, renewed_access: str) -> None:
+        self._renewed_access.pop(session_id, None)
+        self._renewed_access[session_id] = (expired_access, renewed_access)
+        if len(self._renewed_access) > _RENEWALS_KEPT:
+            del self._renewed_access[next(iter(self._renewed_access))]
+
+    def _current_access(self, context: AccountContext) -> str:
+        expired_access, renewed_access = self._renewed_access.get(context.session_id, ("", ""))
+        return renewed_access if context.access_token == expired_access else context.access_token
 
     async def get(
         self,
@@ -250,16 +286,13 @@ class OKKPlatformClient:
 
         self._validate_read_path(path)
         try:
-            response = await self.client.get(
-                path,
-                params=params,
-                headers={"Authorization": f"Bearer {context.access_token}"},
-            )
+            response = await self._read(context, "GET", path, params=params)
         except httpx.HTTPError as exc:
             raise OKKUnavailable("OKK analytics is temporarily unavailable") from exc
         if response.status_code in {401}:
             raise OKKAuthenticationError("OKK session is no longer valid")
-        if response.status_code in {403, 404}:
+        # 409: OKK closes a restricted employee (a private supervisor) this way.
+        if response.status_code in {403, 404, 409}:
             raise OKKNotAvailable("Requested OKK data is not available")
         if response.status_code >= 500:
             raise OKKUnavailable("OKK analytics is temporarily unavailable")
@@ -267,26 +300,68 @@ class OKKPlatformClient:
             raise ValueError(f"OKK rejected the analytics filter ({response.status_code})")
         return response.json()
 
+    async def _read(self, context: AccountContext, method: str, path: str, **request: Any) -> httpx.Response:
+        """Send a read; an OKK access token that expired during the tool call is renewed once and the
+        read repeated, so the person is not sent to reconnect while the session can still be renewed."""
+
+        access_token = self._current_access(context)
+        response = await self._send_read(method, path, access_token, **request)
+        if response.status_code != 401:
+            return response
+        renewed_access, _user = await self._rotate_session(context.session_id, access_token)
+        return await self._send_read(method, path, renewed_access, **request)
+
+    async def _send_read(self, method: str, path: str, access_token: str, **request: Any) -> httpx.Response:
+        """A dropped connection, a timeout or 502/503/504 is repeated twice after a short pause.
+
+        Only reads go through here, so a repeat cannot change anything in OKK. A 4xx is an answer.
+        """
+
+        headers = {"Authorization": f"Bearer {access_token}"}
+        for delay in _READ_RETRY_DELAYS_SECONDS:
+            try:
+                response = await self.client.request(method, path, headers=headers, **request)
+            except httpx.TransportError:
+                pass
+            else:
+                if response.status_code not in _TRANSIENT_STATUSES:
+                    return response
+            await asyncio.sleep(delay)
+        return await self.client.request(method, path, headers=headers, **request)
+
     async def phone_lookup_with_context(
         self,
         context: AccountContext,
         payload: dict[str, Any],
     ) -> Any:
-        """Read phone history through the sole approved body-only POST route."""
+        """Read phone history through the approved body-only POST route."""
 
+        return await self._post_lookup(context, "/calls/phone-lookup", payload, "phone lookup")
+
+    async def transcript_search_with_context(
+        self,
+        context: AccountContext,
+        payload: dict[str, Any],
+    ) -> Any:
+        """Search shown transcripts through the approved body-only POST route: OKK filters the whole
+        ACL-scoped journal and returns the exact number of matching calls."""
+
+        return await self._post_lookup(context, "/calls/transcript-search", payload, "transcript search")
+
+    async def _post_lookup(
+        self, context: AccountContext, path: str, payload: dict[str, Any], contract: str
+    ) -> Any:
+        # Read-only journal reads whose filters (a phone number, words of a conversation) stay out
+        # of URLs and access logs. Only these two routes are ever posted to.
         try:
-            response = await self.client.post(
-                "/calls/phone-lookup",
-                json=payload,
-                headers={"Authorization": f"Bearer {context.access_token}"},
-            )
+            response = await self._read(context, "POST", path, json=payload)
         except httpx.HTTPError as exc:
             raise OKKUnavailable("OKK analytics is temporarily unavailable") from exc
         if response.status_code == 401:
             raise OKKAuthenticationError("OKK session is no longer valid")
         if response.status_code == 404:
-            raise OKKUnavailable("OKK phone lookup contract is temporarily unavailable")
-        if response.status_code == 403:
+            raise OKKUnavailable(f"OKK {contract} contract is temporarily unavailable")
+        if response.status_code in {403, 409}:
             raise OKKNotAvailable("Requested OKK data is not available")
         if response.status_code >= 500:
             raise OKKUnavailable("OKK analytics is temporarily unavailable")
@@ -309,6 +384,6 @@ class OKKPlatformClient:
             row.revoked_at = datetime.now(UTC)
             await db.commit()
         try:
-            await self.client.post("/auth/logout", cookies={"refresh_token": refresh_token})
+            await self.client.post("/auth/logout", headers=self._refresh_cookie_header(refresh_token))
         except httpx.HTTPError:
             pass
