@@ -740,6 +740,12 @@ def expectation_met(item: Expectation, answer: str) -> bool:
                 for accepted in _accepted_numbers(value, item.decimals)
             ):
                 return True
+            # The truth is rounded to `decimals`; a more precise answer is right when it rounds there
+            # (90,72 for 90.7; 84,15 for 84.1 read from 84.146).
+            if item.decimals and any(
+                abs(number - value) <= 0.5 * 10 ** -item.decimals + 1e-9 for number in found
+            ):
+                return True
         return False
     names = [str(name) for name in _flat(item.candidates) if name]
     if item.kind in {"names", "names_exact"}:
@@ -764,7 +770,9 @@ def tools_selected(tools: dict[str, Any], called: list[str]) -> bool | None:
     if mode == "free":
         return None
     if mode == "none":
-        return not called
+        # The server instructions start every task with get_access_context; a refusal after that
+        # connection check still reads no OKK data.
+        return not [name for name in called if name != "get_access_context"]
     if mode == "any":
         return any(name in names for name in called)
     if mode == "all":
