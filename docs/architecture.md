@@ -33,7 +33,12 @@ The published deployment is production-only: the upstream base URL is
 
 ## Login and session sequence
 
-1. Codex dynamically registers a public OAuth client.
+1. Codex dynamically registers a public OAuth client. A client that supports
+   Client ID Metadata Documents (ChatGPT, newer MCP clients) skips registration
+   and uses the HTTPS URL of its metadata as `client_id`; `/authorize` fetches
+   that document through an SSRF-safe pinned connection (rules in
+   [security.md](security.md)) and saves the client row only when a person
+   signs in.
 2. `/authorize` validates exact redirect URI, resource indicator and PKCE S256,
    then displays the gateway's login form. Each authorization flow receives a
    signed short-lived CSRF nonce inside the authorization request, so retries or
@@ -44,7 +49,8 @@ The published deployment is production-only: the upstream base URL is
    also applies `form-action` to a form response's redirect chain, the page CSP
    additionally permits only the origin of the validated registered callback.
    After successful login, the authorization endpoint responds with a direct
-   `302` to that exact URI with `code` and the original `state`. Codex owns the
+   `302` to that exact URI with `code`, the original `state` and `iss` (RFC
+   9207; error redirects carry it too). Codex owns the
    loopback listener, token exchange and resulting authenticated MCP state.
    The gateway cannot truthfully replace this client-owned callback with its
    own success page: the token exchange has not completed until Codex consumes
@@ -174,17 +180,25 @@ JSON `null`, because strict OAuth clients validate a present field as a URI
 string. Both clients use the same tools, live ACL checks and safe projections;
 the packaging files do not fork analytics logic.
 
-Not adopted yet, each needing a check with live ChatGPT, Codex and Claude
-clients against a non-production gateway first: RFC 9207 `iss` in the
-authorization response (it changes the callback URLs Codex and ChatGPT
-register), Client ID Metadata Documents, and scope step-up through
-`mcp/www_authenticate` so phone and transcript scopes can be requested only
-when needed.
+Gateway 1.6.0 adds RFC 9207 `iss` in every authorization response, Client ID
+Metadata Documents next to dynamic registration, and scope step-up: a tool
+call without a needed scope returns an error result whose
+`_meta["mcp/www_authenticate"]` holds the `insufficient_scope` challenge. With
+`iss` advertised, ChatGPT switches to its stable callback
+`https://chatgpt.com/connector_platform_oauth_redirect`, which is in the
+default allowlist. Before a production release, connect fresh ChatGPT, Codex
+and Claude Code clients to a non-production gateway: CIMD makes clients prefer
+the document, and a document the gateway cannot fetch (for example behind a
+bot challenge) fails the sign-in; `MCP_CLIENT_METADATA_DOCUMENTS_ENABLED=false`
+returns every client to registration without a release.
 
 ## Scaling
 
 MCP transport is stateless Streamable HTTP. OAuth/session state is shared in
-PostgreSQL; login and registration throttles are shared in Redis. Each MCP
+PostgreSQL; login and registration throttles are shared in Redis (a trusted
+client network such as Anthropic's egress shares one larger registration
+bucket). Client metadata documents are cached per process for five minutes,
+so replicas may fetch the same document once each. Each MCP
 request reloads the live OKK user without a database lock or open transaction,
 so parallel tool calls of one person run in parallel. Only the rotation of the
 OKK refresh token is serialized with a row lock — held across the OKK refresh

@@ -10,8 +10,10 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from urllib.parse import parse_qsl, urlsplit
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
@@ -28,7 +30,7 @@ from okk_mcp.security import (
     validate_scopes,
     verify_pkce,
 )
-from okk_mcp.server import create_mcp_server
+from okk_mcp.server import create_mcp_server, with_scope_challenge
 
 
 def test_pkce_s256_and_token_hash_contract():
@@ -109,6 +111,7 @@ KNOWN_URIS = Settings().oauth_redirect_uris
         "http://localhost:3210/callback",
         "http://[::1]:3210/callback",
         "https://chatgpt.com/connector/oauth/a-t9rb0LP-X4",
+        "https://chatgpt.com/connector_platform_oauth_redirect",
         "https://claude.ai/api/mcp/auth_callback",
         "https://claude.com/api/mcp/auth_callback",
     ],
@@ -397,6 +400,8 @@ def test_metadata_and_mcp_auth_challenge_are_discoverable(monkeypatch):
         )
     assert authorization.status_code == 200
     assert authorization.json()["code_challenge_methods_supported"] == ["S256"]
+    assert authorization.json()["authorization_response_iss_parameter_supported"] is True
+    assert authorization.json()["client_id_metadata_document_supported"] is True
     assert authorization.json()["userinfo_endpoint"].endswith("/userinfo")
     assert {"openid", "email"}.issubset(set(authorization.json()["scopes_supported"]))
     assert "okk.transcripts.read" in authorization.json()["scopes_supported"]
@@ -681,8 +686,11 @@ def test_successful_login_redirects_to_exact_codex_callback(monkeypatch):
     )
 
     assert response.status_code == 302
-    assert response.headers["location"].startswith("http://127.0.0.1:3210/callback?code=")
-    assert response.headers["location"].endswith("&state=state")
+    location = response.headers["location"]
+    assert location.startswith("http://127.0.0.1:3210/callback?code=")
+    query = dict(parse_qsl(urlsplit(location).query))
+    # RFC 9207: the issuer exactly as in the metadata; ChatGPT and Codex reject a mismatch.
+    assert (query["state"], query["iss"]) == ("state", settings.issuer_url)
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["pragma"] == "no-cache"
     assert "one-time-test-password" not in response.headers["location"]
@@ -718,6 +726,129 @@ def test_login_form_csp_allows_only_self_and_registered_callback_origin(
     assert "Что произойдёт дальше" in body
     assert "Проверить подключение OKK" in body
     assert "OKK подключён" in body
+
+
+AUTHORIZE_OK = {
+    "client_id": "client",
+    "redirect_uri": "http://127.0.0.1:3210/callback",
+    "response_type": "code",
+    "code_challenge": "c" * 43,
+    "code_challenge_method": "S256",
+    "state": "state-1",
+    "scope": "okk.statistics.read",
+    "resource": None,
+}
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        ({"response_type": "token"}, "unsupported_response_type"),
+        ({"code_challenge_method": "plain"}, "invalid_request"),
+        ({"scope": "okk.statistics.write"}, "invalid_scope"),
+        ({"resource": "https://other.example/mcp"}, "invalid_target"),
+    ],
+)
+def test_authorization_error_returns_to_the_client_with_state_and_issuer(monkeypatch, change, error):
+    settings = Settings()
+    monkeypatch.setattr(oauth, "_load_client", AsyncMock(return_value=SimpleNamespace(scope=DEFAULT_SCOPES)))
+
+    response = asyncio.run(
+        oauth.authorize(**{**AUTHORIZE_OK, **change}, db=SimpleNamespace(), settings=settings)
+    )
+
+    location = response.headers["location"]
+    query = dict(parse_qsl(urlsplit(location).query))
+    assert response.status_code == 302
+    assert location.startswith("http://127.0.0.1:3210/callback?")
+    assert (query["error"], query["state"], query["iss"]) == (error, "state-1", settings.issuer_url)
+    assert "code" not in query
+
+
+def test_unknown_client_or_return_address_never_gets_a_redirect(monkeypatch):
+    monkeypatch.setattr(oauth, "_load_client", AsyncMock(side_effect=HTTPException(status_code=400)))
+    with pytest.raises(HTTPException):
+        asyncio.run(
+            oauth.authorize(
+                **{**AUTHORIZE_OK, "redirect_uri": "https://evil.example/cb", "response_type": "token"},
+                db=SimpleNamespace(),
+                settings=Settings(),
+            )
+        )
+
+
+def _registration_request(client_host: str, forwarded_for: str | None = None) -> Request:
+    headers = [(b"x-forwarded-for", forwarded_for.encode())] if forwarded_for else []
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/register",
+            "headers": headers,
+            "client": (client_host, 1),
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("client_host", "bucket", "limit"),
+    [
+        ("160.79.104.1", "net:160.79.104.0/21", 600),
+        ("160.79.111.254", "net:160.79.104.0/21", 600),
+        ("::ffff:160.79.105.7", "net:160.79.104.0/21", 600),
+        ("160.79.112.1", "ip:160.79.112.1", 20),
+        ("203.0.113.5", "ip:203.0.113.5", 20),
+    ],
+)
+def test_claude_ai_egress_network_shares_a_larger_registration_limit(client_host, bucket, limit):
+    assert oauth._registration_bucket(_registration_request(client_host), Settings()) == (bucket, limit)
+
+
+def test_registration_limit_ignores_a_forwarded_header_the_client_wrote_itself():
+    """uvicorn rewrites `request.client` only from trusted proxies; the header itself is not read."""
+
+    request = _registration_request("203.0.113.5", forwarded_for="160.79.104.1")
+    assert oauth._registration_bucket(request, Settings()) == ("ip:203.0.113.5", 20)
+
+
+def test_trusted_client_networks_are_validated_at_start():
+    with pytest.raises(ValueError, match="MCP_TRUSTED_CLIENT_NETWORKS"):
+        Settings(mcp_trusted_client_networks="160.79.104.1/21")
+
+
+def test_tool_without_a_granted_scope_answers_with_a_step_up_challenge(monkeypatch):
+    granted = ["openid", "email", "okk.statistics.read"]
+    token = oauth.AccessToken(
+        token="mcp-access", client_id="chatgpt", scopes=granted, expires_at=2_000_000_000
+    )
+    monkeypatch.setattr(oauth.OKKTokenVerifier, "verify_token", AsyncMock(return_value=token))
+    mcp_app = with_scope_challenge(
+        create_mcp_server(Settings(), AsyncMock()).streamable_http_app(), DEFAULT_SCOPES
+    )
+    with TestClient(mcp_app, base_url="http://localhost:8020") as client:
+        response = client.post(
+            "/mcp",
+            headers={"Accept": "application/json, text/event-stream", "Authorization": "Bearer mcp-access"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "list_call_transcripts", "arguments": {}},
+            },
+        )
+
+    result = response.json()["result"]
+    challenge = result["_meta"]["mcp/www_authenticate"][0]
+    assert response.status_code == 200
+    assert result["isError"] is True
+    # Clients without step-up (Codex, Claude Code) show this text.
+    assert "okk.transcripts.read" in result["content"][0]["text"]
+    assert "Reconnect" in result["content"][0]["text"]
+    assert challenge.startswith('Bearer error="insufficient_scope"')
+    # The new sign-in asks for what was granted plus what is missing: nothing is lost.
+    assert 'scope="email okk.statistics.read okk.transcripts.read openid"' in challenge
+    assert 'resource_metadata="http://localhost:8020/.well-known/oauth-protected-resource/mcp"' in challenge
+    assert "error_description=" in challenge
 
 
 def test_direct_or_stale_authorize_url_renders_friendly_recovery_instead_of_422():
