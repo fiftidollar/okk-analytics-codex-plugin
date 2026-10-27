@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.6.0 — not released
+## 1.6.0 — released 2026-10-27
 
 Reliability release after a review of the best MCP servers (GitHub, Sentry,
 Supabase, Cloudflare) and the MCP, Claude and OpenAI rules. No change to the
@@ -39,6 +39,13 @@ answers' data; update the plugin and start a new chat.
   (`MCP_TRUSTED_CLIENT_NETWORKS`) shares one bucket of 600 per hour, so
   claude.ai connections no longer hit 429; other addresses keep 20 per hour.
 - MCP SDK 1.27.2 → 1.30.0 (security fixes of the 1.x line).
+- `evals/`: 39 cases (36 analytics and safety questions plus the 3 negative
+  submission cases, 8 held out) whose expected values are read from OKK at run
+  time — no real data in the repo; `evals/run.py` drives `codex exec` or
+  `claude -p`, grades answers and tool choice, compares with the previous
+  release; `--dry-run` calls no model, and a paid run needs
+  `--confirm-paid-run`. `server/tests/test_evals_suite.py` fails when a case
+  names a tool the server no longer has.
 
 ## 1.5.0 — released 2026-10-27
 
