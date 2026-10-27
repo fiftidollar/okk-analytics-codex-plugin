@@ -888,7 +888,7 @@ def test_direct_or_stale_authorize_url_renders_friendly_recovery_instead_of_422(
     assert response.headers["content-type"].startswith("text/html")
     body = response.body.decode()
     assert "Подключение не запущено или ссылка устарела" in body
-    assert "Authenticate" in body
+    assert all(client in body for client in ("Claude", "Codex", "ChatGPT"))
     assert "application/json" not in response.headers["content-type"]
 
 
