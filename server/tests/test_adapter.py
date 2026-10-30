@@ -288,6 +288,38 @@ async def test_empty_viewer_acl_is_a_valid_empty_scope_without_data_queries():
 
 
 @pytest.mark.anyio
+async def test_employee_without_departments_gets_what_okk_opens_to_them():
+    # Сотрудник OKK видит себя (или свой отдел) по правилу отдела: отделов в учётке у него нет, и
+    # сужение шлюза по отделам отнимало бы у него его собственные данные. Его ограничивает только
+    # OKK — шлюз спрашивает и отдаёт то, что открыл OKK.
+    employee_id, department_id = str(uuid4()), str(uuid4())
+    platform = FakePlatform(
+        role="employee",
+        department_ids=(),
+        responses={
+            "/departments": [],
+            "/employees": {
+                "items": [
+                    {
+                        "id": employee_id,
+                        "full_name": "Иванова Анна",
+                        "is_active": True,
+                        "department_id": department_id,
+                    }
+                ],
+                "total": 1,
+                "pages": 1,
+            },
+        },
+    )
+
+    result = await adapter(platform).list_employees()
+
+    assert [item["id"] for item in result["data"]["items"]] == [employee_id]
+    assert result["data"]["items"][0]["department"] == {"id": department_id, "name": None, "code": None}
+
+
+@pytest.mark.anyio
 async def test_supervisor_catalog_uses_explicit_upstream_acl_and_safe_projection():
     supervisor_id = str(uuid4())
     platform = FakePlatform(

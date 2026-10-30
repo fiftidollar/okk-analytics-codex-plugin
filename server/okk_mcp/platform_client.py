@@ -50,6 +50,19 @@ class AccountContext:
     def is_admin(self) -> bool:
         return self.role == "admin"
 
+    @property
+    def limited_to_departments(self) -> bool:
+        """Руководитель видит только свои отделы — шлюз сужает и сам, вторым замком. Сотрудника («себя
+        или свой отдел» по правилу отдела) и администратора ограничивает только OKK: его отделов в
+        учётке нет, и сужение шлюза по ним отняло бы у сотрудника его собственные данные."""
+        return self.role == "viewer"
+
+    @property
+    def scoped_by_okk_only(self) -> bool:
+        """Сотрудник: отделов в учётке нет, что ему открыто (себя или свой отдел), решает только OKK —
+        строки, которые OKK отдал, шлюз не отбрасывает по видимым отделам."""
+        return self.role == "employee"
+
 
 class _StoreNoCookies(DefaultCookiePolicy):
     """One HTTP client serves every person: a cookie OKK sets for one must never reach another."""

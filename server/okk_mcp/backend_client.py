@@ -579,11 +579,11 @@ class AnalyticsAdapter:
     async def departments(self) -> list[dict[str, Any]]:
         if self._departments is None:
             context = await self.context()
-            if not context.is_admin and not context.department_ids:
+            if context.limited_to_departments and not context.department_ids:
                 self._departments = []
             else:
                 rows = await self._get("/departments")
-                if not context.is_admin:
+                if context.limited_to_departments:
                     allowed = set(context.department_ids)
                     rows = [row for row in rows if str(row.get("id")) in allowed]
                 self._departments = [self._safe_department(row) for row in rows]
@@ -1016,7 +1016,7 @@ class AnalyticsAdapter:
         if department_id and call_department_id != department_id:
             return None
         context = await self.context()
-        if not context.is_admin:
+        if context.limited_to_departments:
             visible = {str(item["id"]) for item in await self.departments()}
             if call_department_id not in visible:
                 return None
@@ -1091,7 +1091,7 @@ class AnalyticsAdapter:
         if department_id and department_id not in visible_departments:
             return [], False, 0, 0
         context = await self.context()
-        if not context.is_admin and not context.department_ids:
+        if context.limited_to_departments and not context.department_ids:
             return [], True, 0, 0
         rows: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
@@ -1117,13 +1117,13 @@ class AnalyticsAdapter:
                     or not isinstance(safe.get("full_name"), str)
                     or not safe["full_name"].strip()
                     or employee_id in seen_ids
-                    or employee_department_id not in visible_departments
+                    or (employee_department_id not in visible_departments and not context.scoped_by_okk_only)
                     or (department_id and employee_department_id != department_id)
                 ):
                     excluded += 1
                     continue
                 seen_ids.add(employee_id)
-                visible_department = visible_departments[employee_department_id]
+                visible_department = visible_departments.get(employee_department_id) or {}
                 safe["department"] = {
                     "id": employee_department_id,
                     "name": visible_department.get("name"),
@@ -1444,7 +1444,7 @@ class AnalyticsAdapter:
             return await self.unavailable_department()
         department = str(department_row["id"]) if department_row else None
         context = await self.context()
-        if not context.is_admin and not context.department_ids:
+        if context.limited_to_departments and not context.department_ids:
             return await self.envelope({}, status="no_data", period=bounds)
         common = _period_query(period, start_date, end_date)
         summary, trend, ranking, departments = await asyncio.gather(
