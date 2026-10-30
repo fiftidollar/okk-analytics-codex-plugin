@@ -8,9 +8,16 @@ membership or replace unavailable OKK scores.
 
 ## Credentials and tokens
 
-- Codex never receives the OKK password.
-- The gateway accepts it only on the authorization form, forwards it to
-  `/auth/login` and discards it before responding.
+- Neither Codex nor the gateway receives the OKK password: the person signs in
+  on the OKK page; the gateway exchanges a one-time OKK code (60 s, single use,
+  bound to the gateway's exact callback and PKCE) with `OKK_MCP_CLIENT_SECRET`.
+  Production refuses to start with the development value of that secret.
+- Every request to OKK carries `X-OKK-Client: codex-mcp-readonly`. OKK refuses
+  it (403) while the company's MCP module is off, so switching the module off
+  closes connections that are already open; switching it on opens them again.
+- Consent submissions are limited per client address
+  (`MCP_LOGIN_ATTEMPTS_PER_MINUTE`, fail-closed when Redis is down): each one
+  keeps a pending sign-in in Redis until OKK returns.
 - MCP authorization codes/access/refresh tokens are opaque; only SHA-256 hashes
   are stored.
 - Upstream OKK access and rotating refresh tokens are encrypted with Fernet
@@ -199,8 +206,8 @@ criteria-only GET endpoint should replace this compatibility path.
   checked by default (1.4.0). An unchecked box removes that scope from the
   authorization code, so the person decides how much the client gets. A form
   of the previous page version (no `consent_version`) grants what was
-  requested. A page shown again after a wrong password or a refreshed form
-  keeps the boxes as the person left them.
+  requested. A page shown again after a refreshed form keeps the boxes as the
+  person left them.
 - Step-up for a missing scope: the tool call ends with `isError: true`, a text
   naming the scope and telling the person to reconnect (what Codex and Claude
   Code show), and `_meta["mcp/www_authenticate"]` with

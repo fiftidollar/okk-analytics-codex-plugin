@@ -12,6 +12,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://okk_mcp:${POSTGRES_PASSWORD}@postgres:5432/okk_mcp
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       OKK_API_BASE_URL: https://okk-backend.akfixdev.ru/api/v1
+      # Секрет шлюза для обмена кода входа OKK: тот же, что MCP_GATEWAY_CLIENT_SECRET у OKK.
+      OKK_MCP_CLIENT_SECRET: ${OKK_MCP_CLIENT_SECRET}
       MCP_OAUTH_SECRET: ${MCP_OAUTH_SECRET}
       MCP_SESSION_ENCRYPTION_SECRET: ${MCP_SESSION_ENCRYPTION_SECRET}
       MCP_ISSUER_URL: https://okk-mcp.akfixdev.ru

@@ -1,9 +1,10 @@
-"""Native OKK login bridge tests."""
+"""OKK login bridge tests: code exchange, sealed sessions, renewal and reads."""
 
 from __future__ import annotations
 
 import json
 from unittest.mock import AsyncMock
+from urllib.parse import parse_qsl
 from uuid import uuid4
 
 import httpx
@@ -37,11 +38,11 @@ def _context(access_token: str = "access") -> AccountContext:
 
 @pytest.mark.anyio
 async def test_one_persons_refresh_cookie_never_reaches_another_persons_request():
-    sent: list[tuple[str, str]] = []
+    sent: list[tuple[str, str, str]] = []
     issued = iter(["refresh-a", "refresh-b", "refresh-b2"])
 
     def handler(request: httpx.Request) -> httpx.Response:
-        sent.append((request.url.path, request.headers.get("cookie", "")))
+        sent.append((request.url.path, request.headers.get("cookie", ""), request.headers["x-okk-client"]))
         return httpx.Response(
             200,
             json={"access_token": "access", "user": {"id": "u", "email": "u@example.com", "role": "viewer"}},
@@ -49,15 +50,16 @@ async def test_one_persons_refresh_cookie_never_reaches_another_persons_request(
         )
 
     platform = _platform(handler)
-    await platform.authenticate("a@example.com", "password-a")
-    await platform.authenticate("b@example.com", "password-b")
+    await platform.exchange_login_code("code-a", "verifier-a")
+    await platform.exchange_login_code("code-b", "verifier-b")
     _access, rotated, _user = await platform._refresh("refresh-b")
     await platform.close()
 
+    # Заголовок клиента — договорённость с OKK: по нему OKK закрывает шлюз компании без модуля MCP.
     assert sent == [
-        ("/api/v1/auth/login", ""),
-        ("/api/v1/auth/login", ""),
-        ("/api/v1/auth/refresh", "refresh_token=refresh-b"),
+        ("/api/v1/auth/mcp/token", "", "codex-mcp-readonly"),
+        ("/api/v1/auth/mcp/token", "", "codex-mcp-readonly"),
+        ("/api/v1/auth/refresh", "refresh_token=refresh-b", "codex-mcp-readonly"),
     ]
     assert rotated == "refresh-b2"
 
@@ -135,12 +137,12 @@ async def test_read_repeats_only_failures_in_transit(monkeypatch, read, answers,
 
 
 @pytest.mark.anyio
-async def test_password_is_forwarded_once_and_never_persisted():
+async def test_login_code_is_exchanged_with_the_gateway_secret_and_okk_tokens_are_stored_sealed():
     observed: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/api/v1/auth/login"
-        observed.update(json.loads(request.content))
+        assert request.url.path == "/api/v1/auth/mcp/token"
+        observed.update(dict(parse_qsl(request.content.decode())))
         return httpx.Response(
             200,
             json={
@@ -156,33 +158,31 @@ async def test_password_is_forwarded_once_and_never_persisted():
             headers={"set-cookie": "refresh_token=okk-refresh; HttpOnly; Path=/api/v1/auth"},
         )
 
-    client = OKKPlatformClient(Settings(okk_api_base_url="https://okk.example/api/v1"))
-    await client.client.aclose()
-    client.client = httpx.AsyncClient(
-        base_url="https://okk.example/api/v1",
-        transport=httpx.MockTransport(handler),
-    )
-    session = await client.authenticate("user@example.com", "plain-password")
+    settings = Settings(okk_api_base_url=OKK_URL, okk_mcp_client_secret="gateway-secret-0123456789")
+    client = OKKPlatformClient(settings, transport=httpx.MockTransport(handler))
+    session = await client.exchange_login_code("okk-code", "gateway-verifier")
     await client.close()
 
-    assert observed == {"email": "user@example.com", "password": "plain-password"}
-    assert not hasattr(session, "password")
-    assert "plain-password" not in session.encrypted_access_token
-    assert "plain-password" not in session.encrypted_refresh_token
+    assert observed == {
+        "grant_type": "authorization_code",
+        "code": "okk-code",
+        "redirect_uri": settings.okk_login_callback_url,
+        "code_verifier": "gateway-verifier",
+        "client_id": "okk-mcp-gateway",
+        "client_secret": "gateway-secret-0123456789",
+    }
+    assert "okk-access" not in session.encrypted_access_token
+    assert "okk-refresh" not in session.encrypted_refresh_token
     assert client.cipher.open(session.encrypted_access_token) == "okk-access"
     assert client.cipher.open(session.encrypted_refresh_token) == "okk-refresh"
 
 
 @pytest.mark.anyio
-async def test_invalid_login_returns_generic_authentication_error():
-    client = OKKPlatformClient(Settings(okk_api_base_url="https://okk.example/api/v1"))
-    await client.client.aclose()
-    client.client = httpx.AsyncClient(
-        base_url="https://okk.example/api/v1",
-        transport=httpx.MockTransport(lambda _request: httpx.Response(401)),
-    )
-    with pytest.raises(OKKAuthenticationError, match="Invalid OKK login or password"):
-        await client.authenticate("user@example.com", "wrong")
+@pytest.mark.parametrize(("status", "error"), [(400, OKKAuthenticationError), (503, OKKUnavailable)])
+async def test_refused_or_failed_code_exchange_is_a_login_error_not_a_session(status, error):
+    client = _platform(lambda _request: httpx.Response(status))
+    with pytest.raises(error):
+        await client.exchange_login_code("okk-code", "gateway-verifier")
     await client.close()
 
 

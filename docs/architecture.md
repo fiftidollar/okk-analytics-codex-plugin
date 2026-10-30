@@ -14,9 +14,10 @@ Codex MCP client
   -> OAuth Authorization Code + PKCE
   -> standalone OKK Analytics gateway
        -> private OAuth PostgreSQL (clients, hashes, encrypted OKK sessions)
-       -> Redis (fail-closed login throttling)
+       -> Redis (pending sign-ins, fail-closed connection throttling)
+       -> browser -> OKK sign-in page and /auth/mcp/authorize (one-time OKK code)
        -> existing OKK /api/v1 over HTTPS
-            -> /auth/login, /auth/refresh, /auth/me
+            -> /auth/mcp/token (code + gateway secret + PKCE), /auth/refresh, /auth/me
             -> existing read-only analytics GET endpoints
             -> POST /calls/phone-lookup (phone in JSON body)
             -> POST /calls/transcript-search (search words in JSON body)
@@ -40,15 +41,16 @@ The published deployment is production-only: the upstream base URL is
    [security.md](security.md)) and saves the client row only when a person
    signs in.
 2. `/authorize` validates exact redirect URI, resource indicator and PKCE S256,
-   then displays the gateway's login form. Each authorization flow receives a
-   signed short-lived CSRF nonce inside the authorization request, so retries or
-   parallel Codex login tabs cannot invalidate one another and Chrome cookie
-   behavior cannot block the form POST. Older cookie-era forms are refreshed
-   into the stateless format while the signed request is still within its
-   ten-minute window. The login form posts only to the gateway. Because Chromium
-   also applies `form-action` to a form response's redirect chain, the page CSP
-   additionally permits only the origin of the validated registered callback.
-   After successful login, the authorization endpoint responds with a direct
+   then displays the gateway's consent page (no password field). Each
+   authorization flow receives a signed short-lived CSRF nonce inside the
+   authorization request, so retries or parallel Codex login tabs cannot
+   invalidate one another and Chrome cookie behavior cannot block the form
+   POST. Older cookie-era forms are refreshed into the stateless format while
+   the signed request is still within its ten-minute window. The consent form
+   posts only to the gateway. Because Chromium also applies `form-action` to a
+   form response's redirect chain, the page CSP additionally permits only the
+   origin of the validated registered callback and of the OKK sign-in page.
+   After the OKK sign-in (step 3), the gateway's callback responds with a direct
    `302` to that exact URI with `code`, the original `state` and `iss` (RFC
    9207; error redirects carry it too). Codex owns the
    loopback listener, token exchange and resulting authenticated MCP state.
@@ -57,8 +59,15 @@ The published deployment is production-only: the upstream base URL is
    the code. The login page therefore explains the handoff, and the first
    authenticated `get_access_context` call supplies the definitive chat-level
    confirmation.
-3. The password is held only for the request and forwarded to the normal OKK
-   `/auth/login`. It is never logged or persisted.
+3. Consent sends the browser to OKK `/auth/mcp/authorize` with the gateway's own
+   client id, its exact callback and the gateway's PKCE; the pending request waits
+   in Redis under a one-time random `state` (ten minutes, `GETDEL`). The person
+   signs in on the OKK page (password, SSO, second factor) — the gateway never
+   sees a password. OKK returns a one-time code to `/oauth/okk/callback`; the
+   gateway exchanges it at `/auth/mcp/token` with `OKK_MCP_CLIENT_SECRET` and the
+   PKCE verifier, then issues the client's own code. OKK refuses the code for a
+   company without the MCP module, and refuses every later gateway request
+   (`X-OKK-Client: codex-mcp-readonly`) once the module is switched off.
 4. The OKK access and refresh tokens are authenticated-encrypted in the
    gateway's database. MCP authorization codes/access/refresh tokens are stored
    only as SHA-256 hashes.
@@ -134,8 +143,9 @@ request selectors, entity UUIDs, employee names, AI observations, response
 payloads, passwords or tokens. `ANALYTICS_TRACE_ENABLED=false` disables these
 events; responses themselves are never persisted by the gateway.
 
-This is deliberately not HR/SSO authorization. Users provisioned by HR still
-need a usable local OKK password for `/auth/login`.
+The gateway is not an identity provider and never sees credentials: whoever can
+sign in to OKK (password, SSO through the company's identity provider, second
+factor) can connect, and OKK decides the account, its company and its role.
 
 ## Plugin packaging contract
 

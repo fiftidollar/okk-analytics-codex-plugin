@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, parse_qsl, urlsplit
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -388,6 +389,8 @@ async def test_client_named_by_its_metadata_document_signs_in_exchanges_and_refr
     metadata = ClientMetadata(client_id, "ChatGPT", (redirect_uri,), None)
     monkeypatch.setattr(oauth, "load_client_metadata", AsyncMock(return_value=metadata))
     monkeypatch.setattr(oauth, "_check_login_rate_limit", AsyncMock())
+    _MemoryRedis.stored = {}
+    monkeypatch.setattr(oauth.redis, "from_url", lambda *_args, **_kwargs: _MemoryRedis())
 
     def new_okk_session(*_args):
         return OkkAccountSession(
@@ -398,7 +401,7 @@ async def test_client_named_by_its_metadata_document_signs_in_exchanges_and_refr
             department_ids_snapshot=[],
         )
 
-    monkeypatch.setattr(env.platform, "authenticate", AsyncMock(side_effect=new_okk_session))
+    monkeypatch.setattr(env.platform, "exchange_login_code", AsyncMock(side_effect=new_okk_session))
     verifier = "v" * 64
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     signed = oauth._serializer(env.settings).dumps(
@@ -418,17 +421,20 @@ async def test_client_named_by_its_metadata_document_signs_in_exchanges_and_refr
     codes = []
     for _ in range(2):
         async with env.factory() as db:
-            response = await oauth.authorize_login(
+            to_okk = await oauth.authorize_login(
                 request=request,
                 authorization_request=signed,
                 csrf_token="csrf",
-                email="user@example.com",
-                password="test-password",
                 consent_version=None,
                 grant_transcripts=None,
                 grant_phones=None,
                 db=db,
                 settings=env.settings,
+            )
+        okk_state = dict(parse_qsl(urlsplit(to_okk.headers["location"]).query))["state"]
+        async with env.factory() as db:
+            response = await oauth.okk_login_callback(
+                state=okk_state, code="okk-code", db=db, settings=env.settings
             )
             await db.commit()
         codes.append(parse_qs(urlsplit(response.headers["location"]).query)["code"][0])
@@ -507,7 +513,8 @@ async def test_migration_marks_clients_in_use_and_rolls_back(env):
 
 
 class _MemoryRedis:
-    """Redis входа через OKK в памяти: `set` со сроком и одноразовый `getdel`, как настоящий."""
+    """Redis входа через OKK в памяти: `set` со сроком, одноразовый `getdel` и счётчик попыток
+    (`pipeline`: `incr` + `expire`), как настоящий."""
 
     stored: dict[str, str] = {}
 
@@ -517,8 +524,32 @@ class _MemoryRedis:
     async def getdel(self, key):
         return self.stored.pop(key, None)
 
+    def pipeline(self, transaction=True):
+        return _MemoryPipeline(self.stored)
+
     async def aclose(self):
         return None
+
+
+class _MemoryPipeline:
+    def __init__(self, stored):
+        self.stored, self.results = stored, []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return None
+
+    def incr(self, key):
+        self.stored[key] = int(self.stored.get(key, 0)) + 1
+        self.results.append(self.stored[key])
+
+    def expire(self, key, seconds):
+        self.results.append(True)
+
+    async def execute(self):
+        return self.results
 
 
 OKK_LOGIN_SECRET = "gateway-secret-0123456789"
@@ -531,7 +562,6 @@ def okk_login(env, monkeypatch):
 
     settings = Settings(
         okk_api_base_url=OKK_URL,
-        mcp_login_mode="okk",
         okk_mcp_client_secret=OKK_LOGIN_SECRET,
         okk_public_api_url="https://okk-public.example/api/v1",
     )
@@ -581,7 +611,7 @@ async def _seed_client(env) -> None:
 
 
 async def _consent(env, settings: Settings, challenge: str):
-    """Согласие на странице шлюза: доступ к транскриптам снят — в режиме OKK без логина и пароля."""
+    """Согласие на странице шлюза: доступ к транскриптам снят; логина и пароля у шлюза нет."""
 
     signed = oauth._serializer(settings).dumps(
         {
@@ -602,8 +632,6 @@ async def _consent(env, settings: Settings, challenge: str):
             request=request,
             authorization_request=signed,
             csrf_token="csrf",
-            email=None,
-            password=None,
             consent_version="2",
             grant_transcripts=None,
             grant_phones="1",
@@ -672,3 +700,21 @@ async def test_okk_refusal_reaches_the_client_as_an_error_with_its_state(env, ok
             "state": ["client-state"],
             "iss": [okk_login.settings.issuer_url],
         }
+
+
+async def test_connection_attempts_from_one_address_are_limited_per_minute(env, okk_login):
+    """Каждое подтверждение держит запрос подключения в Redis до возврата из OKK: поток подтверждений
+    с одного адреса упирается в предел, а не заполняет Redis."""
+
+    await _seed_client(env)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(b"e" * 64).digest()).rstrip(b"=").decode()
+    limit = okk_login.settings.mcp_login_attempts_per_minute
+
+    allowed = [await _consent(env, okk_login.settings, challenge) for _ in range(limit)]
+    with pytest.raises(HTTPException) as refused:
+        await _consent(env, okk_login.settings, challenge)
+
+    assert all(response.status_code == 303 for response in allowed)
+    assert refused.value.status_code == 429
+    pending = [key for key in _MemoryRedis.stored if key.startswith("okk:mcp:okk-login:")]
+    assert len(pending) == limit

@@ -364,15 +364,15 @@ plugin at the test-stand API.
 - HTTPS hostname for the gateway, currently planned as
   `https://okk-mcp.akfixdev.ru`.
 - Separate PostgreSQL database/user for OAuth state.
-- Redis for login throttling.
+- Redis for pending sign-ins and connection throttling.
 - Production OKK API:
   `https://okk-backend.akfixdev.ru/api/v1`.
 - Independent high-entropy OAuth and session-encryption secrets.
 - During universal-directory submission only, the exact
   `OPENAI_APPS_CHALLENGE_TOKEN` issued by the OpenAI Platform portal.
 
-Never reuse the OKK JWT signing secret; this gateway authenticates through the
-public OKK login API and does not mint OKK tokens.
+Never reuse the OKK JWT signing secret; this gateway exchanges a one-time OKK
+sign-in code for an OKK session and does not mint OKK tokens.
 
 ## Rollout order
 
@@ -468,12 +468,22 @@ Redis services. Only the MCP container joins `dokploy-network`; the databases
 stay on an internal Compose network and publish no host ports.
 
 Create the Dokploy Compose from this repository on branch `main`, path
-`docker-compose.dokploy.yml`, then set four independent high-entropy values:
+`docker-compose.dokploy.yml`, then set five independent high-entropy values:
 
 - `POSTGRES_PASSWORD`
 - `REDIS_PASSWORD`
 - `MCP_OAUTH_SECRET`
 - `MCP_SESSION_ENCRYPTION_SECRET`
+- `OKK_MCP_CLIENT_SECRET` — the same value as `MCP_GATEWAY_CLIENT_SECRET` of the
+  OKK backend, which also lists `https://okk-mcp.akfixdev.ru/oauth/okk/callback`
+  in `MCP_GATEWAY_REDIRECT_URIS`. Without it the gateway does not start.
+
+Sign-in through the OKK page (branch `claude/mcp-okk-login`) needs OKK
+`/auth/mcp/authorize` and `/auth/mcp/token`: release OKK first, then the
+gateway. The released 1.6.x gateway works with that OKK release for
+administrators and supervisors (checked in Docker on 2026-10-30), refuses OKK
+employees (it does not know the role) and is refused by OKK while the company's
+MCP module is off.
 
 Traefik terminates TLS for `okk-mcp.akfixdev.ru` and forwards only to port
 `8020`. The container trusts forwarded headers because that port is exposed

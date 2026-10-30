@@ -1,5 +1,26 @@
 # Changelog
 
+## Sign-in through OKK — branch `claude/mcp-okk-login`, not released
+
+- One way to sign in: the gateway's page asks only for consent and sends the
+  browser to the OKK sign-in page (password, SSO, second factor); the gateway
+  exchanges the one-time OKK code with `OKK_MCP_CLIENT_SECRET` and PKCE and
+  never sees a password. The password form and `MCP_LOGIN_MODE` are gone: a
+  deployment that forgot the switch would have silently kept the old form,
+  without SSO and without the company's MCP module check.
+- `OKK_MCP_CLIENT_SECRET` is required; production refuses the development
+  value; the Dokploy compose passes it.
+- OKK employees (role `employee`) sign in; what they see is decided by OKK, the
+  gateway does not narrow them by departments.
+- Consent submissions are limited per client address (each keeps a pending
+  sign-in in Redis until OKK returns).
+- Needs the OKK release with `/auth/mcp/*` first (OKK multitenancy). Docker on
+  2026-10-30: the released gateway with that OKK — administrator and supervisor
+  work, an employee is refused; this branch — administrator and employee sign
+  in through Keycloak on the OKK side; with the company's MCP module off, OKK
+  refuses both gateways' open sessions and new connections, the OKK interface
+  keeps working; back on — the same sessions work again. Tests: 368 passed.
+
 ## Eval run and install check — 2026-10-27
 
 - First paid eval run (Codex, 37 cases on production): 37/37 after fixing

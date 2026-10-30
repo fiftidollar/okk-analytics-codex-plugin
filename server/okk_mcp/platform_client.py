@@ -113,23 +113,9 @@ class OKKPlatformClient:
             raise OKKAuthenticationError("OKK account is inactive or has an unsupported role")
         return user_id, email, role, department_ids
 
-    async def authenticate(self, email: str, password: str) -> OkkAccountSession:
-        """Exchange credentials directly with OKK; the password is never persisted."""
-
-        try:
-            response = await self.client.post(
-                "/auth/login",
-                json={"email": email.strip(), "password": password},
-            )
-        except httpx.HTTPError as exc:
-            raise OKKUnavailable("OKK login is temporarily unavailable") from exc
-        if response.status_code == 401:
-            raise OKKAuthenticationError("Invalid OKK login or password")
-        return self._account_session(response)
-
     async def exchange_login_code(self, code: str, code_verifier: str) -> OkkAccountSession:
         """Вход на странице OKK: одноразовый код OKK → сессия OKK сервер-к-серверу (секрет шлюза и
-        PKCE). Ответ OKK — тот же, что у входа по паролю."""
+        PKCE). Ответ OKK — тот же, что у входа OKK по паролю: сессия и refresh-cookie."""
 
         try:
             response = await self.client.post(

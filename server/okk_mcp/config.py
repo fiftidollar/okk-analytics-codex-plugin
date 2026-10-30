@@ -23,13 +23,11 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://okk_mcp:okk_mcp@localhost:5432/okk_mcp"
     redis_url: str = "redis://localhost:6379/0"
     okk_api_base_url: str = "http://localhost:8002/api/v1"
-    # Как человек входит при подключении. `password` — форма шлюза отправляет логин и пароль в
-    # `/auth/login` OKK (прежний путь). `okk` — страница входа OKK (Keycloak, SSO, второй фактор):
-    # шлюз ведёт браузер на `/auth/mcp/authorize` OKK и меняет одноразовый код на сессию OKK своим
-    # секретом клиента; пароль шлюз не видит. Два пути сразу не работают — только явный режим.
-    mcp_login_mode: Literal["password", "okk"] = "password"
+    # Человек входит на странице OKK (пароль, SSO, второй фактор): шлюз ведёт браузер на
+    # `/auth/mcp/authorize` OKK и меняет одноразовый код на сессию OKK своим секретом клиента —
+    # пароль шлюз не видит. Тот же секрет и адрес возврата шлюза знает OKK.
     okk_mcp_client_id: str = "okk-mcp-gateway"
-    okk_mcp_client_secret: str = ""
+    okk_mcp_client_secret: str = Field(default="dev-okk-mcp-client-secret", min_length=16)
     # Адрес API OKK для браузера (страница входа); пусто — тот же, что OKK_API_BASE_URL (шлюз может
     # ходить в OKK внутренним адресом, а браузер — только публичным).
     okk_public_api_url: str = ""
@@ -48,6 +46,7 @@ class Settings(BaseSettings):
     mcp_refresh_token_days: int = Field(default=30, ge=1, le=365)
     mcp_authorization_code_minutes: int = Field(default=5, ge=1, le=15)
     mcp_http_timeout_seconds: float = Field(default=30.0, ge=2, le=120)
+    # Подтверждений подключения с одного адреса в минуту: каждое держит запрос в Redis до возврата.
     mcp_login_attempts_per_minute: int = Field(default=8, ge=2, le=30)
     mcp_registrations_per_hour: int = Field(default=20, ge=2, le=500)
     # Сети, из которых регистрируются клиенты сайтов: все подключения claude.ai идут из
@@ -76,7 +75,7 @@ class Settings(BaseSettings):
     # Точные адреса возврата сайтов-клиентов (через запятую), на которые можно получить код входа.
     # Адреса этого компьютера (Codex, Claude Code) разрешены всегда. Только точный адрес: на
     # claude.ai и chatgpt.com живут и чужие приложения, а чужой адрес возврата — это кража кода
-    # входа человека, который ввёл пароль на нашей странице. Адреса ChatGPT: прежний — у нашего
+    # входа человека, который вошёл в OKK. Адреса ChatGPT: прежний — у нашего
     # приложения, постоянный — для серверов, которые возвращают `iss` (RFC 9207).
     mcp_oauth_redirect_uris: str = (
         "https://claude.ai/api/mcp/auth_callback,"
@@ -108,10 +107,6 @@ class Settings(BaseSettings):
                 raise ValueError(f"{label} must be an absolute URL without credentials, query or fragment")
         if not resource.startswith(f"{issuer}/"):
             raise ValueError("MCP_RESOURCE_URL must be hosted below MCP_ISSUER_URL")
-        if self.mcp_login_mode == "okk" and len(self.okk_mcp_client_secret) < 16:
-            raise ValueError(
-                "MCP_LOGIN_MODE=okk needs OKK_MCP_CLIENT_SECRET (the gateway secret issued by OKK)"
-            )
         try:
             self.trusted_client_networks  # noqa: B018 - a wrong network fails the start, not a request
         except ValueError as exc:
@@ -131,6 +126,8 @@ class Settings(BaseSettings):
                 )
             if self.mcp_oauth_secret == self.mcp_session_encryption_secret:
                 raise ValueError("OAuth signing and session encryption secrets must be different")
+            if self.okk_mcp_client_secret.startswith("dev-"):
+                raise ValueError("Production OKK_MCP_CLIENT_SECRET must be the gateway secret issued by OKK")
             database = urlsplit(self.database_url)
             if (
                 not database.username

@@ -21,7 +21,6 @@ from starlette.requests import Request
 from okk_mcp import oauth
 from okk_mcp.config import Settings
 from okk_mcp.main import app
-from okk_mcp.platform_client import OKKAuthenticationError
 from okk_mcp.security import (
     DEFAULT_SCOPES,
     redirect_origin,
@@ -479,9 +478,8 @@ def test_person_can_refuse_transcripts_and_phone_numbers_on_the_login_page(form,
     assert oauth._granted_scope(requested, form) == granted
 
 
-@pytest.mark.parametrize("submitted_csrf", ["csrf", "stale-csrf"])
-def test_login_page_shown_again_keeps_the_persons_refusal(monkeypatch, submitted_csrf):
-    """After a wrong password or a refreshed form, an unchecked box stays unchecked."""
+def test_login_page_shown_again_keeps_the_persons_refusal(monkeypatch):
+    """After a refreshed form, an unchecked box stays unchecked."""
 
     settings = Settings()
     signed = oauth._serializer(settings).dumps(
@@ -499,18 +497,12 @@ def test_login_page_shown_again_keeps_the_persons_refusal(monkeypatch, submitted
         {"type": "http", "method": "POST", "path": "/authorize", "headers": [], "client": ("127.0.0.1", 1)}
     )
     monkeypatch.setattr(oauth, "_load_client", AsyncMock(return_value=SimpleNamespace(client_name="Codex")))
-    monkeypatch.setattr(oauth, "_check_login_rate_limit", AsyncMock())
-    monkeypatch.setattr(
-        oauth.platform_client, "authenticate", AsyncMock(side_effect=OKKAuthenticationError("invalid"))
-    )
 
     response = asyncio.run(
         oauth.authorize_login(
             request=request,
             authorization_request=signed,
-            csrf_token=submitted_csrf,
-            email="user@example.com",
-            password="invalid-password",
+            csrf_token="stale-csrf",
             consent_version="2",
             grant_transcripts=None,
             grant_phones="1",
@@ -650,49 +642,41 @@ def test_parallel_authorization_pages_keep_independent_signed_csrf_tokens(monkey
         AsyncMock(return_value=SimpleNamespace(client_name="Codex")),
     )
     monkeypatch.setattr(oauth, "_check_login_rate_limit", AsyncMock())
-    monkeypatch.setattr(
-        oauth.platform_client,
-        "authenticate",
-        AsyncMock(side_effect=OKKAuthenticationError("invalid credentials")),
-    )
-    response = asyncio.run(
-        oauth.authorize_login(
-            request=request,
-            authorization_request=signed_a,
-            csrf_token=csrf_a,
-            email="user@example.com",
-            password="invalid-password",
-            db=SimpleNamespace(),
-            settings=settings,
+    remembered = AsyncMock(return_value="okk-state")
+    monkeypatch.setattr(oauth, "_remember_okk_login", remembered)
+
+    def submit(signed: str, csrf: str):
+        return asyncio.run(
+            oauth.authorize_login(
+                request=request,
+                authorization_request=signed,
+                csrf_token=csrf,
+                db=SimpleNamespace(),
+                settings=settings,
+            )
         )
-    )
-    assert response.status_code == 200
-    assert "Неверный логин или пароль" in response.body.decode()
+
+    crossed = submit(signed_a, csrf_b)
+    own = submit(signed_a, csrf_a)
+
+    # Чужой токен формы не проходит: страница показывается заново, в OKK браузер не уходит.
+    assert crossed.status_code == 200 and "Сеанс входа был обновлён" in crossed.body.decode()
+    assert own.status_code == 303
+    assert remembered.await_count == 1 and remembered.await_args.args[1]["state"] == "a"
 
 
 def test_successful_login_redirects_to_exact_codex_callback(monkeypatch):
     settings = Settings()
-    csrf = "csrf"
-    signed = oauth._serializer(settings).dumps(
-        {
-            "client_id": "client",
-            "redirect_uri": "http://127.0.0.1:3210/callback",
-            "state": "state",
-            "scope": "okk.statistics.read",
-            "resource": settings.resource_url,
-            "code_challenge": "challenge",
-            "csrf_token": csrf,
-        }
-    )
-    request = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/authorize",
-            "headers": [],
-            "client": ("127.0.0.1", 12345),
-        }
-    )
+    pending = {
+        "client_id": "client",
+        "redirect_uri": "http://127.0.0.1:3210/callback",
+        "state": "state",
+        "scope": "okk.statistics.read",
+        "resource": settings.resource_url,
+        "code_challenge": "challenge",
+        "granted_scope": "okk.statistics.read",
+        "verifier": "gateway-verifier",
+    }
     account_session = SimpleNamespace(id=uuid.uuid4())
     db = SimpleNamespace(add=lambda _row: None, flush=AsyncMock())
     monkeypatch.setattr(
@@ -700,19 +684,12 @@ def test_successful_login_redirects_to_exact_codex_callback(monkeypatch):
         "_load_client",
         AsyncMock(return_value=SimpleNamespace(client_name="Codex", client_id="client")),
     )
-    monkeypatch.setattr(oauth, "_check_login_rate_limit", AsyncMock())
-    monkeypatch.setattr(oauth.platform_client, "authenticate", AsyncMock(return_value=account_session))
+    monkeypatch.setattr(oauth, "_take_okk_login", AsyncMock(return_value=pending))
+    monkeypatch.setattr(oauth, "_remember_metadata_document_client", AsyncMock())
+    monkeypatch.setattr(oauth.platform_client, "exchange_login_code", AsyncMock(return_value=account_session))
 
     response = asyncio.run(
-        oauth.authorize_login(
-            request=request,
-            authorization_request=signed,
-            csrf_token=csrf,
-            email="user@example.com",
-            password="one-time-test-password",
-            db=db,
-            settings=settings,
-        )
+        oauth.okk_login_callback(state="okk-state", code="okk-one-time-code", db=db, settings=settings)
     )
 
     assert response.status_code == 302
@@ -723,8 +700,8 @@ def test_successful_login_redirects_to_exact_codex_callback(monkeypatch):
     assert (query["state"], query["iss"]) == ("state", settings.issuer_url)
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["pragma"] == "no-cache"
-    assert "one-time-test-password" not in response.headers["location"]
-    assert "user@example.com" not in response.headers["location"]
+    # Код OKK и ключ PKCE шлюза клиенту не уходят: у клиента — только свой код.
+    assert "okk-one-time-code" not in location and "gateway-verifier" not in location
 
 
 @pytest.mark.parametrize(
@@ -924,8 +901,6 @@ def test_tampered_authorization_csrf_refreshes_the_login_form(monkeypatch):
             request=request,
             authorization_request=signed,
             csrf_token="tampered-csrf",
-            email="user@example.com",
-            password="invalid-password",
             db=SimpleNamespace(),
             settings=settings,
         )
@@ -954,8 +929,6 @@ def test_invalid_authorization_request_returns_recovery_page():
             request=request,
             authorization_request="not-signed",
             csrf_token="missing-cookie",
-            email="user@example.com",
-            password="invalid-password",
             db=SimpleNamespace(),
             settings=settings,
         )
@@ -981,6 +954,7 @@ def test_production_configuration_requires_distinct_secrets_and_authenticated_st
         "mcp_session_encryption_secret": "s" * 40,
         "database_url": "postgresql+asyncpg://user:strong-password@db/okk_mcp",
         "redis_url": "rediss://:strong-password@redis/0",
+        "okk_mcp_client_secret": "gateway-secret-0123456789",
     }
     Settings(**common)
     with pytest.raises(ValueError):

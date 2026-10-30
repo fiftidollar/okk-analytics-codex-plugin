@@ -1,10 +1,10 @@
 # OKK Analytics for Codex and Claude Code
 
 Community plugin and standalone MCP gateway for read-only OKK analytics. A user
-connects their own OKK account with the normal email/password login page. Codex
-and Claude Code never receive the password, and every result is restricted by
-the account's current role, department ACL and explicit private-supervisor
-grants.
+connects their own OKK account by signing in on the OKK sign-in page (password,
+SSO, second factor). Neither the gateway nor Codex and Claude Code see the
+password, and every result is restricted by the account's current role,
+department ACL and explicit private-supervisor grants.
 
 Release 1.2.4 repaired direct transcript reads,
 supports complete long transcripts through offset chunks, and adds an exact
@@ -47,9 +47,11 @@ size, per-connection call and time limits, cleaned call texts, `iss` in the auth
 response, scope step-up and a repeatable eval suite (`evals/`). Update the plugin and start a new
 chat after it.
 
-The account must have a working local OKK password. An account provisioned only
-through HR/SSO needs a local OKK password set by the normal account-management
-process first; the plugin never authenticates through the HR platform.
+Branch `claude/mcp-okk-login` (not released): the gateway's page only asks for consent and sends
+the browser to the OKK sign-in page; there is no password form on the gateway any more. It needs
+an OKK release with `/auth/mcp/authorize` and `/auth/mcp/token` (OKK multitenancy) first: the
+gateway release follows the OKK one, never the other way round. The released 1.6.x gateway keeps
+working with that OKK release for administrators and supervisors.
 
 This repository is independent of the OKK platform codebase: it uses the
 existing HTTP API and owns only OAuth grants, encrypted upstream sessions and
@@ -130,11 +132,14 @@ docs/                    Architecture, tools, security and deployment runbooks
 
 1. Copy `.env.example` to `.env` and replace every secret/default password.
 2. Set `OKK_API_BASE_URL` to the target OKK `/api/v1` URL.
-   `MCP_LOGIN_MODE=okk` sends people to the OKK sign-in page (SSO, second factor) instead of the
-   gateway's password form: the gateway gets a one-time OKK code at `/oauth/okk/callback` and
-   exchanges it server-to-server with `OKK_MCP_CLIENT_SECRET` and PKCE. OKK must know the same
-   secret and that exact callback address (`MCP_GATEWAY_CLIENT_SECRET`, `MCP_GATEWAY_REDIRECT_URIS`).
-   `OKK_PUBLIC_API_URL` is the browser address of OKK when the gateway reaches OKK internally.
+   People sign in on the OKK sign-in page (password, SSO, second factor): the gateway gets a
+   one-time OKK code at `/oauth/okk/callback` and exchanges it server-to-server with
+   `OKK_MCP_CLIENT_SECRET` and PKCE. OKK must know the same secret and that exact callback
+   address (`MCP_GATEWAY_CLIENT_SECRET`, `MCP_GATEWAY_REDIRECT_URIS`); production refuses to start
+   with the development secret. `OKK_PUBLIC_API_URL` is the browser address of OKK when the
+   gateway reaches OKK internally. Every request to OKK carries `X-OKK-Client: codex-mcp-readonly`:
+   OKK refuses it for a company without the MCP module, so switching the module off closes
+   connections that are already open.
 3. Start the gateway:
 
    ```powershell

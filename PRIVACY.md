@@ -1,11 +1,11 @@
 # Privacy policy
 
-Last updated: 2026-10-21.
+Last updated: 2026-10-30.
 
 OKK Analytics connects Codex, Claude Code (and other MCP clients) to the OKK
-account that the user explicitly authorizes. The gateway forwards the login and password directly to the normal
-OKK login API for that authorization request; it does not log or persist the
-password and does not send it to Codex.
+account that the user explicitly authorizes. The user signs in on the OKK
+sign-in page; the gateway never receives the login or password and gets only a
+one-time OKK code, which it exchanges for that account's OKK session.
 
 The gateway stores encrypted OKK access/refresh sessions and hashed OAuth
 codes/tokens so the connection can remain authenticated. Read-only business
