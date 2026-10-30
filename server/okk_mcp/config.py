@@ -23,6 +23,16 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://okk_mcp:okk_mcp@localhost:5432/okk_mcp"
     redis_url: str = "redis://localhost:6379/0"
     okk_api_base_url: str = "http://localhost:8002/api/v1"
+    # Как человек входит при подключении. `password` — форма шлюза отправляет логин и пароль в
+    # `/auth/login` OKK (прежний путь). `okk` — страница входа OKK (Keycloak, SSO, второй фактор):
+    # шлюз ведёт браузер на `/auth/mcp/authorize` OKK и меняет одноразовый код на сессию OKK своим
+    # секретом клиента; пароль шлюз не видит. Два пути сразу не работают — только явный режим.
+    mcp_login_mode: Literal["password", "okk"] = "password"
+    okk_mcp_client_id: str = "okk-mcp-gateway"
+    okk_mcp_client_secret: str = ""
+    # Адрес API OKK для браузера (страница входа); пусто — тот же, что OKK_API_BASE_URL (шлюз может
+    # ходить в OKK внутренним адресом, а браузер — только публичным).
+    okk_public_api_url: str = ""
     mcp_oauth_secret: str = Field(
         default="dev-oauth-secret-change-me-32-characters",
         min_length=32,
@@ -84,6 +94,7 @@ class Settings(BaseSettings):
             ("MCP_ISSUER_URL", issuer),
             ("MCP_RESOURCE_URL", resource),
             ("OKK_API_BASE_URL", api),
+            ("OKK_PUBLIC_API_URL", self.okk_browser_api_url),
         ):
             parsed = urlsplit(value)
             if (
@@ -97,6 +108,10 @@ class Settings(BaseSettings):
                 raise ValueError(f"{label} must be an absolute URL without credentials, query or fragment")
         if not resource.startswith(f"{issuer}/"):
             raise ValueError("MCP_RESOURCE_URL must be hosted below MCP_ISSUER_URL")
+        if self.mcp_login_mode == "okk" and len(self.okk_mcp_client_secret) < 16:
+            raise ValueError(
+                "MCP_LOGIN_MODE=okk needs OKK_MCP_CLIENT_SECRET (the gateway secret issued by OKK)"
+            )
         try:
             self.trusted_client_networks  # noqa: B018 - a wrong network fails the start, not a request
         except ValueError as exc:
@@ -106,6 +121,8 @@ class Settings(BaseSettings):
                 raise ValueError("Production MCP issuer/resource URLs must use HTTPS")
             if not api.startswith("https://"):
                 raise ValueError("Production OKK_API_BASE_URL must use HTTPS")
+            if not self.okk_browser_api_url.startswith("https://"):
+                raise ValueError("Production OKK_PUBLIC_API_URL must use HTTPS")
             if self.mcp_oauth_secret.startswith("dev-"):
                 raise ValueError("Production MCP_OAUTH_SECRET must not use the development default")
             if self.mcp_session_encryption_secret.startswith("dev-"):
@@ -137,6 +154,21 @@ class Settings(BaseSettings):
     @property
     def api_base_url(self) -> str:
         return self.okk_api_base_url.rstrip("/")
+
+    @property
+    def okk_browser_api_url(self) -> str:
+        return (self.okk_public_api_url or self.okk_api_base_url).rstrip("/")
+
+    @property
+    def okk_browser_origin(self) -> str:
+        """Происхождение страницы входа OKK для CSP (адрес проверен при запуске: без логина и запроса)."""
+        parsed = urlsplit(self.okk_browser_api_url)
+        return f"{parsed.scheme}://{parsed.netloc}"
+
+    @property
+    def okk_login_callback_url(self) -> str:
+        """Адрес шлюза, куда OKK возвращает одноразовый код входа (точный, его знает OKK)."""
+        return f"{self.issuer_url}/oauth/okk/callback"
 
     @property
     def oauth_redirect_uris(self) -> frozenset[str]:

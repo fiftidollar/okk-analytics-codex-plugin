@@ -22,6 +22,7 @@ from okk_mcp.models import OkkAccountSession
 _READ_RETRY_DELAYS_SECONDS = (0.3, 1.0)
 _TRANSIENT_STATUSES = frozenset({502, 503, 504})
 _RENEWALS_KEPT = 1000
+OKK_ROLES = frozenset({"admin", "viewer", "employee"})
 
 
 class OKKAuthenticationError(PermissionError):
@@ -94,7 +95,8 @@ class OKKPlatformClient:
         email = str(payload.get("email") or "").strip().lower()
         role = str(payload.get("role") or "")
         department_ids = [str(value) for value in payload.get("department_ids") or []]
-        if not user_id or not email or role not in {"admin", "viewer"} or not payload.get("is_active", True):
+        # Роли учётки компании OKK (фаза 5 мультитенантности): что видит сотрудник, решает сам OKK.
+        if not user_id or not email or role not in OKK_ROLES or not payload.get("is_active", True):
             raise OKKAuthenticationError("OKK account is inactive or has an unsupported role")
         return user_id, email, role, department_ids
 
@@ -110,6 +112,31 @@ class OKKPlatformClient:
             raise OKKUnavailable("OKK login is temporarily unavailable") from exc
         if response.status_code == 401:
             raise OKKAuthenticationError("Invalid OKK login or password")
+        return self._account_session(response)
+
+    async def exchange_login_code(self, code: str, code_verifier: str) -> OkkAccountSession:
+        """Вход на странице OKK: одноразовый код OKK → сессия OKK сервер-к-серверу (секрет шлюза и
+        PKCE). Ответ OKK — тот же, что у входа по паролю."""
+
+        try:
+            response = await self.client.post(
+                "/auth/mcp/token",
+                data={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": self.settings.okk_login_callback_url,
+                    "code_verifier": code_verifier,
+                    "client_id": self.settings.okk_mcp_client_id,
+                    "client_secret": self.settings.okk_mcp_client_secret,
+                },
+            )
+        except httpx.HTTPError as exc:
+            raise OKKUnavailable("OKK login is temporarily unavailable") from exc
+        if response.status_code in {400, 401}:
+            raise OKKAuthenticationError("OKK rejected the login code")
+        return self._account_session(response)
+
+    def _account_session(self, response: httpx.Response) -> OkkAccountSession:
         if response.status_code >= 500:
             raise OKKUnavailable("OKK login is temporarily unavailable")
         if response.status_code != 200:

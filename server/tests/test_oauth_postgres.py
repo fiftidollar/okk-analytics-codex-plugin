@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, parse_qsl, urlsplit
 
 import httpx
 import pytest
@@ -380,6 +380,8 @@ async def test_client_named_by_its_metadata_document_signs_in_exchanges_and_refr
     """Codes and tokens reference `oauth_clients`: a CIMD client gets its row on sign-in, a second
     sign-in updates it, and /token accepts the URL as client_id."""
 
+    # CIMD выключен по умолчанию с 27.10 (`mcp_client_metadata_documents_enabled`): тест включает его.
+    env.settings = Settings(okk_api_base_url=OKK_URL, mcp_client_metadata_documents_enabled=True)
     await _reset(env)
     client_id = "https://chatgpt.com/oauth/client.json"
     redirect_uri = "https://chatgpt.com/connector_platform_oauth_redirect"
@@ -502,3 +504,171 @@ async def test_migration_marks_clients_in_use_and_rolls_back(env):
             ).all()
         )
     assert marked == {"used": True, "unused": False}
+
+
+class _MemoryRedis:
+    """Redis входа через OKK в памяти: `set` со сроком и одноразовый `getdel`, как настоящий."""
+
+    stored: dict[str, str] = {}
+
+    async def set(self, key, value, ex=None):
+        self.stored[key] = value
+
+    async def getdel(self, key):
+        return self.stored.pop(key, None)
+
+    async def aclose(self):
+        return None
+
+
+OKK_LOGIN_SECRET = "gateway-secret-0123456789"
+
+
+@pytest.fixture
+def okk_login(env, monkeypatch):
+    """Шлюз в режиме входа через OKK: OKK меняет одноразовый код `okk-code` на сессию, только с
+    секретом шлюза, его точным адресом возврата и PKCE шлюза."""
+
+    settings = Settings(
+        okk_api_base_url=OKK_URL,
+        mcp_login_mode="okk",
+        okk_mcp_client_secret=OKK_LOGIN_SECRET,
+        okk_public_api_url="https://okk-public.example/api/v1",
+    )
+    exchanged: list[dict[str, str]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/auth/mcp/token"):
+            form = dict(parse_qsl(request.content.decode()))
+            exchanged.append(form)
+            valid = (
+                form.get("code") == "okk-code"
+                and form.get("client_secret") == OKK_LOGIN_SECRET
+                and form.get("redirect_uri") == settings.okk_login_callback_url
+            )
+            if not valid:
+                return httpx.Response(400, json={"detail": "invalid_grant"})
+            user = {**env.okk.user, "role": "employee"}
+            return httpx.Response(
+                200,
+                json={"access_token": "okk-access-1", "user": user},
+                headers={"set-cookie": "refresh_token=okk-refresh-1; Path=/api/v1/auth"},
+            )
+        return await env.okk.handler(request)
+
+    platform = OKKPlatformClient(settings, transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(oauth, "platform_client", platform)
+    _MemoryRedis.stored = {}
+    monkeypatch.setattr(oauth.redis, "from_url", lambda *_args, **_kwargs: _MemoryRedis())
+    return SimpleNamespace(settings=settings, exchanged=exchanged)
+
+
+async def _seed_client(env) -> None:
+    await _reset(env)
+    async with env.factory() as db:
+        db.add(
+            OAuthClient(
+                client_id="client",
+                client_name="Codex",
+                redirect_uris=[REDIRECT_URI],
+                grant_types=["authorization_code", "refresh_token"],
+                response_types=["code"],
+                token_endpoint_auth_method="none",
+                scope=DEFAULT_SCOPES,
+            )
+        )
+        await db.commit()
+
+
+async def _consent(env, settings: Settings, challenge: str):
+    """Согласие на странице шлюза: доступ к транскриптам снят — в режиме OKK без логина и пароля."""
+
+    signed = oauth._serializer(settings).dumps(
+        {
+            "client_id": "client",
+            "redirect_uri": REDIRECT_URI,
+            "state": "client-state",
+            "scope": DEFAULT_SCOPES,
+            "resource": settings.resource_url,
+            "code_challenge": challenge,
+            "csrf_token": "csrf",
+        }
+    )
+    request = Request(
+        {"type": "http", "method": "POST", "path": "/authorize", "headers": [], "client": ("127.0.0.1", 1)}
+    )
+    async with env.factory() as db:
+        return await oauth.authorize_login(
+            request=request,
+            authorization_request=signed,
+            csrf_token="csrf",
+            email=None,
+            password=None,
+            consent_version="2",
+            grant_transcripts=None,
+            grant_phones="1",
+            db=db,
+            settings=settings,
+        )
+
+
+async def _callback(env, settings: Settings, **query):
+    async with env.factory() as db:
+        response = await oauth.okk_login_callback(db=db, settings=settings, **query)
+        await db.commit()
+    return response
+
+
+async def test_okk_page_login_ends_in_a_working_mcp_token_without_the_gateway_seeing_a_password(
+    env, okk_login
+):
+    await _seed_client(env)
+    verifier = "c" * 64
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+
+    to_okk = await _consent(env, okk_login.settings, challenge)
+    okk_query = dict(parse_qsl(urlsplit(to_okk.headers["location"]).query))
+    back = await _callback(env, okk_login.settings, state=okk_query["state"], code="okk-code")
+    replayed = await _callback(env, okk_login.settings, state=okk_query["state"], code="okk-code")
+    client_query = parse_qs(urlsplit(back.headers["location"]).query)
+    status, issued = await _exchange_code(env, client_query["code"][0], verifier)
+
+    # Браузер уходит на страницу OKK: клиент шлюза, его точный адрес возврата, PKCE шлюза — без
+    # запроса клиента MCP и без ключа PKCE в адресе.
+    assert to_okk.headers["location"].startswith("https://okk-public.example/api/v1/auth/mcp/authorize?")
+    assert (okk_query["client_id"], okk_query["redirect_uri"]) == (
+        "okk-mcp-gateway",
+        okk_login.settings.okk_login_callback_url,
+    )
+    assert "client-state" not in to_okk.headers["location"] and verifier not in to_okk.headers["location"]
+    # Код OKK меняется сервер-к-серверу с ключом PKCE, который подходит к вызову шлюза.
+    sent_verifier = okk_login.exchanged[0]["code_verifier"]
+    assert (
+        base64.urlsafe_b64encode(hashlib.sha256(sent_verifier.encode()).digest()).rstrip(b"=").decode()
+        == okk_query["code_challenge"]
+    )
+    # Клиент получает свой код со своим `state`; снятый доступ к транскриптам не выдан.
+    assert client_query["state"] == ["client-state"]
+    assert status == 200 and "okk.transcripts.read" not in issued["scope"].split()
+    # Возврат из OKK одноразовый: повтор не выдаёт второй код.
+    assert replayed.status_code == 400 and len(okk_login.exchanged) == 1
+
+
+async def test_okk_refusal_reaches_the_client_as_an_error_with_its_state(env, okk_login):
+    await _seed_client(env)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(b"d" * 64).digest()).rstrip(b"=").decode()
+
+    states = []
+    for _ in range(3):
+        to_okk = await _consent(env, okk_login.settings, challenge)
+        states.append(dict(parse_qsl(urlsplit(to_okk.headers["location"]).query))["state"])
+    denied = await _callback(env, okk_login.settings, state=states[0], error="access_denied")
+    unknown = await _callback(env, okk_login.settings, state=states[1], error="server_error")
+    bad_code = await _callback(env, okk_login.settings, state=states[2], code="forged")
+
+    for response in (denied, unknown, bad_code):
+        assert parse_qs(urlsplit(response.headers["location"]).query) == {
+            "error": ["access_denied"],
+            "state": ["client-state"],
+            "iss": [okk_login.settings.issuer_url],
+        }

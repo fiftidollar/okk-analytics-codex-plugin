@@ -130,6 +130,11 @@ docs/                    Architecture, tools, security and deployment runbooks
 
 1. Copy `.env.example` to `.env` and replace every secret/default password.
 2. Set `OKK_API_BASE_URL` to the target OKK `/api/v1` URL.
+   `MCP_LOGIN_MODE=okk` sends people to the OKK sign-in page (SSO, second factor) instead of the
+   gateway's password form: the gateway gets a one-time OKK code at `/oauth/okk/callback` and
+   exchanges it server-to-server with `OKK_MCP_CLIENT_SECRET` and PKCE. OKK must know the same
+   secret and that exact callback address (`MCP_GATEWAY_CLIENT_SECRET`, `MCP_GATEWAY_REDIRECT_URIS`).
+   `OKK_PUBLIC_API_URL` is the browser address of OKK when the gateway reaches OKK internally.
 3. Start the gateway:
 
    ```powershell

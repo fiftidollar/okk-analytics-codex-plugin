@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import html
 import ipaddress
@@ -349,10 +350,15 @@ def _security_headers(
     *,
     allow_form: bool = False,
     redirect_uri: str | None = None,
+    login_origin: str | None = None,
 ) -> None:
+    """`login_origin` — страница входа OKK: браузеры проверяют `form-action` и на переходе после формы."""
+
     form_action_sources = ["'self'"] if allow_form else ["'none'"]
     if allow_form and redirect_uri is not None:
         form_action_sources.append(redirect_origin(redirect_uri))
+    if allow_form and login_origin is not None:
+        form_action_sources.append(login_origin)
     directives = ["default-src 'none'", "style-src 'unsafe-inline'"]
     directives.extend(
         [
@@ -433,6 +439,22 @@ def _render_login(
         for scope_name, (field, label) in OPTIONAL_GRANTS.items()
         if scope_name in scope.split()
     )
+    okk_login = settings.mcp_login_mode == "okk"
+    # Вход на странице OKK: пароль и второй фактор человек вводит там, шлюз их не видит.
+    credentials = (
+        ""
+        if okk_login
+        else '<label for="email">Логин (email)</label><input id="email" name="email" type="email" '
+        'autocomplete="username" maxlength="200" required autofocus>'
+        '<label for="password">Пароль</label><input id="password" name="password" type="password" '
+        'autocomplete="current-password" maxlength="128" required>'
+    )
+    submit = "Продолжить вход в ОКК" if okk_login else "Войти и разрешить доступ"
+    password_note = (
+        "Вход — на странице ОКК: шлюз не видит пароль и получает только сессию вашей учётки."
+        if okk_login
+        else "MCP-шлюз сразу передаёт пароль в штатный API ОКК, не сохраняет его и никогда не передаёт приложению."
+    )
     body = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Вход в ОКК</title>
 <style>:root{{--bg:#f4f6f8;--card:#fff;--text:#17202a;--muted:#637083;--brand:#1769e0;--danger:#b42318}}
@@ -442,14 +464,18 @@ h1{{margin:0 0 8px}}p{{color:var(--muted)}}label{{display:block;font-weight:650;
 button{{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;background:var(--brand);color:#fff;font:700 16px system-ui}}.scope,.next{{font-size:14px;background:#f7f9fb;padding:12px 14px;border-radius:10px;margin-top:18px}}.next{{background:#eef6ff}}.error{{color:var(--danger);background:#fef3f2;padding:10px 12px;border-radius:10px}}label.grant{{font-weight:400;margin:8px 0 0}}label.grant input{{width:auto;margin-right:8px}}</style></head>
 <body><main><section class="card"><h1>Вход в ОКК</h1><p>Подключение приложения <strong>{html.escape(client_name)}</strong>. После входа браузер вернёт вас <strong>{html.escape(destination)}</strong>.</p>{destination_html}{error_html}
 <form method="post" action="/authorize"><input type="hidden" name="authorization_request" value="{html.escape(signed_request, quote=True)}"><input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}">
-<label for="email">Логин (email)</label><input id="email" name="email" type="email" autocomplete="username" maxlength="200" required autofocus>
-<label for="password">Пароль</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required>
+{credentials}
 <div class="scope">Только чтение, строго в пределах прав аккаунта: статистика, карточки сотрудников, сценарии и критерии.{optional_grants}<input type="hidden" name="consent_version" value="2"></div>
-<button type="submit">Войти и разрешить доступ</button></form>
+<button type="submit">{submit}</button></form>
 <div class="next"><strong>Что произойдёт дальше</strong><br>Браузер передаст вход обратно в приложение, из которого вы начали подключение (Codex, Claude Code или ChatGPT). Вернитесь в него и попросите «Проверить подключение OKK»: сообщение «OKK подключён» с ролью и отделами означает, что вход действительно завершён.</div>
-<p><small>MCP-шлюз сразу передаёт пароль в штатный API ОКК, не сохраняет его и никогда не передаёт приложению.</small></p></section></main></body></html>"""
+<p><small>{password_note}</small></p></section></main></body></html>"""
     response = HTMLResponse(body)
-    _security_headers(response, allow_form=True, redirect_uri=redirect_uri)
+    _security_headers(
+        response,
+        allow_form=True,
+        redirect_uri=redirect_uri,
+        login_origin=settings.okk_browser_origin if okk_login else None,
+    )
     return response
 
 
@@ -561,13 +587,100 @@ async def _check_login_rate_limit(request: Request, email: str, settings: Settin
         await client.aclose()
 
 
+# Вход на странице OKK: запрос подключения ждёт возврата из OKK в Redis под случайным `state`
+# (одноразово, не дольше подписанного запроса). В адресе — только этот ключ: PKCE-ключ шлюза и
+# запрос клиента в браузер не уходят.
+OKK_LOGIN_KEY = "okk:mcp:okk-login:{state}"
+OKK_LOGIN_SECONDS = 600
+# Отказы OKK, которые клиент получает как есть; прочие — `access_denied`.
+OKK_LOGIN_ERRORS = frozenset({"access_denied", "temporarily_unavailable"})
+
+
+async def _remember_okk_login(settings: Settings, pending: dict[str, Any]) -> str:
+    state = secrets.token_urlsafe(32)
+    client = redis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        await client.set(OKK_LOGIN_KEY.format(state=state), json.dumps(pending), ex=OKK_LOGIN_SECONDS)
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail="Login is temporarily unavailable") from exc
+    finally:
+        await client.aclose()
+    return state
+
+
+async def _take_okk_login(settings: Settings, state: str) -> dict[str, Any] | None:
+    """Запрос подключения по `state` — один раз (GETDEL): повтор возврата из OKK его не найдёт."""
+
+    client = redis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        raw = await client.getdel(OKK_LOGIN_KEY.format(state=state))
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail="Login is temporarily unavailable") from exc
+    finally:
+        await client.aclose()
+    return json.loads(raw) if raw else None
+
+
+def _okk_login_redirect(settings: Settings, state: str, verifier: str) -> RedirectResponse:
+    """В браузере — на выдачу кода OKK: человек входит там (Keycloak, SSO, второй фактор)."""
+
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode()
+    )
+    query = urlencode(
+        {
+            "client_id": settings.okk_mcp_client_id,
+            "redirect_uri": settings.okk_login_callback_url,
+            "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        }
+    )
+    response = RedirectResponse(f"{settings.okk_browser_api_url}/auth/mcp/authorize?{query}", status_code=303)
+    response.headers.update({"Cache-Control": "no-store", "Pragma": "no-cache"})
+    return response
+
+
+async def _issue_authorization_code(
+    db: AsyncSession,
+    *,
+    client: OAuthClient,
+    account_session: Any,
+    auth_request: dict[str, Any],
+    granted_scope: str,
+    settings: Settings,
+) -> RedirectResponse:
+    """Сессия OKK человека → одноразовый код клиенту MCP (тот же для входа паролем и страницей OKK)."""
+
+    db.add(account_session)
+    await _remember_metadata_document_client(db, client)
+    await db.flush()
+    raw_code = secrets.token_urlsafe(48)
+    db.add(
+        OAuthAuthorizationCode(
+            code_hash=token_hash(raw_code),
+            client_id=client.client_id,
+            session_id=account_session.id,
+            redirect_uri=auth_request["redirect_uri"],
+            scope=granted_scope,
+            code_challenge=auth_request["code_challenge"],
+            resource=auth_request["resource"],
+            expires_at=_now() + timedelta(minutes=settings.mcp_authorization_code_minutes),
+        )
+    )
+    await db.flush()
+    return _authorization_redirect(
+        auth_request["redirect_uri"], {"code": raw_code}, auth_request.get("state"), settings
+    )
+
+
 @router.post("/authorize")
 async def authorize_login(
     request: Request,
     authorization_request: str = Form(...),
     csrf_token: str = Form(...),
-    email: str = Form(..., max_length=200),
-    password: str = Form(..., max_length=128),
+    email: str | None = Form(default=None, max_length=200),
+    password: str | None = Form(default=None, max_length=128),
     consent_version: str | None = Form(default=None),
     grant_transcripts: str | None = Form(default=None),
     grant_phones: str | None = Form(default=None),
@@ -596,6 +709,28 @@ async def authorize_login(
             error="Сеанс входа был обновлён. Введите логин и пароль ещё раз.",
         )
     client = await _load_client(db, auth_request["client_id"], auth_request["redirect_uri"], settings)
+    if settings.mcp_login_mode == "okk":
+        # Согласие дано — вход на странице OKK; запрос подключения ждёт возврата в Redis.
+        verifier = secrets.token_urlsafe(48)
+        pending = {
+            key: auth_request.get(key)
+            for key in ("client_id", "redirect_uri", "state", "scope", "resource", "code_challenge")
+        }
+        state = await _remember_okk_login(
+            settings, {**pending, "granted_scope": granted_scope, "verifier": verifier}
+        )
+        return _okk_login_redirect(settings, state, verifier)
+    if not email or not password:
+        return _render_login(
+            settings=settings,
+            client_name=client.client_name,
+            signed_request=authorization_request,
+            csrf_token=csrf_token,
+            redirect_uri=auth_request["redirect_uri"],
+            scope=auth_request["scope"],
+            granted_scope=granted_scope,
+            error="Введите логин и пароль",
+        )
     await _check_login_rate_limit(request, email, settings)
     try:
         account_session = await platform_client.authenticate(email, password)
@@ -612,25 +747,55 @@ async def authorize_login(
         )
     except OKKUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    db.add(account_session)
-    await _remember_metadata_document_client(db, client)
-    await db.flush()
-    raw_code = secrets.token_urlsafe(48)
-    db.add(
-        OAuthAuthorizationCode(
-            code_hash=token_hash(raw_code),
-            client_id=client.client_id,
-            session_id=account_session.id,
-            redirect_uri=auth_request["redirect_uri"],
-            scope=granted_scope,
-            code_challenge=auth_request["code_challenge"],
-            resource=auth_request["resource"],
-            expires_at=_now() + timedelta(minutes=settings.mcp_authorization_code_minutes),
-        )
+    return await _issue_authorization_code(
+        db,
+        client=client,
+        account_session=account_session,
+        auth_request=auth_request,
+        granted_scope=granted_scope,
+        settings=settings,
     )
-    await db.flush()
-    return _authorization_redirect(
-        auth_request["redirect_uri"], {"code": raw_code}, auth_request.get("state"), settings
+
+
+@router.get("/oauth/okk/callback")
+async def okk_login_callback(
+    state: str | None = None,
+    code: str | None = None,
+    error: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """Возврат из OKK: одноразовый код OKK → сессия OKK → код клиенту MCP. Запрос подключения —
+    по `state` один раз; отказ OKK уходит клиенту ошибкой с его `state`."""
+
+    if settings.mcp_login_mode != "okk":
+        raise HTTPException(status_code=404)
+    pending = await _take_okk_login(settings, state) if state else None
+    if pending is None:
+        return _render_authorization_error("Срок действия входа истёк или он уже завершён.")
+    client = await _load_client(db, pending["client_id"], pending["redirect_uri"], settings)
+    if error or not code:
+        refused = error if error in OKK_LOGIN_ERRORS else "access_denied"
+        return _authorization_redirect(
+            pending["redirect_uri"], {"error": refused}, pending.get("state"), settings
+        )
+    try:
+        account_session = await platform_client.exchange_login_code(code, pending["verifier"])
+    except OKKAuthenticationError:
+        return _authorization_redirect(
+            pending["redirect_uri"], {"error": "access_denied"}, pending.get("state"), settings
+        )
+    except OKKUnavailable:
+        return _authorization_redirect(
+            pending["redirect_uri"], {"error": "temporarily_unavailable"}, pending.get("state"), settings
+        )
+    return await _issue_authorization_code(
+        db,
+        client=client,
+        account_session=account_session,
+        auth_request=pending,
+        granted_scope=pending["granted_scope"],
+        settings=settings,
     )
 
 
