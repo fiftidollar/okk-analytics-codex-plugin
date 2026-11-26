@@ -351,8 +351,8 @@ plugin at the test-stand API.
   switched to the new architecture (step 8 of the switch window in the platform
   `docs/RELEASE_FLOW_RUNBOOK.md`); deployed earlier, plan sections become
   `not_available`.
-- Public issuer/resource: `https://okk-mcp.akfixdev.ru` and
-  `https://okk-mcp.akfixdev.ru/mcp`.
+- Public issuer/resource: `https://akfix-mcp.qualcall-mcp.ru` and
+  `https://akfix-mcp.qualcall-mcp.ru/mcp`.
 - Dedicated PostgreSQL and authenticated Redis are private Compose services;
   neither publishes a host port.
 - Deployment authority is the latest `done` record for this Compose in Dokploy.
@@ -362,11 +362,11 @@ plugin at the test-stand API.
 ## Required infrastructure
 
 - HTTPS hostname for the gateway, currently planned as
-  `https://okk-mcp.akfixdev.ru`.
+  `https://akfix-mcp.qualcall-mcp.ru`.
 - Separate PostgreSQL database/user for OAuth state.
 - Redis for login throttling.
 - Production OKK API:
-  `https://okk-backend.akfixdev.ru/api/v1`.
+  `https://akfix.qualcall-mcp.ru/api/v1`.
 - Independent high-entropy OAuth and session-encryption secrets.
 - During universal-directory submission only, the exact
   `OPENAI_APPS_CHALLENGE_TOKEN` issued by the OpenAI Platform portal.
@@ -475,9 +475,15 @@ Create the Dokploy Compose from this repository on branch `main`, path
 - `MCP_OAUTH_SECRET`
 - `MCP_SESSION_ENCRYPTION_SECRET`
 
-Traefik terminates TLS for `okk-mcp.akfixdev.ru` and forwards only to port
-`8020`. The container trusts forwarded headers because that port is exposed
-only on the ingress network; do not add a host `ports` mapping.
+Since November 2026 the production gateway runs as a plain Compose project
+behind an nginx reverse proxy that terminates TLS for
+`akfix-mcp.qualcall-mcp.ru`. `docker-compose.dokploy.yml` still describes the
+earlier Dokploy hosting: there Traefik terminates TLS and forwards only to port
+`8020`, and the container trusts forwarded headers because that port is exposed
+only on the ingress network; do not add a host `ports` mapping. Behind any
+proxy, check that the gateway sees each client's own address: when every
+request arrives from the proxy's address, the per-address sign-in limit is
+shared by everyone.
 
 For the bundled Compose stack, copy the template to `.env.production` and use:
 

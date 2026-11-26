@@ -276,7 +276,7 @@ After upgrading from a pre-`1.1.0` connection, clear authentication and
 authenticate once so Claude receives the new transcript-read scope.
 
 The production target is the live OKK API at
-`https://okk-backend.akfixdev.ru/api/v1`; use `.env.production.example` as the
+`https://akfix.qualcall-mcp.ru/api/v1`; use `.env.production.example` as the
 deployment template. Production requires HTTPS for both the MCP gateway and
 the OKK API. See
 [deployment](docs/deployment.md), [security](docs/security.md) and the complete
@@ -286,7 +286,7 @@ the OKK API. See
 ## ChatGPT Web publication
 
 Create the release as **With MCP → Universal** with
-`https://okk-mcp.akfixdev.ru/mcp`, and upload the final
+`https://akfix-mcp.qualcall-mcp.ru/mcp`, and upload the final
 `plugins/okk-analytics/skills/okk-analytics/` bundle to the same draft. The
 portal must scan all 26 tools and retain the exact five positive and three
 negative cases from `chatgpt-app-submission.json`. OAuth discovery advertises
@@ -298,7 +298,7 @@ well-known route returns only that token.
 ## Production rollout status
 
 This is a live production plugin, not a test-stand connector. Its public MCP URL
-is `https://okk-mcp.akfixdev.ru/mcp`, and its upstream is the production OKK API
+is `https://akfix-mcp.qualcall-mcp.ru/mcp`, and its upstream is the production OKK API
 above. Release `1.6.0` is live: public `/health` reported `1.6.0` on
 `2026-10-27`. It registers 26 read-only tools, including the ACL-safe private
 Supervisors catalog, its dedicated call/transcript tools and the phone-history

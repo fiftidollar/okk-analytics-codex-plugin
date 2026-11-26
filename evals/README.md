@@ -87,7 +87,7 @@ cases, the main cases and the held-out cases separately.
 
 ## Production
 
-The same commands with `--gateway-url https://okk-mcp.akfixdev.ru/mcp` and a token for a
+The same commands with `--gateway-url https://akfix-mcp.qualcall-mcp.ru/mcp` and a token for a
 production account. Production holds real data of real people: run it only with the owner's
 explicit approval and an account they name, keep `out/` local and never paste answers into issues
 or pull requests.
