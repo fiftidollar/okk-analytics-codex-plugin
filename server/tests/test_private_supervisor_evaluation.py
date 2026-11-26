@@ -22,6 +22,7 @@ import pytest
 from okk_mcp.backend_client import AnalyticsAdapter
 from okk_mcp.config import Settings
 from okk_mcp.platform_client import AccountContext
+from okk_mcp.server import AnalyticsEnvelope
 
 OKK = json.loads(
     (Path(__file__).parent / "fixtures/okk_private_supervisors.json").read_text(encoding="utf-8")
@@ -95,11 +96,16 @@ def adapter(okk: Okk) -> AnalyticsAdapter:
     return AnalyticsAdapter(okk, str(okk.context.session_id), Settings())
 
 
+def sent_to_the_client(result: dict) -> dict:
+    """The answer as the MCP server sends it: every tool answer passes the envelope model."""
+    return AnalyticsEnvelope.model_validate(result).model_dump(mode="json")
+
+
 @pytest.mark.anyio
 async def test_catalog_marks_only_the_supervisor_whose_calls_okk_evaluates():
     result = await adapter(holder()).list_supervisors()
 
-    by_id = {row["id"]: row for row in result["data"]["items"]}
+    by_id = {row["id"]: row for row in sent_to_the_client(result)["data"]["items"]}
     assert by_id[EVALUATED["id"]]["evaluates_calls"] is True
     assert by_id[TRANSCRIPT_ONLY["id"]] == {
         "id": TRANSCRIPT_ONLY["id"],
@@ -127,6 +133,7 @@ async def test_statistics_of_an_evaluated_supervisor_count_its_calls_and_scores(
         "pass_rate": 0.0,
         "pass_rate_basis": "department_norm",
     }
+    assert sent_to_the_client(result)["data"]["evaluation_loaded"] == data["evaluation_loaded"]
     assert result["effective_scope"]["section"] == "supervisors"
     assert not any(secret in str(result) for secret in NEVER_SHOWN)
 
@@ -156,7 +163,7 @@ async def test_transcript_tools_return_the_evaluated_supervisors_call_with_its_s
     )
     by_number = await analytics.list_call_phone_records(supervisor_id=EVALUATED["id"])
 
-    call = listed["data"]["items"][0]["call"]
+    call = sent_to_the_client(listed)["data"]["items"][0]["call"]
     assert listed["status"] == "ok"
     assert call["employee"] == {
         "id": EVALUATED["id"],
