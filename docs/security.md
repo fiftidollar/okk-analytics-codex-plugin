@@ -34,7 +34,12 @@ membership or replace unavailable OKK scores.
 - Viewer: only live `department_ids` and entities underneath them.
 - Private supervisors: only rows returned by the live
   `/employees/restricted` endpoint for this exact user. Admin is not a bypass;
-  explicit upstream grants are required.
+  explicit upstream grants are required. A call is a supervisor's call because
+  its employee is in that catalog (or the call card marks the employee as
+  closed), whether or not OKK keeps a department on it; a closed employee's
+  call is never returned as a department call. Scores of a supervisor appear
+  only when OKK evaluates that supervisor's calls and shows the evaluation to
+  this person.
 - The gateway intersects `/departments` with the viewer's revalidated live
   `department_ids` as defense in depth even though the upstream route is also
   ACL-aware.

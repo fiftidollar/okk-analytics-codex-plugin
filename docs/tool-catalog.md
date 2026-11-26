@@ -11,7 +11,7 @@ All tools have `readOnlyHint=true`, `destructiveHint=false`,
 | `compare_departments` | Visible department metrics and trends |
 | `list_employees` | Safe employee directory without credentials or phone fields; locally rechecked against live department membership |
 | `list_supervisors` | Live explicit-grant catalog for the private `Руководители` section |
-| `get_supervisor_call_statistics` | Basic call volume, duration, direction and day trend for one accessible transcription-only supervisor |
+| `get_supervisor_call_statistics` | Basic call volume, duration, direction and day trend for one accessible supervisor; for a supervisor whose calls OKK evaluates also the scores of the loaded calls |
 | `get_employee_card` | KPI, plan/client/CRM, strengths, growth areas and weekly focus for one date range |
 | `compare_employees` | KPI, strengths, growth areas and weekly focus side by side |
 | `get_call_statistics` | Call volume, evaluated count, scores, pass rate, duration and trend |
@@ -106,10 +106,19 @@ a supervisor as a substitute, and supervisor tools validate their UUID against
 the private catalog before any `/calls` request. An inaccessible or removed
 grant returns neutral `not_available` without looking up calls.
 
-Supervisor rows are transcription-only. `get_supervisor_call_statistics`
-returns call counts, loaded duration/direction/day aggregates and explicit
-source completeness. Quality scores, scenarios, client/CRM data and growth
-areas are intentionally unavailable rather than reported as zero. The three supervisor transcript tools mirror the normal transcript
+Supervisor rows are transcription-only unless OKK evaluates the supervisor's
+calls; such a row carries `evaluates_calls: true`, and the field is absent
+otherwise. `get_supervisor_call_statistics` returns call counts, loaded
+duration/direction/day aggregates and explicit source completeness. For a
+transcription-only supervisor quality scores and scenarios are intentionally
+unavailable rather than reported as zero, even when OKK still keeps an old
+score. For a supervisor with `evaluates_calls` the calls carry
+`quality_score`, `quality_status`, `quality_threshold`, `skip_reason` and the
+scenario, and the statistics add `evaluation_loaded`: evaluated calls, average
+score, calls below the norm and the pass rate of the loaded calls. Client/CRM
+data and growth areas stay unavailable for every supervisor. A supervisor's
+call never appears in department results, whatever department OKK keeps for
+its criteria. The three supervisor transcript tools mirror the normal transcript
 formats and completeness contract without merging supervisors into department
 results.
 

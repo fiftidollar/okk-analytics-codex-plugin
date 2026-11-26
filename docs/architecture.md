@@ -28,8 +28,8 @@ The gateway is both the OAuth authorization server and MCP resource server. It
 does not share code, tables or signing secrets with the OKK backend.
 
 The published deployment is production-only: the upstream base URL is
-`https://okk-backend.akfixdev.ru/api/v1`, while the public MCP resource is
-`https://okk-mcp.akfixdev.ru/mcp`.
+`https://akfix.qualcall-mcp.ru/api/v1`, while the public MCP resource is
+`https://akfix-mcp.qualcall-mcp.ru/mcp`.
 
 ## Login and session sequence
 
@@ -80,10 +80,15 @@ supervisor tools require the selected UUID to exist in that live result before
 calling `/calls`. A newly added, removed or re-granted supervisor therefore
 takes effect without a plugin release.
 
-Restricted supervisors are `transcription_only`. Their MCP projection contains
-identity, basic call volume/duration/direction and transcript data only. It does
-not expose or manufacture department membership, evaluation scores, scenarios,
-clients, CRM or AI growth observations.
+Restricted supervisors are `transcription_only` unless OKK evaluates their calls:
+the full processing mode with a department kept for its criteria. A supervisor
+call belongs to the supervisors section because its employee is in the private
+catalog of the person asking, not because the call has no department. The MCP
+projection contains identity, basic call volume/duration/direction and
+transcript data; for a supervisor whose calls are evaluated (`evaluates_calls`)
+it adds the score, its norm verdict and the scenario of a call, and only when
+OKK itself shows that evaluation. It never exposes or manufactures department
+membership, clients, CRM or AI growth observations.
 
 `get_client_statistics` projects the platform summary counters for the client
 touch cycle of departments that track touches (OKK decides this per department

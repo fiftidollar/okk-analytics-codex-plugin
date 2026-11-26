@@ -112,6 +112,21 @@ def _number(value: Any) -> float:
 
 _QUALITY_STATUSES = ("norm", "below_norm")
 
+# What a call of a supervisor with evaluated calls adds to the supervisors-section projection.
+SUPERVISOR_EVALUATION_FIELDS = ("quality_score", "quality_status", "quality_threshold", "skip_reason")
+
+
+def _evaluation_shown(row: dict[str, Any]) -> bool:
+    """Whether OKK shows the evaluation of this call to the person asking.
+
+    OKK says it per call (`shown.evaluation`); an OKK that evaluates no supervisors answers false
+    for every private supervisor. Without the mark, a score that is present is a shown score.
+    """
+    shown = row.get("shown")
+    if isinstance(shown, dict) and "evaluation" in shown:
+        return bool(shown["evaluation"])
+    return row.get("quality_score") is not None
+
 
 def _pass_rate(rows: list[dict[str, Any]], passing_score: Any) -> tuple[float | None, str | None]:
     """Share of evaluations at or above the norm, and what the norm was.
@@ -801,18 +816,30 @@ class AnalyticsAdapter:
 
     @staticmethod
     def _safe_restricted_supervisor(row: dict[str, Any]) -> dict[str, Any]:
-        return {
+        supervisor = {
             "id": str(row.get("id")),
             "full_name": row.get("full_name"),
             "position": row.get("position"),
             "is_active": bool(row.get("is_active", True)),
             "section": "supervisors",
         }
+        # OKK evaluates the calls of a private supervisor only in the full processing mode, by the
+        # criteria of the department it keeps for that. The mark is present only then: a
+        # transcription-only supervisor reads exactly as before.
+        if row.get("processing_mode") == "full" and row.get("department_id"):
+            supervisor["evaluates_calls"] = True
+        return supervisor
 
     @staticmethod
     def _safe_supervisor_call(row: dict[str, Any], supervisor: dict[str, Any]) -> dict[str, Any]:
-        """Project transcription-only supervisor calls without KPI/client fields."""
-        return {
+        """Project a private supervisor's call without client fields.
+
+        A transcription-only supervisor has no evaluation fields at all, even when OKK still keeps
+        an old score. A supervisor whose calls OKK evaluates (`evaluates_calls`) gets the score, its
+        norm verdict and the scenario — only for the person with the personal grant, which OKK
+        checks before it returns the row, and only when OKK itself shows the evaluation.
+        """
+        call = {
             "id": str(row.get("id")),
             "employee_id": str(row.get("employee_id")) if row.get("employee_id") else None,
             "direction": row.get("direction"),
@@ -827,6 +854,16 @@ class AnalyticsAdapter:
                 "section": "supervisors",
             },
         }
+        if supervisor.get("evaluates_calls") and _evaluation_shown(row):
+            call.update({key: row[key] for key in SUPERVISOR_EVALUATION_FIELDS if key in row})
+            scenario = row.get("scenario") if isinstance(row.get("scenario"), dict) else None
+            if scenario:
+                call["scenario"] = {
+                    "id": str(scenario.get("id")),
+                    "name": scenario.get("name"),
+                    "code": scenario.get("code"),
+                }
+        return call
 
     @staticmethod
     def _safe_crm(row: dict[str, Any]) -> dict[str, Any]:
@@ -968,8 +1005,14 @@ class AnalyticsAdapter:
         *,
         department_id: str | None = None,
         employee_id: str | None = None,
+        supervisor: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        """Apply a second ACL/cross-filter guard to an upstream call payload."""
+        """Apply a second ACL/cross-filter guard to an upstream call payload.
+
+        `supervisor` is the private-catalog record a supervisor tool asked about: its calls belong
+        to the supervisors section whatever department OKK stamps on them (a supervisor whose
+        calls are evaluated keeps a department for its criteria).
+        """
         safe = self._safe_call(row)
         call_employee_id = safe.get("employee_id")
         if not call_employee_id or (employee_id and call_employee_id != employee_id):
@@ -977,12 +1020,22 @@ class AnalyticsAdapter:
         nested_employee = safe.get("employee") or {}
         if nested_employee.get("id") and nested_employee["id"] != call_employee_id:
             return None
+        if supervisor is not None:
+            if call_employee_id != supervisor["id"] or department_id:
+                return None
+            return self._safe_supervisor_call(row, supervisor)
         nested_department = nested_employee.get("department") or {}
         call_department_id = str(nested_department.get("id") or "")
-        if not call_department_id:
+        # The call card names the employee's access scope. A closed employee is never an ordinary
+        # department employee, with a department or not: only the private catalog opens the call.
+        raw_employee = row.get("employee") if isinstance(row.get("employee"), dict) else {}
+        closed_employee = raw_employee.get("access_scope") == "restricted"
+        if closed_employee or not call_department_id:
             supervisor = await self.restricted_supervisor(call_employee_id)
             if supervisor and not department_id:
                 return self._safe_supervisor_call(row, supervisor)
+            if closed_employee:
+                return None
         if not call_department_id and row.get("department_id"):
             # The call card names the call's department, which stays the old one after the
             # employee moves: OKK grants access by it, and so does the gateway.
@@ -1736,7 +1789,7 @@ class AnalyticsAdapter:
         visible: list[dict[str, Any]] = []
         omitted = 0
         for row in rows:
-            call = await self._visible_call(row, employee_id=supervisor["id"])
+            call = await self._visible_call(row, employee_id=supervisor["id"], supervisor=supervisor)
             if call and ((call.get("employee") or {}).get("section") == "supervisors"):
                 visible.append(call)
             else:
@@ -1766,8 +1819,20 @@ class AnalyticsAdapter:
             "calls_by_day_loaded": [
                 {"date": day, "calls": count} for day, count in sorted(calls_by_day.items())
             ],
-            "evaluation_metrics_available": False,
+            "evaluation_metrics_available": bool(supervisor.get("evaluates_calls")),
         }
+        if supervisor.get("evaluates_calls"):
+            # Only the loaded calls OKK shows a score for; nothing is guessed for the rest.
+            evaluated = [row for row in visible if row.get("quality_score") is not None]
+            scores = [_number(row.get("quality_score")) for row in evaluated]
+            pass_rate, pass_rate_basis = _pass_rate(evaluated, None)
+            data["evaluation_loaded"] = {
+                "evaluated_calls": len(evaluated),
+                "average_score": round(sum(scores) / len(scores), 2) if scores else None,
+                "below_norm_calls": sum(1 for row in evaluated if row.get("quality_status") == "below_norm"),
+                "pass_rate": pass_rate,
+                "pass_rate_basis": pass_rate_basis,
+            }
         return await self.envelope(
             data,
             status="partial" if visible and not complete else ("ok" if visible else "no_data"),
@@ -2259,6 +2324,7 @@ class AnalyticsAdapter:
             employee = supervisor["id"]
             scope = self.supervisor_scope(supervisor)
         else:
+            supervisor = None
             department_row, employee_row, invalid = await self.resolve_entity_scope(
                 department_id=department_id,
                 department_ref=department_ref,
@@ -2308,6 +2374,7 @@ class AnalyticsAdapter:
                         row,
                         department_id=str(department_row["id"]) if department_row else None,
                         employee_id=employee,
+                        supervisor=supervisor,
                     )
                 )
                 for row in rows
@@ -2473,7 +2540,7 @@ class AnalyticsAdapter:
         )
 
         async def load(row: dict[str, Any]) -> dict[str, Any] | None:
-            call = await self._visible_call(row, employee_id=supervisor["id"])
+            call = await self._visible_call(row, employee_id=supervisor["id"], supervisor=supervisor)
             if not call or ((call.get("employee") or {}).get("section") != "supervisors"):
                 return None
             try:
@@ -2541,7 +2608,7 @@ class AnalyticsAdapter:
             raw_call = await self._get(f"/calls/{call_id}")
         except OKKNotAvailable:
             return await self.envelope({}, status="not_available")
-        call = await self._visible_call(raw_call, employee_id=supervisor["id"])
+        call = await self._visible_call(raw_call, employee_id=supervisor["id"], supervisor=supervisor)
         if not call or ((call.get("employee") or {}).get("section") != "supervisors"):
             return await self.envelope({}, status="not_available")
         try:
@@ -2626,7 +2693,7 @@ class AnalyticsAdapter:
         visible_calls: list[dict[str, Any]] = []
         omitted = 0
         for row in payload.get("items") or []:
-            call = await self._visible_call(row, employee_id=supervisor["id"])
+            call = await self._visible_call(row, employee_id=supervisor["id"], supervisor=supervisor)
             if call and ((call.get("employee") or {}).get("section") == "supervisors"):
                 visible_calls.append(call)
             else:
