@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.7.0 — 2026-11-26
+
+Fix release for OKK of 25 November 2026, which can evaluate the calls of a
+private supervisor, and for the new production address. Start a new chat after
+the gateway is updated; reinstall or update the plugin to get the address.
+
+- OKK now keeps two kinds of private supervisors: transcription-only, and one
+  whose calls it evaluates by the criteria of a department kept for that. The
+  gateway recognised a supervisor's call by the absence of a department, so the
+  calls of an evaluated supervisor fell out of the supervisors section: the
+  statistics answered `no_data`, the transcript tools listed nothing, and a
+  holder who sees no department lost them entirely. A call now belongs to the
+  section because its employee is in the private catalog of the person asking.
+- A supervisor whose calls OKK evaluates is marked `evaluates_calls: true` in
+  `list_supervisors`; its calls carry `quality_score`, `quality_status`,
+  `quality_threshold`, `skip_reason` and the scenario, and
+  `get_supervisor_call_statistics` adds `evaluation_loaded` (evaluated calls,
+  average score, calls below the norm, pass rate). Only the person with the
+  personal grant gets them, and only when OKK itself shows the evaluation.
+- A transcription-only supervisor answers exactly as before: no mark, no
+  evaluation fields, even when OKK still keeps an old score.
+- A call card of a closed employee is never returned as a call of a department:
+  without a grant in the private catalog it is `not_available`.
+- Ordinary transcript reads make no additional OKK request.
+- The plugin, examples and docs name the current production address
+  `https://akfix-mcp.qualcall-mcp.ru/mcp`; the previous address no longer
+  answers, so a plugin installed before 1.7.0 cannot connect.
+- Tests: answers captured from the OKK test API for synthetic people
+  (`server/tests/fixtures/okk_private_supervisors.json`); the sign-in test of a
+  client named by its metadata document turns that feature on (off by default
+  since 1.6.0); the package digest of this version is recorded. The two tests
+  that failed on `main` since 1.6.0 pass.
+
 ## Eval run and install check — 2026-10-27
 
 - First paid eval run (Codex, 37 cases on production): 37/37 after fixing

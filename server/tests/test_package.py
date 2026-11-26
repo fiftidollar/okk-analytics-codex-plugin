@@ -64,7 +64,7 @@ def test_plugin_and_marketplace_point_to_the_standalone_package():
         "mcpServers": {
             "okk-analytics": {
                 "type": "streamable-http",
-                "url": "https://okk-mcp.akfixdev.ru/mcp",
+                "url": "https://akfix-mcp.qualcall-mcp.ru/mcp",
             }
         },
     }
@@ -121,7 +121,7 @@ def test_claude_code_marketplace_reuses_the_shared_skill_and_standard_http_mcp()
         "mcpServers": {
             "okk-analytics": {
                 "type": "http",
-                "url": "https://okk-mcp.akfixdev.ru/mcp",
+                "url": "https://akfix-mcp.qualcall-mcp.ru/mcp",
             }
         }
     }
@@ -145,14 +145,14 @@ def test_published_connector_is_wired_for_production_not_test_stand():
     production_env = (ROOT / ".env.production.example").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "APP_ENV=production" in production_env
-    assert "OKK_API_BASE_URL=https://okk-backend.akfixdev.ru/api/v1" in production_env
-    assert "MCP_RESOURCE_URL=https://okk-mcp.akfixdev.ru/mcp" in production_env
+    assert "OKK_API_BASE_URL=https://akfix.qualcall-mcp.ru/api/v1" in production_env
+    assert "MCP_RESOURCE_URL=https://akfix-mcp.qualcall-mcp.ru/mcp" in production_env
     assert "REDIS_PASSWORD=REPLACE_WITH_REDIS_PASSWORD" in production_env
     assert "test-stand connector" in readme
     assert "ready for a test environment" not in readme
     settings = Settings(_env_file=ROOT / ".env.production.example")
     assert settings.app_env == "production"
-    assert settings.api_base_url == "https://okk-backend.akfixdev.ru/api/v1"
+    assert settings.api_base_url == "https://akfix.qualcall-mcp.ru/api/v1"
 
 
 def test_skill_forbids_credentials_writes_and_routes_people_and_transcripts_to_dedicated_tools():

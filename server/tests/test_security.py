@@ -392,14 +392,14 @@ def test_mcp_instructions_route_named_people_without_plugin_skill_support():
 
 def test_mcp_transport_allows_only_the_configured_public_origin():
     settings = Settings(
-        mcp_issuer_url="https://okk-mcp.akfixdev.ru",
-        mcp_resource_url="https://okk-mcp.akfixdev.ru/mcp",
+        mcp_issuer_url="https://akfix-mcp.qualcall-mcp.ru",
+        mcp_resource_url="https://akfix-mcp.qualcall-mcp.ru/mcp",
     )
     mcp = create_mcp_server(settings, AsyncMock())
     security = mcp.settings.transport_security
     assert security.enable_dns_rebinding_protection is True
-    assert security.allowed_hosts == ["okk-mcp.akfixdev.ru"]
-    assert security.allowed_origins == ["https://okk-mcp.akfixdev.ru"]
+    assert security.allowed_hosts == ["akfix-mcp.qualcall-mcp.ru"]
+    assert security.allowed_origins == ["https://akfix-mcp.qualcall-mcp.ru"]
 
 
 def test_metadata_and_mcp_auth_challenge_are_discoverable(monkeypatch):

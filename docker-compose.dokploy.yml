@@ -11,11 +11,11 @@ services:
       APP_ENV: production
       DATABASE_URL: postgresql+asyncpg://okk_mcp:${POSTGRES_PASSWORD}@postgres:5432/okk_mcp
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      OKK_API_BASE_URL: https://okk-backend.akfixdev.ru/api/v1
+      OKK_API_BASE_URL: https://akfix.qualcall-mcp.ru/api/v1
       MCP_OAUTH_SECRET: ${MCP_OAUTH_SECRET}
       MCP_SESSION_ENCRYPTION_SECRET: ${MCP_SESSION_ENCRYPTION_SECRET}
-      MCP_ISSUER_URL: https://okk-mcp.akfixdev.ru
-      MCP_RESOURCE_URL: https://okk-mcp.akfixdev.ru/mcp
+      MCP_ISSUER_URL: https://akfix-mcp.qualcall-mcp.ru
+      MCP_RESOURCE_URL: https://akfix-mcp.qualcall-mcp.ru/mcp
       MCP_ACCESS_TOKEN_MINUTES: "60"
       MCP_REFRESH_TOKEN_DAYS: "30"
       MCP_LOGIN_ATTEMPTS_PER_MINUTE: "8"
@@ -67,7 +67,7 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=dokploy-network
-      - traefik.http.routers.okk-analytics-mcp.rule=Host(`okk-mcp.akfixdev.ru`)
+      - traefik.http.routers.okk-analytics-mcp.rule=Host(`akfix-mcp.qualcall-mcp.ru`)
       - traefik.http.routers.okk-analytics-mcp.entrypoints=websecure
       - traefik.http.routers.okk-analytics-mcp.tls=true
       - traefik.http.routers.okk-analytics-mcp.tls.certresolver=letsencrypt

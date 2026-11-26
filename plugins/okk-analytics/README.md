@@ -1,7 +1,7 @@
 # OKK Analytics
 
 Read-only access to OKK call-quality analytics from Claude Code and Codex. The
-plugin connects to the hosted MCP server `https://okk-mcp.akfixdev.ru/mcp`.
+plugin connects to the hosted MCP server `https://akfix-mcp.qualcall-mcp.ru/mcp`.
 Each person signs in with their own OKK account on the OKK login page; the
 client never sees the password.
 

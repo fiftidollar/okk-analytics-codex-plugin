@@ -57,11 +57,13 @@ response only.
   in OKK: say so; never substitute a similar person.
 - Supervisors (`Руководители`) are a separate private section, shown in
   `get_access_context.data.available_sections.supervisors`. Only when it is
-  available, also search `list_supervisors`. Supervisors are
-  `transcription_only`: use `get_supervisor_call_statistics`,
-  `list_supervisor_call_transcripts`, `get_supervisor_call_transcript` and
-  `search_supervisor_call_transcripts`; they have no scores. Never hardcode a
-  supervisor or grant.
+  available, also search `list_supervisors`. Use
+  `get_supervisor_call_statistics`, `list_supervisor_call_transcripts`,
+  `get_supervisor_call_transcript` and `search_supervisor_call_transcripts`.
+  Supervisors are `transcription_only` and have no scores, unless
+  `list_supervisors` marks one with `evaluates_calls`: only then report the
+  scores and `evaluation_loaded` of that supervisor, and never as part of a
+  department. Never hardcode a supervisor or grant.
 - OKK keeps no mentoring tasks and no saved focus.
 
 ## Calls and transcripts

@@ -3,7 +3,7 @@
   "mcpServers": {
     "okk-analytics": {
       "type": "streamable-http",
-      "url": "https://okk-mcp.akfixdev.ru/mcp"
+      "url": "https://akfix-mcp.qualcall-mcp.ru/mcp"
     }
   }
 }

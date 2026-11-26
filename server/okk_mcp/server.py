@@ -476,7 +476,7 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         description=(
             "The private Supervisors section (Руководители) granted to this account personally; not "
             "a department and not implied by the admin role. Supervisors have call volume and "
-            "transcripts only — no scores, clients or CRM."
+            "transcripts; scores only where evaluates_calls is true; never clients or CRM."
         ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),
@@ -490,7 +490,8 @@ def create_mcp_server(settings: Settings, client: BackendClient) -> FastMCP:
         title="Статистика звонков руководителя",
         description=(
             "Call volume, duration, directions and daily series of one supervisor from "
-            "list_supervisors. Scores, scenarios, clients and CRM do not exist for supervisors."
+            "list_supervisors; with evaluates_calls also the scores of the loaded calls "
+            "(evaluation_loaded). Clients and CRM do not exist for supervisors."
         ),
         annotations=READ_ONLY,
         meta=_security_meta(STAT_SCOPE),

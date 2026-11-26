@@ -59,7 +59,7 @@
     "get_supervisor_call_statistics": {
       "annotations": {"readOnlyHint": true, "openWorldHint": false, "destructiveHint": false},
       "justifications": {
-        "read_only_justification": "Computes transcription-only call statistics for an explicitly visible supervisor from existing data.",
+        "read_only_justification": "Computes call statistics for an explicitly visible supervisor from existing data; scores only where OKK evaluates that supervisor's calls.",
         "open_world_justification": "The supervisor must exist in the user's bounded private grant catalog.",
         "destructive_justification": "Cannot modify calls, supervisors, transcripts, or access grants."
       }
