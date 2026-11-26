@@ -386,6 +386,9 @@ async def test_client_named_by_its_metadata_document_signs_in_exchanges_and_refr
     metadata = ClientMetadata(client_id, "ChatGPT", (redirect_uri,), None)
     monkeypatch.setattr(oauth, "load_client_metadata", AsyncMock(return_value=metadata))
     monkeypatch.setattr(oauth, "_check_login_rate_limit", AsyncMock())
+    # Off by default since 1.6.0 (`MCP_CLIENT_METADATA_DOCUMENTS_ENABLED`): the test is about the
+    # sign-in of such a client, so it turns the feature on.
+    monkeypatch.setattr(env.settings, "mcp_client_metadata_documents_enabled", True)
 
     def new_okk_session(*_args):
         return OkkAccountSession(
